@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import requests
 from datetime import date
+
 # ---------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------
 def clean_numeric_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert all non-Item columns to numeric (remove commas, brackets, spaces)."""
     df = df.copy()
     df.columns = [str(c) for c in df.columns]
     first_col = df.columns[0]
@@ -28,40 +27,31 @@ def clean_numeric_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_year_cols(df: pd.DataFrame):
-    """Treat all columns except 'Item' as year-like columns."""
     return [c for c in df.columns if c != "Item"]
 
 
 def avg_revenue_growth(revenue_row: pd.DataFrame, year_cols) -> float:
-    """Your revenue growth formula: (last - old) / last, averaged across history."""
     vals = revenue_row[year_cols].values.flatten().astype(float)
     growth = []
     for i in range(1, len(vals)):
-        prev_ = vals[i - 1]
-        curr_ = vals[i]
+        prev_, curr_ = vals[i - 1], vals[i]
         if curr_ != 0:
             g = (curr_ - prev_) / curr_
-            if -0.5 < g < 0.5:  # ignore crazy spikes
+            if -0.5 < g < 0.5:
                 growth.append(g)
-    if len(growth) == 0:
-        return 0.05
-    return float(np.mean(growth))
+    return float(np.mean(growth)) if growth else 0.05
 
 
 def ratio_to_revenue(row_vals: np.ndarray, rev_vals: np.ndarray) -> float:
-    """Average (row / revenue) on overlapping years."""
     mask = (~np.isnan(row_vals)) & (~np.isnan(rev_vals)) & (rev_vals != 0)
     if not mask.any():
         return 0.0
     ratios = row_vals[mask] / rev_vals[mask]
     ratios = ratios[(ratios > -5) & (ratios < 5)]
-    if len(ratios) == 0:
-        return 0.0
-    return float(np.mean(ratios))
+    return float(np.mean(ratios)) if len(ratios) else 0.0
 
 
 def find_row_indices(df: pd.DataFrame, keywords):
-    """Return list of index positions whose 'Item' contains any keyword."""
     if df.empty:
         return []
     s = df["Item"].astype(str).str.lower()
@@ -73,325 +63,318 @@ def find_row_indices(df: pd.DataFrame, keywords):
 
 def find_single_row(df: pd.DataFrame, keywords):
     idx_list = find_row_indices(df, keywords)
-    if not idx_list:
-        return None, None
-    idx = idx_list[0]
-    return idx, df.iloc[idx]
-
-
-def fetch_rbz_fx_yearly() -> dict | None:
-    """
-    Try to fetch RBZ exchange-rate page and compute average yearly USD rate.
-    Returns dict: { '2023': rate, '2024': rate, ... } or None on failure.
-    """
-    url = "https://www.rbz.co.zw/index.php/research/markets/exchange-rates"
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-    except Exception:
-        return None
-
-    try:
-        tables = pd.read_html(r.text)
-    except Exception:
-        return None
-
-    df = None
-    for t in tables:
-        if any("date" in str(c).lower() for c in t.columns):
-            df = t
-            break
-    if df is None:
-        return None
-
-    df.columns = [str(c) for c in df.columns]
-    date_col = None
-    for c in df.columns:
-        if "date" in c.lower():
-            date_col = c
-            break
-    if date_col is None:
-        return None
-
-    usd_col = None
-    for c in df.columns:
-        if "usd" in c.lower() or "us$" in c.lower():
-            usd_col = c
-            break
-    if usd_col is None and len(df.columns) >= 2:
-        usd_col = df.columns[1]
-
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df[usd_col] = pd.to_numeric(
-        df[usd_col].astype(str).str.replace(",", "", regex=False).str.strip(),
-        errors="coerce",
-    )
-    df = df.dropna(subset=[date_col, usd_col])
-    if df.empty:
-        return None
-
-    df["Year"] = df[date_col].dt.year
-    yearly = df.groupby("Year")[usd_col].mean().round(4)
-    return {str(int(y)): float(rate) for y, rate in yearly.items()}
+    return (idx_list[0], df.iloc[idx_list[0]]) if idx_list else (None, None)
 
 
 def convert_df_yearwise(df: pd.DataFrame, year_rates: dict) -> pd.DataFrame:
-    """Divide each year column by its matching FX rate, to convert ZWL → USD."""
     df2 = df.copy()
     for col in df2.columns:
         if col == "Item":
             continue
-        key = str(col)
-        if key in year_rates and year_rates[key] != 0:
-            df2[col] = df2[col] / year_rates[key]
+        if str(col) in year_rates and year_rates[str(col)] != 0:
+            df2[col] = df2[col] / year_rates[str(col)]
     return df2
 
 
+def load_fx_yearly_from_excel(fx_file) -> dict:
+    """
+    Excel must contain:
+    Date | Interbank | Alternative | Premium  (or similar)
+    """
+    fx = pd.read_excel(fx_file)
+    fx.columns = [str(c) for c in fx.columns]
+
+    date_col = fx.columns[0]
+    fx[date_col] = pd.to_datetime(fx[date_col], errors="coerce")
+
+    rate_col = st.selectbox(
+        "Which FX rate column should be used?",
+        fx.columns[1:]
+    )
+
+    fx[rate_col] = pd.to_numeric(fx[rate_col], errors="coerce")
+    fx = fx.dropna(subset=[date_col, rate_col])
+
+    fx["Year"] = fx[date_col].dt.year
+    yearly = fx.groupby("Year")[rate_col].mean()
+
+    return {str(int(y)): float(v) for y, v in yearly.items()}
+
+
 def option_labels_from_items(items):
-    """Build labels like '3: Inventories' for selectboxes."""
     return [f"{i+1}: {name}" for i, name in enumerate(items)]
 
 
 def indices_from_labels(labels):
-    """Parse ['3: Inventories', ...] → [2, ...] (0-based indices)."""
     idx = []
     for s in labels:
         try:
-            i = int(str(s).split(":", 1)[0]) - 1
-            idx.append(i)
-        except Exception:
-            continue
+            idx.append(int(s.split(":", 1)[0]) - 1)
+        except:
+            pass
     return idx
 
-def map_core_is_totals(is_df, key_prefix="is_core"):
-    """
-    Persistent Income Statement core totals mapping.
-    NEVER resets unless user explicitly changes selections.
-    """
-
-    st.markdown("### 🧾 Income Statement — Core Totals Mapping")
-
-    items = list(is_df["Item"].astype(str))
-    labels = option_labels_from_items(items)
-
-    # 🔐 INIT ONCE
-    if "is_core_mapping" not in st.session_state:
-        st.session_state["is_core_mapping"] = {
-            "rev": None,
-            "cos": None,
-            "gp": None,
-            "ebitda": None,
-            "op": None,
-            "pbt": None,
-            "np": None,
-        }
-
-    def pick(label, key):
-        stored = st.session_state["is_core_mapping"].get(key)
-
-        # Safety: reset if item no longer exists (new file / industry)
-        if stored not in labels:
-            stored = None
-            st.session_state["is_core_mapping"][key] = None
-
-        selected = st.selectbox(
-            label,
-            [""] + labels,
-            index=0 if stored is None else (labels.index(stored) + 1),
-            key=f"{key_prefix}_{key}",
-        )
-
-        # ✅ SAVE ONLY IF USER SELECTS
-        if selected != "":
-            st.session_state["is_core_mapping"][key] = selected
-
-        return selected
-
-    # ---- USER SELECTIONS ----
-    pick("Revenue", "rev")
-    pick("Cost of Sales", "cos")
-    pick("Gross Profit", "gp")
-    pick("EBITDA", "ebitda")
-    pick("Operating Profit / EBIT", "op")
-    pick("Profit Before Tax", "pbt")
-    pick("Profit for the Year", "np")
-
-    # ---- CONVERT TO ROW INDICES ----
-    idx = {}
-    for k, v in st.session_state["is_core_mapping"].items():
-        if v:
-            idx[k] = int(v.split(":", 1)[0]) - 1
-        else:
-            idx[k] = None
-
-    # ---- VALIDATION ----
-    if idx["rev"] is None:
-        st.error("❌ Revenue must be selected.")
-        st.stop()
-
-    return idx
 
 # ---------------------------------------------------------
 # STREAMLIT APP
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Forecast + DCF (IS + BS + CF + Mapping + WC from BS)",
+    page_title="Forecast + DCF (IS + BS + CF)",
     layout="wide"
 )
-st.title("📊 Forecast + DCF Valuation (IS + BS + CF + Working Capital from Balance Sheet)")
-if st.button("🔄 Clear uploaded file"):
-    st.session_state["dcf_uploaded_file"] = None
-    st.rerun()
 
-# --- PERSIST UPLOADED FILE ---
+st.title("📊 Forecast + DCF Valuation")
+
+# ---------------------------------------------------------
+# FILE UPLOAD
+# -------------------------------------------------------
+st.subheader("📂 Upload Financial Statements")
+
 if "dcf_uploaded_file" not in st.session_state:
     st.session_state["dcf_uploaded_file"] = None
 
 uploaded_file = st.file_uploader(
-    "Upload Excel with Income Statement, Balance Sheet and Cash Flow sheets",
+    "Upload Excel with IS, BS, CF",
     type=["xlsx"],
-    key="upload_box"
+    key="dcf_main_uploader"
 )
 
-# If user uploads a file → save it
+# Save once
 if uploaded_file is not None:
     st.session_state["dcf_uploaded_file"] = uploaded_file
 
-# Use session copy (persistent)
+# Use stored file
 uploaded_file = st.session_state["dcf_uploaded_file"]
 
-# If STILL None → stop
 if uploaded_file is None:
-    st.info("📄 Please upload your Excel file to continue.")
+    st.info("⬆️ Please upload an Excel file to begin.")
     st.stop()
 
-xls = pd.ExcelFile(uploaded_file)
-st.write("Detected sheets:", xls.sheet_names)
-
-is_sheet = st.selectbox(
-    "Income Statement sheet",
-    xls.sheet_names,
-    index=0,
-    key="dcf_is_sheet"
-)
-bs_sheet = st.selectbox(
-    "Balance Sheet sheet",
-    xls.sheet_names,
-    index=min(1, len(xls.sheet_names) - 1),
-    key="dcf_bs_sheet"
-)
-cf_sheet = st.selectbox(
-    "Cash Flow sheet",
-    xls.sheet_names,
-    index=min(2, len(xls.sheet_names) - 1),
-    key="dcf_cf_sheet"
-)
-
 # ---------------------------------------------------------
-# LOAD & CLEAN RAW SHEETS
+# LOAD & CACHE PARSED STATEMENTS (ONCE)
 # ---------------------------------------------------------
-is_df = clean_numeric_cols(xls.parse(is_sheet))
-bs_df = clean_numeric_cols(xls.parse(bs_sheet))
-cf_df = clean_numeric_cols(xls.parse(cf_sheet))
+if "dcf_is_df" not in st.session_state:
+    xls = pd.ExcelFile(uploaded_file)
+
+    st.session_state["dcf_is_df"] = clean_numeric_cols(
+        xls.parse(xls.sheet_names[0])
+    )
+    st.session_state["dcf_bs_df"] = clean_numeric_cols(
+        xls.parse(xls.sheet_names[1])
+    )
+    st.session_state["dcf_cf_df"] = clean_numeric_cols(
+        xls.parse(xls.sheet_names[2])
+    )
+
+is_df = st.session_state["dcf_is_df"]
+bs_df = st.session_state["dcf_bs_df"]
+cf_df = st.session_state["dcf_cf_df"]
+
 
 year_cols_is = get_year_cols(is_df)
 year_cols_bs = get_year_cols(bs_df)
 year_cols_cf = get_year_cols(cf_df)
-
 # ---------------------------------------------------------
-# FX SECTION (with persistence)
+# FX SECTION — EXCEL-BASED (ZWG → USD) [FIXED VERSION]
+# ---------------------------------------------------------
+# FX SECTION — EXCEL-BASED (ZWG → USD) — FINAL & CORRECT
 # ---------------------------------------------------------
 st.markdown("### 💱 Currency & Exchange Rates")
 
+# -------------------------------------------------
+# 1️⃣ Currency selector (persistent)
+# -------------------------------------------------
+if "dcf_currency" not in st.session_state:
+    st.session_state["dcf_currency"] = "USD (already converted)"
+
 currency = st.selectbox(
     "Currency of uploaded statements:",
-    ["USD (already converted)", "ZWL/ZWG (need RBZ FX conversion)"],
-    index=st.session_state.get("dcf_currency_index", 0),
-    key="dcf_currency"
+    ["USD (already converted)", "ZWG (convert using FX Excel)"],
+    index=0 if st.session_state["dcf_currency"].startswith("USD") else 1,
+    key="dcf_currency_select"
 )
 
-# ensure index saved (optional)
-st.session_state["dcf_currency_index"] = (
-    0 if st.session_state["dcf_currency"].startswith("USD") else 1
+st.session_state["dcf_currency"] = currency
+
+# -------------------------------------------------
+# 2️⃣ FX Excel upload (persistent)
+# -------------------------------------------------
+if "dcf_fx_file" not in st.session_state:
+    st.session_state["dcf_fx_file"] = None
+
+fx_file = st.file_uploader(
+    "Upload FX Excel (Date + FX columns)",
+    type=["xlsx"],
+    key="dcf_fx_uploader"
 )
 
-year_rates = st.session_state.get("dcf_year_rates", {})
+if fx_file is not None:
+    st.session_state["dcf_fx_file"] = fx_file
 
+fx_file = st.session_state["dcf_fx_file"]
+
+# -------------------------------------------------
+# 3️⃣ If USD → skip FX
+# -------------------------------------------------
 if currency.startswith("USD"):
     st.success("✅ Data assumed to be in USD. No FX conversion applied.")
+
 else:
-    st.warning("Data is in ZWL/ZWG. Convert to USD using FX rates.")
-    fx_mode = st.radio(
-        "How do you want to get ZWL → USD exchange rates?",
-        ["Fetch automatically from RBZ website", "Enter per-year rates manually"],
-        key="dcf_fx_mode"
+    st.warning("ZWG detected. Upload FX Excel to convert to USD.")
+
+    if fx_file is None:
+        st.stop()
+
+    # -------------------------------------------------
+    # 4️⃣ Load FX Excel ONCE
+    # -------------------------------------------------
+    if "dcf_fx_raw" not in st.session_state:
+        fx_raw = pd.read_excel(fx_file)
+        fx_raw.columns = [str(c).strip() for c in fx_raw.columns]
+        st.session_state["dcf_fx_raw"] = fx_raw
+    else:
+        fx_raw = st.session_state["dcf_fx_raw"]
+
+    st.subheader("Raw FX data (preview)")
+    st.dataframe(fx_raw.head(), use_container_width=True)
+
+    # -------------------------------------------------
+    # 5️⃣ Validate required columns
+    # -------------------------------------------------
+    if "Date" not in fx_raw.columns:
+        st.error("❌ FX Excel must contain a column named 'Date'.")
+        st.stop()
+
+    fx_df = fx_raw.copy()
+
+    fx_df["Date"] = pd.to_datetime(
+        fx_df["Date"],
+        errors="coerce",
+        dayfirst=True
     )
 
-    if fx_mode == "Fetch automatically from RBZ website":
-        # If we already have FX in session, reuse them & show inputs directly
-        if not year_rates:
-            if st.button("🌐 Fetch RBZ exchange rates now", key="dcf_fetch_rbz"):
-                rbz_rates = fetch_rbz_fx_yearly()
-                if rbz_rates is None or len(rbz_rates) == 0:
-                    st.error("❌ Could not fetch or parse RBZ exchange rates. Please use manual mode.")
-                else:
-                    st.success(f"RBZ yearly FX rates found: {rbz_rates}")
-                    tmp_rates = {}
-                    for y in year_cols_is:
-                        default_rate = rbz_rates.get(str(y), 15000.0)
-                        rate = st.number_input(
-                            f"FX rate for {y} (ZWL per USD)",
-                            min_value=0.0001,
-                            value=float(default_rate),
-                            step=1.0,
-                            format="%.4f",
-                            key=f"dcf_fx_rate_{y}"
-                        )
-                        tmp_rates[str(y)] = rate
-                    year_rates = tmp_rates
-                    st.session_state["dcf_year_rates"] = year_rates
+    fx_df = fx_df.dropna(subset=["Date"])
 
-            if not st.session_state.get("dcf_year_rates"):
-                st.info("Click the button above to fetch rates, then confirm/override them.")
-                st.stop()
-        else:
-            # already in session → show editable inputs
-            tmp_rates = {}
-            for y in year_cols_is:
-                prev = year_rates.get(str(y), 15000.0)
-                rate = st.number_input(
-                    f"FX rate for {y} (ZWL per USD)",
-                    min_value=0.0001,
-                    value=float(prev),
-                    step=1.0,
-                    format="%.4f",
-                    key=f"dcf_fx_rate_{y}"
-                )
-                tmp_rates[str(y)] = rate
-            year_rates = tmp_rates
-            st.session_state["dcf_year_rates"] = year_rates
+    # -------------------------------------------------
+    # 6️⃣ FX column selector (restricted + persistent)
+    # -------------------------------------------------
+    allowed_fx_cols = ["Interbank", "Alternative", "Premium"]
+    available_fx_cols = [c for c in allowed_fx_cols if c in fx_df.columns]
 
-    else:  # manual mode
-        tmp_rates = {}
-        for y in year_cols_is:
-            prev = year_rates.get(str(y), 15000.0)
-            rate = st.number_input(
-                f"FX rate for {y} (ZWL per USD)",
-                min_value=0.0001,
-                value=float(prev),
-                step=1.0,
-                format="%.4f",
-                key=f"dcf_fx_rate_{y}"
-            )
-            tmp_rates[str(y)] = rate
-        year_rates = tmp_rates
-        st.session_state["dcf_year_rates"] = year_rates
+    if not available_fx_cols:
+        st.error("❌ FX Excel must contain Interbank / Alternative / Premium columns.")
+        st.stop()
 
-    # Apply conversion
-    is_df = convert_df_yearwise(is_df, year_rates)
-    bs_df = convert_df_yearwise(bs_df, year_rates)
-    cf_df = convert_df_yearwise(cf_df, year_rates)
-    st.success(f"✅ Financials converted to USD using: {year_rates}")
+    if "dcf_fx_column" not in st.session_state:
+        st.session_state["dcf_fx_column"] = available_fx_cols[0]
+
+    fx_col = st.selectbox(
+        "Which FX rate column should be used?",
+        available_fx_cols,
+        index=available_fx_cols.index(st.session_state["dcf_fx_column"]),
+        key="dcf_fx_column_select"
+    )
+
+    st.session_state["dcf_fx_column"] = fx_col
+
+    fx_df[fx_col] = pd.to_numeric(fx_df[fx_col], errors="coerce")
+    fx_df = fx_df.dropna(subset=[fx_col])
+
+    # -------------------------------------------------
+    # 7️⃣ Compute YEARLY AVERAGE FX (Income Statement)
+    # -------------------------------------------------
+    fx_df["Year"] = fx_df["Date"].dt.year.astype(int)
+
+    yearly_fx = (
+        fx_df
+        .groupby("Year")[fx_col]
+        .mean()
+        .round(6)
+        .to_dict()
+    )
+
+    yearly_fx = {str(y): float(v) for y, v in yearly_fx.items()}
+    st.session_state["dcf_yearly_fx"] = yearly_fx
+
+    st.subheader("📊 Yearly FX averages (Income Statement)")
+    st.dataframe(
+        pd.DataFrame({
+            "Year": yearly_fx.keys(),
+            "FX Rate": yearly_fx.values()
+        }),
+        use_container_width=True
+    )
+
+    # -------------------------------------------------
+    # 8️⃣ Balance Sheet FX OPTION (closing rate)
+    # -------------------------------------------------
+    if "dcf_apply_fx_bs" not in st.session_state:
+        st.session_state["dcf_apply_fx_bs"] = False
+
+    apply_fx_bs = st.checkbox(
+        "Apply FX to Balance Sheet using closing rate?",
+        value=st.session_state["dcf_apply_fx_bs"],
+        help="Uses ONE FX rate (latest available date)",
+        key="dcf_fx_bs_checkbox"
+    )
+
+    st.session_state["dcf_apply_fx_bs"] = apply_fx_bs
+
+    # -------------------------------------------------
+    # 9️⃣ Determine CLOSING FX RATE (latest date)
+    # -------------------------------------------------
+    fx_df_sorted = fx_df.sort_values("Date")
+
+    closing_fx_rate = float(fx_df_sorted.iloc[-1][fx_col])
+    closing_fx_date = fx_df_sorted.iloc[-1]["Date"].date()
+
+    st.session_state["dcf_closing_fx_rate"] = closing_fx_rate
+
+    st.info(
+        f"📌 Balance Sheet closing FX rate: "
+        f"{closing_fx_rate:,.4f} (as at {closing_fx_date})"
+    )
+
+    # -------------------------------------------------
+    # 🔟 Validate FX coverage for IS years
+    # -------------------------------------------------
+    statement_years = set(year_cols_is)
+    fx_years = set(yearly_fx.keys())
+
+    missing_years = sorted(statement_years - fx_years)
+
+    if missing_years:
+        st.error(
+            f"❌ Missing FX data for statement years: {', '.join(missing_years)}"
+        )
+        st.stop()
+
+    # -------------------------------------------------
+    # 1️⃣1️⃣ APPLY FX CONVERSION (ONCE)
+    # -------------------------------------------------
+    if not st.session_state.get("dcf_fx_applied", False):
+
+        # Income Statement → YEARLY AVERAGE
+        is_df = convert_df_yearwise(is_df, yearly_fx)
+
+        # Balance Sheet → SINGLE CLOSING FX (OPTIONAL)
+        if st.session_state["dcf_apply_fx_bs"]:
+            rate = st.session_state["dcf_closing_fx_rate"]
+            if rate != 0:
+                bs_df = bs_df.copy()
+                for col in bs_df.columns:
+                    if col != "Item":
+                        bs_df[col] = bs_df[col] / rate
+
+        # Save converted data
+        st.session_state["dcf_is_df"] = is_df
+        st.session_state["dcf_bs_df"] = bs_df
+        st.session_state["dcf_cf_df"] = cf_df
+
+        st.session_state["dcf_fx_applied"] = True
+
+    st.success("✅ FX conversion applied correctly (IS = average, BS = closing)")
+
 
 # ---------------------------------------------------------
 # SHOW CLEANED STATEMENTS
@@ -579,6 +562,72 @@ int_cf_idx_list = indices_from_labels(sel_int_cf)
 # ---------------------------------------------------------
 # CORE INCOME STATEMENT MAPPING (USER-DRIVEN)
 # ---------------------------------------------------------
+def map_core_is_totals(is_df, key_prefix="is_core"):
+    """
+    Persistent Income Statement core totals mapping.
+    NEVER resets unless user explicitly changes selections.
+    """
+
+    st.markdown("### 🧾 Income Statement — Core Totals Mapping")
+
+    items = list(is_df["Item"].astype(str))
+    labels = option_labels_from_items(items)
+
+    # Initialize once
+    if "is_core_mapping" not in st.session_state:
+        st.session_state["is_core_mapping"] = {
+            "rev": None,
+            "cos": None,
+            "gp": None,
+            "ebitda": None,
+            "op": None,
+            "pbt": None,
+            "np": None,
+        }
+
+    def pick(label, key):
+        stored = st.session_state["is_core_mapping"].get(key)
+
+        # Safety: reset if item disappeared
+        if stored not in labels:
+            stored = None
+            st.session_state["is_core_mapping"][key] = None
+
+        selected = st.selectbox(
+            label,
+            [""] + labels,
+            index=0 if stored is None else (labels.index(stored) + 1),
+            key=f"{key_prefix}_{key}",
+        )
+
+        if selected != "":
+            st.session_state["is_core_mapping"][key] = selected
+
+        return selected
+
+    # User selections
+    pick("Revenue", "rev")
+    pick("Cost of Sales", "cos")
+    pick("Gross Profit", "gp")
+    pick("EBITDA", "ebitda")
+    pick("Operating Profit / EBIT", "op")
+    pick("Profit Before Tax", "pbt")
+    pick("Profit for the Year", "np")
+
+    # Convert labels → indices
+    idx = {}
+    for k, v in st.session_state["is_core_mapping"].items():
+        if v:
+            idx[k] = int(v.split(":", 1)[0]) - 1
+        else:
+            idx[k] = None
+
+    # Validation
+    if idx["rev"] is None:
+        st.error("❌ Revenue must be selected.")
+        st.stop()
+
+    return idx
 
 core_idx = map_core_is_totals(is_df)
 
@@ -661,11 +710,7 @@ for y in forecast_years_int:
 # ---------------------------------------------------------
 # COST HANDLING LOGIC
 # ---------------------------------------------------------
-use_gp_method = (
-    cos_idx is not None
-    and gp_idx is not None
-    and st.session_state.get("dcf_industry") != "Manufacturing"
-)
+use_gp_method = (cos_idx is not None and gp_idx is not None)
 
 if use_gp_method:
     gp_hist_vals = forecast_is.iloc[gp_idx][year_cols_is].values.astype(float)
@@ -708,13 +753,21 @@ total_keywords = [
     "profit before tax",
     "profit for the year",
 ]
-
 for idx in range(len(forecast_is)):
+
+    # 🔒 PROTECT COST OF SALES WHEN USING GP MARGIN
+    if use_gp_method and idx == cos_idx:
+        continue
+
     protected = [rev_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx]
     if not treat_cos_as_normal and cos_idx is not None:
         protected.append(cos_idx)
 
     if idx in protected:
+        continue
+
+    # ✅ add here
+    if use_gp_method and cos_idx is not None and idx == cos_idx:
         continue
 
     item = str(forecast_is.at[idx, "Item"]).lower()
@@ -729,6 +782,7 @@ for idx in range(len(forecast_is)):
             idx,
             forecast_is.columns.get_loc(str(y))
         ] = rev_forecast[y] * ratio
+
 
 
 
@@ -753,14 +807,26 @@ for col in forecast_cols:
             and ebitda_idx > gp_idx
     ):
         # Check if EBITDA row already has meaningful values
-        existing_vals = forecast_is.iloc[ebitda_idx][forecast_cols].values
+        # EBITDA: recompute PER YEAR if not explicitly forecasted
+        if (
+                ebitda_idx is not None
+                and gp_idx is not None
+                and ebitda_idx > gp_idx
+        ):
+            col_idx = forecast_is.columns.get_loc(col)
 
-        if np.all(np.isnan(existing_vals)) or np.all(existing_vals == 0):
-            ebitda_val = forecast_is.loc[gp_idx:ebitda_idx - 1, col].sum(skipna=True)
-            forecast_is.iat[
-                ebitda_idx,
-                forecast_is.columns.get_loc(col)
-            ] = ebitda_val
+            existing_val = pd.to_numeric(
+                forecast_is.iat[ebitda_idx, col_idx],
+                errors="coerce"
+            )
+
+            if pd.isna(existing_val) or existing_val == 0:
+                ebitda_val = forecast_is.loc[
+                    gp_idx:ebitda_idx - 1,
+                    col
+                ].sum(skipna=True)
+
+                forecast_is.iat[ebitda_idx, col_idx] = ebitda_val
 
     if op_idx is not None and ebitda_idx is not None:
         forecast_is.iat[op_idx, forecast_is.columns.get_loc(col)] = \
