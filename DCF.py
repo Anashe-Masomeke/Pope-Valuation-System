@@ -7,6 +7,83 @@ from datetime import date
 # ---------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------
+st.markdown("""
+<style>
+.fbc-reset-card {
+    background: linear-gradient(135deg, #003399 0%, #0055cc 100%);
+    padding: 20px 24px;
+    border-radius: 14px;
+    color: white;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+    margin-bottom: 25px;
+}
+
+.fbc-reset-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.fbc-reset-sub {
+    font-size: 14px;
+    opacity: 0.9;
+    margin-bottom: 14px;
+}
+
+.fbc-reset-btn button {
+    background-color: #f5b400 !important;   /* FBC gold */
+    color: #002266 !important;
+    font-weight: 700 !important;
+    border-radius: 10px !important;
+    padding: 10px 20px !important;
+    border: none !important;
+    transition: all 0.25s ease-in-out;
+}
+
+.fbc-reset-btn button:hover {
+    background-color: #ffd24d !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.25);
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# RESET DCF SESSION STATE (SAFE & CONTROLLED)
+# ---------------------------------------------------------
+def reset_dcf_state():
+    keys_to_clear = [
+        # file & parsed data
+        "dcf_uploaded_file", "dcf_is_df", "dcf_bs_df", "dcf_cf_df",
+
+        # FX
+        "dcf_fx_file", "dcf_fx_raw", "dcf_yearly_fx",
+        "dcf_fx_applied", "dcf_apply_fx_bs", "dcf_fx_column",
+        "dcf_closing_fx_rate",
+
+        # mappings
+        "dcf_mapping", "is_core_mapping",
+
+        # forecasts
+        "dcf_rev_forecast", "dcf_ebitda_all", "dcf_ebitda_forecast",
+        "dcf_profit_all",
+
+        # working capital
+        "dcf_fcff_array", "dcf_pv_fcff_array", "dcf_discount_periods_n",
+        "dcf_is_base", "dcf_bs_base", "dcf_cf_base",
+        "dcf_fx_signature", "dcf_bs_fx_rates", "dcf_bs_closing_dates",
+
+        # valuation outputs
+        "enterprise_value_dcf", "equity_value_dcf", "equity_value",
+
+        # parameters
+        "dcf_init", "dcf_timing_init",
+    ]
+
+    for k in keys_to_clear:
+        if k in st.session_state:
+            del st.session_state[k]
+
 def clean_numeric_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c) for c in df.columns]
@@ -74,6 +151,14 @@ def convert_df_yearwise(df: pd.DataFrame, year_rates: dict) -> pd.DataFrame:
         if str(col) in year_rates and year_rates[str(col)] != 0:
             df2[col] = df2[col] / year_rates[str(col)]
     return df2
+def get_fx_asof_date(fx_df, fx_col, closing_date):
+    """
+    Returns the last available FX rate on or before the closing_date
+    """
+    fx_before = fx_df[fx_df["Date"] <= pd.Timestamp(closing_date)]
+    if fx_before.empty:
+        return None
+    return float(fx_before.sort_values("Date").iloc[-1][fx_col])
 
 
 def load_fx_yearly_from_excel(fx_file) -> dict:
@@ -124,6 +209,26 @@ st.set_page_config(
 )
 
 st.title("📊 Forecast + DCF Valuation")
+# ---------------------------------------------------------
+# 🔄 START NEW VALUATION — FBC STYLE
+# ---------------------------------------------------------
+st.markdown("""
+<div class="fbc-reset-card">
+    <div class="fbc-reset-title">🔄 Start New Valuation</div>
+    <div class="fbc-reset-sub">
+        Reset the workspace and upload a new set of financial statements.
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+col_reset_left, col_reset_right = st.columns([1, 3])
+
+with col_reset_left:
+    st.markdown('<div class="fbc-reset-btn">', unsafe_allow_html=True)
+    if st.button("🗂️ Clear & Upload New File", use_container_width=True):
+        reset_dcf_state()
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # FILE UPLOAD
@@ -170,6 +275,15 @@ is_df = st.session_state["dcf_is_df"]
 bs_df = st.session_state["dcf_bs_df"]
 cf_df = st.session_state["dcf_cf_df"]
 
+# ---------------------------------------------------------
+# STORE BASE (ORIGINAL) STATEMENTS ONCE (for re-conversion)
+# ---------------------------------------------------------
+if "dcf_is_base" not in st.session_state:
+    st.session_state["dcf_is_base"] = st.session_state["dcf_is_df"].copy()
+if "dcf_bs_base" not in st.session_state:
+    st.session_state["dcf_bs_base"] = st.session_state["dcf_bs_df"].copy()
+if "dcf_cf_base" not in st.session_state:
+    st.session_state["dcf_cf_base"] = st.session_state["dcf_cf_df"].copy()
 
 year_cols_is = get_year_cols(is_df)
 year_cols_bs = get_year_cols(bs_df)
@@ -197,21 +311,41 @@ currency = st.selectbox(
 st.session_state["dcf_currency"] = currency
 
 # -------------------------------------------------
-# 2️⃣ FX Excel upload (persistent)
+# 2️⃣ FX Excel upload — SHOW ONLY IF ZWG
 # -------------------------------------------------
 if "dcf_fx_file" not in st.session_state:
     st.session_state["dcf_fx_file"] = None
 
-fx_file = st.file_uploader(
-    "Upload FX Excel (Date + FX columns)",
-    type=["xlsx"],
-    key="dcf_fx_uploader"
-)
+if currency.startswith("ZWG"):
 
-if fx_file is not None:
-    st.session_state["dcf_fx_file"] = fx_file
+    st.markdown("""
+    <div style="
+        border: 1px dashed #f5b400;
+        padding: 18px;
+        border-radius: 12px;
+        background-color: #fffaf0;
+        margin-bottom: 15px;
+    ">
+        <strong>📥 FX Data Required</strong><br>
+        Upload exchange rates to convert ZWG → USD
+    </div>
+    """, unsafe_allow_html=True)
+
+    fx_file = st.file_uploader(
+        "Upload FX Excel (Date + FX columns)",
+        type=["xlsx"],
+        key="dcf_fx_uploader"
+    )
+
+    if fx_file is not None:
+        st.session_state["dcf_fx_file"] = fx_file
+
+else:
+    # USD selected → clear FX file & hide uploader
+    st.session_state["dcf_fx_file"] = None
 
 fx_file = st.session_state["dcf_fx_file"]
+
 
 # -------------------------------------------------
 # 3️⃣ If USD → skip FX
@@ -220,7 +354,7 @@ if currency.startswith("USD"):
     st.success("✅ Data assumed to be in USD. No FX conversion applied.")
 
 else:
-    st.warning("ZWG detected. Upload FX Excel to convert to USD.")
+    st.warning("ZWG detected. Upload FX Excel with Dates and Interbank Rates to convert to USD.")
 
     if fx_file is None:
         st.stop()
@@ -237,6 +371,20 @@ else:
 
     st.subheader("Raw FX data (preview)")
     st.dataframe(fx_raw.head(), use_container_width=True)
+    st.subheader("📊 Balance Sheet Closing FX Rates Used")
+    bs_fx_rates = st.session_state.get("dcf_bs_fx_rates", {})
+
+    # Build BS FX confirmation table safely
+    bs_fx_table = pd.DataFrame([
+        {
+            "Year": y,
+            "Closing Date": st.session_state["dcf_bs_closing_dates"][y],
+            "FX Rate Used": bs_fx_rates[y],
+        }
+        for y in bs_fx_rates.keys()
+    ])
+
+    st.dataframe(bs_fx_table, use_container_width=True)
 
     # -------------------------------------------------
     # 5️⃣ Validate required columns
@@ -295,8 +443,9 @@ else:
 
     yearly_fx = {str(y): float(v) for y, v in yearly_fx.items()}
     st.session_state["dcf_yearly_fx"] = yearly_fx
+    bs_fx_rates = st.session_state.get("dcf_bs_fx_rates", {})
 
-    st.subheader("📊 Yearly FX averages (Income Statement)")
+    st.subheader("📊 Yearly FX averages (Income Statement and Cash Flow Statement)")
     st.dataframe(
         pd.DataFrame({
             "Year": yearly_fx.keys(),
@@ -319,21 +468,60 @@ else:
     )
 
     st.session_state["dcf_apply_fx_bs"] = apply_fx_bs
+    # -------------------------------------------------
+    # 8️⃣ Balance Sheet FX — PER-YEAR CLOSING DATES (NEW)
+    # -------------------------------------------------
+    st.markdown("### 📌 Balance Sheet FX — Closing Dates (per year)")
+
+    # ✅ INIT FIRST (CRITICAL)
+    if "dcf_bs_closing_dates" not in st.session_state:
+        st.session_state["dcf_bs_closing_dates"] = {}
+
+    # ✅ Dirty flag init
+    if "dcf_bs_fx_dirty" not in st.session_state:
+        st.session_state["dcf_bs_fx_dirty"] = False
+
+
+    bs_years = [str(y) for y in year_cols_bs]
+
+    for y in bs_years:
+        default_date = st.session_state["dcf_bs_closing_dates"].get(
+            y, date(int(y), 12, 31)
+        )
+
+        chosen_date = st.date_input(
+            f"Closing date for Balance Sheet {y}",
+            value=default_date,
+            key=f"bs_close_date_{y}"
+        )
+
+        # ✅ Detect change immediately (fixes double click)
+        if st.session_state["dcf_bs_closing_dates"].get(y) != chosen_date:
+            st.session_state["dcf_bs_closing_dates"][y] = chosen_date
+            st.session_state["dcf_bs_fx_dirty"] = True
 
     # -------------------------------------------------
-    # 9️⃣ Determine CLOSING FX RATE (latest date)
+    # 9️⃣ COMPUTE BALANCE SHEET FX RATES (PER YEAR)
     # -------------------------------------------------
-    fx_df_sorted = fx_df.sort_values("Date")
+    bs_fx_rates = {}
 
-    closing_fx_rate = float(fx_df_sorted.iloc[-1][fx_col])
-    closing_fx_date = fx_df_sorted.iloc[-1]["Date"].date()
+    for y in bs_years:
+        closing_date = st.session_state["dcf_bs_closing_dates"][y]
 
-    st.session_state["dcf_closing_fx_rate"] = closing_fx_rate
+        fx_rate = get_fx_asof_date(
+            fx_df=fx_df,
+            fx_col=fx_col,
+            closing_date=closing_date
+        )
 
-    st.info(
-        f"📌 Balance Sheet closing FX rate: "
-        f"{closing_fx_rate:,.4f} (as at {closing_fx_date})"
-    )
+        if fx_rate is None:
+            st.error(f"❌ No FX rate found on or before {closing_date} for year {y}")
+            st.stop()
+
+        bs_fx_rates[y] = fx_rate
+
+    # ✅ STORE IN SESSION STATE
+    st.session_state["dcf_bs_fx_rates"] = bs_fx_rates
 
     # -------------------------------------------------
     # 🔟 Validate FX coverage for IS years
@@ -350,31 +538,49 @@ else:
         st.stop()
 
     # -------------------------------------------------
-    # 1️⃣1️⃣ APPLY FX CONVERSION (ONCE)
+    # 1️⃣1️⃣ APPLY FX CONVERSION (RE-RUN IF SETTINGS CHANGE)
     # -------------------------------------------------
-    if not st.session_state.get("dcf_fx_applied", False):
 
-        # Income Statement → YEARLY AVERAGE
-        is_df = convert_df_yearwise(is_df, yearly_fx)
+    # Build an FX signature (so we re-apply only when user changes FX settings)
+    fx_signature = (
+        currency,
+        fx_col,
+        tuple((y, str(st.session_state["dcf_bs_closing_dates"][y])) for y in bs_years)
+    )
 
-        # Balance Sheet → SINGLE CLOSING FX (OPTIONAL)
-        if st.session_state["dcf_apply_fx_bs"]:
-            rate = st.session_state["dcf_closing_fx_rate"]
-            if rate != 0:
-                bs_df = bs_df.copy()
-                for col in bs_df.columns:
-                    if col != "Item":
-                        bs_df[col] = bs_df[col] / rate
+    # Recompute if signature changed (or first run)
+    if (
+            st.session_state.get("dcf_fx_signature") != fx_signature
+            or st.session_state.get("dcf_bs_fx_dirty")
+    ):
 
-        # Save converted data
-        st.session_state["dcf_is_df"] = is_df
-        st.session_state["dcf_bs_df"] = bs_df
-        st.session_state["dcf_cf_df"] = cf_df
+        # Always start from BASE statements (pre-conversion)
+        is_base = st.session_state["dcf_is_base"].copy()
+        bs_base = st.session_state["dcf_bs_base"].copy()
+        cf_base = st.session_state["dcf_cf_base"].copy()
 
-        st.session_state["dcf_fx_applied"] = True
+        # Income Statement → YEARLY AVERAGE FX
+        is_converted = convert_df_yearwise(is_base, yearly_fx)
 
-    st.success("✅ FX conversion applied correctly (IS = average, BS = closing)")
+        # Balance Sheet → PER-YEAR CLOSING FX
+        bs_converted = convert_df_yearwise(bs_base, bs_fx_rates)
 
+        # Cash Flow → SAME YEARLY AVERAGE FX AS IS
+        cf_converted = convert_df_yearwise(cf_base, yearly_fx)
+
+        # Save converted versions
+        st.session_state["dcf_is_df"] = is_converted
+        st.session_state["dcf_bs_df"] = bs_converted
+        st.session_state["dcf_cf_df"] = cf_converted
+
+        # Save the signature so we don't reconvert unnecessarily
+        st.session_state["dcf_fx_signature"] = fx_signature
+        st.session_state["dcf_bs_fx_dirty"] = False
+
+        # Optional: for debugging / clarity
+        st.info("🔁 FX conversion refreshed (settings changed).")
+    else:
+         st.success("✅ FX conversion applied correctly (IS = yearly average, BS = per-year closing rates)")
 
 # ---------------------------------------------------------
 # SHOW CLEANED STATEMENTS
