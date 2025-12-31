@@ -177,7 +177,7 @@ st.dataframe(
             "Weighted Contribution": safe_format_number,
         }
     ),
-    use_container_width=True,
+    width='stretch',
 )
 # --------------------------------------------------------------
 # KPI STRIP — Weighted Equity + Active Models
@@ -337,5 +337,5 @@ st.dataframe(
     pd.DataFrame(
         [{"Model": k, "Reliability Score": v} for k, v in model_scores.items()]
     ),
-    use_container_width=True,
+    width='stretch',
 )
