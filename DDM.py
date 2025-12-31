@@ -95,7 +95,7 @@ st.session_state["ddm_dividends"] = {
 
 # Display table
 df_history = pd.DataFrame({"Year": years, "Dividend": dividends})
-st.dataframe(df_history, use_container_width=True)
+st.dataframe(df_history, width='stretch')
 
 
 # ---------------------------------------------------------
