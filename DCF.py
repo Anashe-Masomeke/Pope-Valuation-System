@@ -225,7 +225,7 @@ col_reset_left, col_reset_right = st.columns([1, 3])
 
 with col_reset_left:
     st.markdown('<div class="fbc-reset-btn">', unsafe_allow_html=True)
-    if st.button("🗂️ Clear & Upload New File", use_container_width=True):
+    if st.button("🗂️ Clear & Upload New File", width='stretch'):
         reset_dcf_state()
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -370,7 +370,7 @@ else:
         fx_raw = st.session_state["dcf_fx_raw"]
 
     st.subheader("Raw FX data (preview)")
-    st.dataframe(fx_raw.head(), use_container_width=True)
+    st.dataframe(fx_raw.head(), width='stretch')
     st.subheader("📊 Balance Sheet Closing FX Rates Used")
     bs_fx_rates = st.session_state.get("dcf_bs_fx_rates", {})
 
@@ -384,7 +384,7 @@ else:
         for y in bs_fx_rates.keys()
     ])
 
-    st.dataframe(bs_fx_table, use_container_width=True)
+    st.dataframe(bs_fx_table, width='stretch')
 
     # -------------------------------------------------
     # 5️⃣ Validate required columns
@@ -451,8 +451,7 @@ else:
             "Year": yearly_fx.keys(),
             "FX Rate": yearly_fx.values()
         }),
-        use_container_width=True
-    )
+        width='stretch'    )
 
     # -------------------------------------------------
     # 8️⃣ Balance Sheet FX OPTION (closing rate)
@@ -586,13 +585,13 @@ else:
 # SHOW CLEANED STATEMENTS
 # ---------------------------------------------------------
 st.subheader("Income Statement (cleaned, in USD)")
-st.dataframe(is_df, use_container_width=True)
+st.dataframe(is_df, width='stretch')
 
 st.subheader("Balance Sheet (cleaned, in USD)")
-st.dataframe(bs_df, use_container_width=True)
+st.dataframe(bs_df, width='stretch')
 
 st.subheader("Cash Flow Statement (cleaned, in USD)")
-st.dataframe(cf_df, use_container_width=True)
+st.dataframe(cf_df, width='stretch')
 
 # Re-detect year columns (as strings)
 year_cols_is = get_year_cols(is_df)
@@ -794,22 +793,28 @@ def map_core_is_totals(is_df, key_prefix="is_core"):
     def pick(label, key):
         stored = st.session_state["is_core_mapping"].get(key)
 
-        # Safety: reset if item disappeared
-        if stored not in labels:
-            stored = None
-            st.session_state["is_core_mapping"][key] = None
+        options = ["N/A (not in statement)"] + labels
+
+        # Determine default index safely
+        if stored in labels:
+            default_index = options.index(stored)
+        else:
+            default_index = 0
 
         selected = st.selectbox(
             label,
-            [""] + labels,
-            index=0 if stored is None else (labels.index(stored) + 1),
+            options,
+            index=default_index,
             key=f"{key_prefix}_{key}",
         )
 
-        if selected != "":
+        # ✅ CRITICAL FIX: never store "N/A"
+        if selected == "N/A (not in statement)":
+            st.session_state["is_core_mapping"][key] = None
+            return None
+        else:
             st.session_state["is_core_mapping"][key] = selected
-
-        return selected
+            return selected
 
     # User selections
     pick("Revenue", "rev")
@@ -916,7 +921,11 @@ for y in forecast_years_int:
 # ---------------------------------------------------------
 # COST HANDLING LOGIC
 # ---------------------------------------------------------
-use_gp_method = (cos_idx is not None and gp_idx is not None)
+use_gp_method = (
+    isinstance(cos_idx, int)
+    and isinstance(gp_idx, int)
+)
+
 
 if use_gp_method:
     gp_hist_vals = forecast_is.iloc[gp_idx][year_cols_is].values.astype(float)
@@ -966,7 +975,9 @@ for idx in range(len(forecast_is)):
         continue
 
     protected = [rev_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx]
-    if not treat_cos_as_normal and cos_idx is not None:
+
+    # 🔥 Protect Cost of Sales ONLY when GP logic is active
+    if use_gp_method and cos_idx is not None:
         protected.append(cos_idx)
 
     if idx in protected:
@@ -1001,34 +1012,42 @@ def sum_rows(df, start_idx, end_idx, col):
     return df.loc[start_idx:end_idx - 1, col].sum(skipna=True)
 
 for col in forecast_cols:
-    if gp_idx is not None:
-        forecast_is.iat[gp_idx, forecast_is.columns.get_loc(col)] = (
+
+    # 🔹 Derive Gross Profit if row exists
+    if gp_idx is not None and cos_idx is not None:
+        forecast_is.iat[
+            gp_idx,
+            forecast_is.columns.get_loc(col)
+        ] = (
             forecast_is.iloc[rev_idx][col]
             + forecast_is.iloc[cos_idx][col]
         )
-    # EBITDA: recompute ONLY if it is NOT explicitly forecasted as a line item
-    if (
-            ebitda_idx is not None
-            and gp_idx is not None
-            and ebitda_idx > gp_idx
-    ):
-        # Check if EBITDA row already has meaningful values
-        # EBITDA: recompute PER YEAR if not explicitly forecasted
-        if (
-                ebitda_idx is not None
-                and gp_idx is not None
-                and ebitda_idx > gp_idx
-        ):
-            col_idx = forecast_is.columns.get_loc(col)
 
-            existing_val = pd.to_numeric(
-                forecast_is.iat[ebitda_idx, col_idx],
-                errors="coerce"
-            )
+    # -------------------------------------------------
+    # EBITDA recomputation (robust to missing GP)
+    # -------------------------------------------------
+    if ebitda_idx is not None:
 
-            if pd.isna(existing_val) or existing_val == 0:
+        col_idx = forecast_is.columns.get_loc(col)
+
+        existing_val = pd.to_numeric(
+            forecast_is.iat[ebitda_idx, col_idx],
+            errors="coerce"
+        )
+
+        # Only recompute if not explicitly forecasted
+        if pd.isna(existing_val) or existing_val == 0:
+
+            # 🔹 Decide where to start summing from
+            if isinstance(gp_idx, int):
+                start_idx = gp_idx
+            else:
+                # 🔥 GP missing → start from Revenue
+                start_idx = rev_idx
+
+            if ebitda_idx > start_idx:
                 ebitda_val = forecast_is.loc[
-                    gp_idx:ebitda_idx - 1,
+                    start_idx:ebitda_idx - 1,
                     col
                 ].sum(skipna=True)
 
@@ -1054,7 +1073,11 @@ dcf_np_forecast = {}
 if np_idx is not None:
     for y in forecast_years_int:
         col = str(y)
-        val = float(forecast_is.iloc[np_idx][col])
+        if isinstance(np_idx, int):
+            val = forecast_is.iat[np_idx, forecast_is.columns.get_loc(col)]
+            val = float(val) if pd.notna(val) else 0.0
+        else:
+            val = 0.0
         dcf_np_forecast[col] = val
 else:
     dcf_np_forecast = {}
@@ -1089,15 +1112,19 @@ st.dataframe(
         {c: "{:,.0f}".format for c in forecast_is.select_dtypes(include=[np.number]).columns},
         na_rep="",
     ),
-    use_container_width=True,
+    width='stretch',
 )
 
 
 # Extract EBITDA row for forecast years
-ebitda_forecast_vals = np.array(
-    [forecast_is.iloc[ebitda_idx][str(y)] for y in forecast_years_int],
-    dtype=float
-) if ebitda_idx is not None else np.zeros(len(forecast_years_int))
+if isinstance(ebitda_idx, int):
+    ebitda_forecast_vals = np.array(
+        [float(forecast_is.iat[ebitda_idx, forecast_is.columns.get_loc(str(y))])
+         for y in forecast_years_int],
+        dtype=float
+    )
+else:
+    ebitda_forecast_vals = np.zeros(len(forecast_years_int))
 # ---------------------------------------------------------
 # SAVE ALL EBITDA VALUES (HISTORICAL + FORECAST)
 # ---------------------------------------------------------
@@ -1105,19 +1132,18 @@ ebitda_forecast_vals = np.array(
 dcf_all_ebitda = {}
 
 # 1️⃣ Save historical EBITDA
-if ebitda_idx is not None:
+if isinstance(ebitda_idx, int):
     for y in year_cols_is:
-        try:
-            val = float(forecast_is.iloc[ebitda_idx][str(y)])
-        except:
-            val = 0.0
-        dcf_all_ebitda[str(y)] = val
+        col_idx = forecast_is.columns.get_loc(str(y))
+        val = forecast_is.iat[ebitda_idx, col_idx]
+        dcf_all_ebitda[str(y)] = float(val) if pd.notna(val) else 0.0
 
 # 2️⃣ Save forecast EBITDA
-for y in forecast_years_int:
-    col = str(y)
-    val = float(forecast_is.iloc[ebitda_idx][col])
-    dcf_all_ebitda[col] = val
+if isinstance(ebitda_idx, int):
+    for y in forecast_years_int:
+        col_idx = forecast_is.columns.get_loc(str(y))
+        val = forecast_is.iat[ebitda_idx, col_idx]
+        dcf_all_ebitda[str(y)] = float(val) if pd.notna(val) else 0.0
 
 # 3️⃣ Store into session_state (BOTH KEYS)
 st.session_state["dcf_ebitda_all"] = dcf_all_ebitda
@@ -1212,8 +1238,7 @@ if ca_idx_list and cl_idx_list:
             "Current Liabilities": "{:,.0f}",
             "Working Capital (CA-CL)": "{:,.0f}",
         }),
-        use_container_width=True
-    )
+        width='stretch'    )
 
     # 2️⃣ WC% OF SALES
     st.markdown("### **Historical Working Capital as % of Sales**")
@@ -1238,8 +1263,7 @@ if ca_idx_list and cl_idx_list:
             "Revenue": "{:,.0f}".format,
             "WC % of Sales": "{:.2%}".format,
         }),
-        use_container_width=True
-    )
+        width='stretch'    )
 
     # 3️⃣ AVERAGE WC% WITH OUTLIER HANDLING
     wc_percent_array = wc_percent_hist.copy()
@@ -1290,8 +1314,7 @@ if ca_idx_list and cl_idx_list:
             "Forecast Revenue": "{:,.0f}",
             "Forecast WC": "{:,.0f}",
         }),
-        use_container_width=True
-    )
+        width='stretch'    )
 
     # 5️⃣ ΔWC = OLD – NEW
     st.markdown("### **Change in Working Capital (ΔWC = Old – New)**")
@@ -1318,8 +1341,7 @@ if ca_idx_list and cl_idx_list:
             "Forecast WC": "{:,.0f}",
             "ΔWC (Old – New)": "{:,.0f}",
         }),
-        use_container_width=True
-    )
+        width='stretch'    )
 
 else:
     st.warning("⚠️ Please select Current Assets and Current Liabilities rows first.")
@@ -1539,7 +1561,7 @@ midpoint_table = pd.DataFrame(
     }
 )
 
-st.dataframe(midpoint_table, use_container_width=True)
+st.dataframe(midpoint_table, width='stretch')
 
 
 # ---------------------------------------------------------
@@ -1606,7 +1628,7 @@ fmt_dict["Discount period n (years)"] = "{:.3f}".format
 fmt_dict["Discount factor"] = "{:.3f}".format
 
 styled_dcf = df_dcf.style.format(fmt_dict, na_rep="")
-st.dataframe(styled_dcf, use_container_width=True)
+st.dataframe(styled_dcf, width='stretch')
 
 # Terminal summary
 st.write("**Terminal Value and Present Value:**")
@@ -1628,7 +1650,7 @@ for c in df_term.columns:
 
 st.dataframe(
     df_term.style.format(fmt_term, na_rep=""),
-    use_container_width=True,
+    width='stretch',
 )
 
 # ---------------------------------------------------------
