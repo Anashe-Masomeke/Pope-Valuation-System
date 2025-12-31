@@ -251,16 +251,16 @@ st.write("Explore valuation models using the sidebar or the quick-access buttons
 # =========================================================
 colA, colB, colC, colD = st.columns(4)
 
-if colA.button("📊 DCF Model", use_container_width=True):
+if colA.button("📊 DCF Model", width='stretch'):
     st.switch_page("pages/DCF.py")
 
-if colB.button("💰 DDM Model", use_container_width=True):
+if colB.button("💰 DDM Model", width='stretch'):
     st.switch_page("pages/DDM.py")
 
-if colC.button("📈 Comparables", use_container_width=True):
+if colC.button("📈 Comparables", width='stretch'):
     st.switch_page("pages/COMPARABLES.py")
 
-if colD.button("🧾 Summary", use_container_width=True):
+if colD.button("🧾 Summary", width='stretch'):
     st.switch_page("pages/summary.py")
 
 # =========================================================
