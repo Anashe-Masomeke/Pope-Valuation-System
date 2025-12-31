@@ -44,8 +44,7 @@ st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 
 st.markdown(
     """
-All values & inputs are **saved in `session_state`**, so switching pages (DCF, DDM, etc.)
-does **not** reset anything on this page.
+All values & inputs are saved in `session_state`.
 """
 )
 
@@ -130,7 +129,7 @@ for i in range(int(num_comps)):
 
 df_comps = pd.DataFrame(rows_comps, columns=["Company", "EV/EBITDA", "P/B", "P/E"])
 st.subheader("Entered Comparables")
-st.dataframe(df_comps, use_container_width=True)
+st.dataframe(df_comps, width='stretch')
 
 # Save for summary page
 S["comps_num"] = int(num_comps)
@@ -172,7 +171,7 @@ df_mult = pd.DataFrame(
 )
 st.dataframe(
     df_mult.style.format({"Average": "{:,.2f}", "Implied": "{:,.2f}"}),
-    use_container_width=True,
+    width='stretch',
 )
 
 # Persist implied multiples for summary
@@ -212,7 +211,7 @@ else:
             "DCF Timing n": dcf_timing_list,
         }
     )
-    st.dataframe(timing_df, use_container_width=True)
+    st.dataframe(timing_df, width='stretch')
 
     dcf_n0 = float(round(dcf_timing_list[0], 4))
     st.info(f"DCF First Timing Value (n₀) = **{dcf_n0} years**")
@@ -385,7 +384,7 @@ else:
 df_eb_display = df_eb_display.copy()
 df_eb_display.index = df_eb_display.index + 1  # start index at 1
 
-st.dataframe(format_numeric_columns(df_eb_display), use_container_width=True)
+st.dataframe(format_numeric_columns(df_eb_display), width='stretch')
 
 maintainable_ebitda = float(df_eb["Weighted EBITDA"].sum())
 st.success(f"Maintainable EBITDA = {maintainable_ebitda:,.2f}")
@@ -529,7 +528,7 @@ else:
 df_np_display = df_np_display.copy()
 df_np_display.index = df_np_display.index + 1
 
-st.dataframe(format_numeric_columns(df_np_display), use_container_width=True)
+st.dataframe(format_numeric_columns(df_np_display), width='stretch')
 
 maintainable_earnings = float(df_np["Weighted Earnings"].sum())
 st.success(f"Maintainable Earnings = {maintainable_earnings:,.2f}")
@@ -586,4 +585,4 @@ df_res = pd.DataFrame(
     }
 )
 
-st.dataframe(format_numeric_columns(df_res), use_container_width=True)
+st.dataframe(format_numeric_columns(df_res), width='stretch')
