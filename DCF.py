@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from datetime import date
+import io
 
 # ---------------------------------------------------------
 # HELPERS
@@ -56,13 +57,22 @@ def reset_dcf_state():
         # file & parsed data
         "dcf_uploaded_file", "dcf_is_df", "dcf_bs_df", "dcf_cf_df",
 
+        # ✅ ADD THESE (so reset truly clears the file)
+        "dcf_file_bytes", "dcf_file_name",
+
         # FX
         "dcf_fx_file", "dcf_fx_raw", "dcf_yearly_fx",
         "dcf_fx_applied", "dcf_apply_fx_bs", "dcf_fx_column",
         "dcf_closing_fx_rate",
+        "dcf_conversion_method", "dcf_currency",
+        "dcf_fx_bytes", "dcf_fx_name",
+        "dcf_factor_enabled", "dcf_zig_factor", "dcf_factor_year_ranges",
+        "dcf_bs_fx_dirty",
 
         # mappings
         "dcf_mapping", "is_core_mapping",
+        "bs_map_step", "bs_jump_radio", "bs_widget_reset",
+        "cf_map_step", "cf_jump_radio", "cf_widget_reset",
 
         # forecasts
         "dcf_rev_forecast", "dcf_ebitda_all", "dcf_ebitda_forecast",
@@ -227,49 +237,63 @@ with col_reset_left:
     st.markdown('<div class="fbc-reset-btn">', unsafe_allow_html=True)
     if st.button("🗂️ Clear & Upload New File", width='stretch'):
         reset_dcf_state()
+
+        # ✅ Increment uploader key to force Streamlit to forget previous upload
+        st.session_state["dcf_uploader_key"] = st.session_state.get("dcf_uploader_key", 0) + 1
+
         st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # FILE UPLOAD
 # -------------------------------------------------------
+
+
 st.subheader("📂 Upload Financial Statements")
 
-if "dcf_uploaded_file" not in st.session_state:
-    st.session_state["dcf_uploaded_file"] = None
+# --- Persist uploaded file bytes so the app doesn't "forget" after inactivity/rerun ---
+if "dcf_file_bytes" not in st.session_state:
+    st.session_state["dcf_file_bytes"] = None
+if "dcf_file_name" not in st.session_state:
+    st.session_state["dcf_file_name"] = None
+
+# ✅ Initialize uploader key BEFORE using it
+if "dcf_uploader_key" not in st.session_state:
+    st.session_state["dcf_uploader_key"] = 0
 
 uploaded_file = st.file_uploader(
     "Upload Excel with IS, BS, CF",
     type=["xlsx"],
-    key="dcf_main_uploader"
+    key=f"dcf_main_uploader_{st.session_state['dcf_uploader_key']}"
 )
 
-# Save once
+
+# Save bytes once
 if uploaded_file is not None:
-    st.session_state["dcf_uploaded_file"] = uploaded_file
+    st.session_state["dcf_file_bytes"] = uploaded_file.getvalue()
+    st.session_state["dcf_file_name"] = uploaded_file.name
 
-# Use stored file
-uploaded_file = st.session_state["dcf_uploaded_file"]
-
-if uploaded_file is None:
+# Rebuild a file-like object from bytes
+if st.session_state["dcf_file_bytes"] is None:
     st.info("⬆️ Please upload an Excel file to begin.")
     st.stop()
+
+file_like = io.BytesIO(st.session_state["dcf_file_bytes"])
+
+# Now use this in ExcelFile
+xls = pd.ExcelFile(file_like)
+
 
 # ---------------------------------------------------------
 # LOAD & CACHE PARSED STATEMENTS (ONCE)
 # ---------------------------------------------------------
 if "dcf_is_df" not in st.session_state:
-    xls = pd.ExcelFile(uploaded_file)
+    xls = pd.ExcelFile(io.BytesIO(st.session_state["dcf_file_bytes"]))  # ✅ always valid
 
-    st.session_state["dcf_is_df"] = clean_numeric_cols(
-        xls.parse(xls.sheet_names[0])
-    )
-    st.session_state["dcf_bs_df"] = clean_numeric_cols(
-        xls.parse(xls.sheet_names[1])
-    )
-    st.session_state["dcf_cf_df"] = clean_numeric_cols(
-        xls.parse(xls.sheet_names[2])
-    )
+    st.session_state["dcf_is_df"] = clean_numeric_cols(xls.parse(xls.sheet_names[0]))
+    st.session_state["dcf_bs_df"] = clean_numeric_cols(xls.parse(xls.sheet_names[1]))
+    st.session_state["dcf_cf_df"] = clean_numeric_cols(xls.parse(xls.sheet_names[2]))
 
 is_df = st.session_state["dcf_is_df"]
 bs_df = st.session_state["dcf_bs_df"]
@@ -294,29 +318,38 @@ year_cols_cf = get_year_cols(cf_df)
 # FX SECTION — EXCEL-BASED (ZWG → USD) — FINAL & CORRECT
 # ---------------------------------------------------------
 st.markdown("### 💱 Currency & Exchange Rates")
+# ✅ Persist conversion method across tabs/pages
+# conversion_method can be: "NO_FX" or "FX_EXCEL"
+if "dcf_conversion_method" not in st.session_state:
+    st.session_state["dcf_conversion_method"] = "NO_FX"
+
+if "dcf_currency" not in st.session_state:
+    st.session_state["dcf_currency"] = "USD (already converted)"
 
 # -------------------------------------------------
 # 1️⃣ Currency selector (persistent)
 # -------------------------------------------------
-if "dcf_currency" not in st.session_state:
-    st.session_state["dcf_currency"] = "USD (already converted)"
-
 currency = st.selectbox(
     "Currency of uploaded statements:",
     ["USD (already converted)", "ZWG (convert using FX Excel)"],
-    index=0 if st.session_state["dcf_currency"].startswith("USD") else 1,
+    index=0 if st.session_state.get("dcf_conversion_method") == "NO_FX" else 1,
     key="dcf_currency_select"
 )
 
+# ✅ Store BOTH: the label + a stable method flag
 st.session_state["dcf_currency"] = currency
+st.session_state["dcf_conversion_method"] = "NO_FX" if currency.startswith("USD") else "FX_EXCEL"
+
 
 # -------------------------------------------------
 # 2️⃣ FX Excel upload — SHOW ONLY IF ZWG
 # -------------------------------------------------
-if "dcf_fx_file" not in st.session_state:
-    st.session_state["dcf_fx_file"] = None
-
-if currency.startswith("ZWG"):
+# ✅ Persist FX file across reruns/tabs using bytes
+if "dcf_fx_bytes" not in st.session_state:
+    st.session_state["dcf_fx_bytes"] = None
+if "dcf_fx_name" not in st.session_state:
+    st.session_state["dcf_fx_name"] = None
+if st.session_state["dcf_conversion_method"] == "FX_EXCEL":
 
     st.markdown("""
     <div style="
@@ -337,15 +370,15 @@ if currency.startswith("ZWG"):
         key="dcf_fx_uploader"
     )
 
+    # ✅ Save FX bytes once
     if fx_file is not None:
-        st.session_state["dcf_fx_file"] = fx_file
+        st.session_state["dcf_fx_bytes"] = fx_file.getvalue()
+        st.session_state["dcf_fx_name"] = fx_file.name
 
 else:
-    # USD selected → clear FX file & hide uploader
-    st.session_state["dcf_fx_file"] = None
-
-fx_file = st.session_state["dcf_fx_file"]
-
+    # USD selected → clear FX bytes
+    st.session_state["dcf_fx_bytes"] = None
+    st.session_state["dcf_fx_name"] = None
 
 # -------------------------------------------------
 # 3️⃣ If USD → skip FX
@@ -356,14 +389,14 @@ if currency.startswith("USD"):
 else:
     st.warning("ZWG detected. Upload FX Excel with Dates and Interbank Rates to convert to USD.")
 
-    if fx_file is None:
+    if st.session_state["dcf_fx_bytes"] is None:
         st.stop()
 
     # -------------------------------------------------
     # 4️⃣ Load FX Excel ONCE
     # -------------------------------------------------
     if "dcf_fx_raw" not in st.session_state:
-        fx_raw = pd.read_excel(fx_file)
+        fx_raw = pd.read_excel(io.BytesIO(st.session_state["dcf_fx_bytes"]))
         fx_raw.columns = [str(c).strip() for c in fx_raw.columns]
         st.session_state["dcf_fx_raw"] = fx_raw
     else:
@@ -427,6 +460,111 @@ else:
 
     fx_df[fx_col] = pd.to_numeric(fx_df[fx_col], errors="coerce")
     fx_df = fx_df.dropna(subset=[fx_col])
+    # -------------------------------------------------
+    # 🪙 Apply conversion factor by selected Year(s) + Date Ranges
+    # -------------------------------------------------
+    st.markdown("### 🪙 Apply ZWG→ZiG factor by Year + Range")
+
+    # years available from statements
+    available_years = sorted({str(int(y)) for y in year_cols_is})
+
+    if "dcf_factor_enabled" not in st.session_state:
+        st.session_state["dcf_factor_enabled"] = False
+
+    if "dcf_zig_factor" not in st.session_state:
+        st.session_state["dcf_zig_factor"] = 2498.7242
+
+    if "dcf_factor_year_ranges" not in st.session_state:
+        # {"2024": [{"start": date(...), "end": date(...)}], ...}
+        st.session_state["dcf_factor_year_ranges"] = {}
+    # ✅ Persist selected years across page/tab switches
+    if "dcf_factor_years_selected_vals" not in st.session_state:
+        st.session_state["dcf_factor_years_selected_vals"] = []
+
+    enable_factor = st.checkbox(
+        "Enable manual factor (for mixed ZWG/ZiG periods)",
+        value=st.session_state["dcf_factor_enabled"],
+        key="dcf_factor_enabled_ui"
+    )
+    st.session_state["dcf_factor_enabled"] = enable_factor
+
+    zig_factor = st.number_input(
+        "ZWG → ZiG conversion factor (divide FX by this inside selected ranges)",
+        value=float(st.session_state["dcf_zig_factor"]),
+        step=0.0001,
+        format="%.6f",
+        key="dcf_zig_factor_ui2"
+    )
+    st.session_state["dcf_zig_factor"] = zig_factor
+
+    if enable_factor:
+        years_selected = st.multiselect(
+            "Select the year(s) where you want to apply the factor",
+            available_years,
+            default=[y for y in st.session_state["dcf_factor_years_selected_vals"] if y in available_years],
+            key="dcf_factor_years_selected_ui"
+        )
+
+        # ✅ store it explicitly (this survives page/tab switching better)
+        st.session_state["dcf_factor_years_selected_vals"] = years_selected
+
+        for y in years_selected:
+            st.session_state["dcf_factor_year_ranges"].setdefault(y, [])
+
+            st.markdown(f"#### Ranges for {y}")
+
+            if st.button(f"➕ Add range for {y}", key=f"add_range_{y}"):
+                st.session_state["dcf_factor_year_ranges"][y].append({
+                    "start": date(int(y), 1, 1),
+                    "end": date(int(y), 12, 31),
+                })
+
+            ranges = st.session_state["dcf_factor_year_ranges"][y]
+            for i, r in enumerate(ranges):
+                c1, c2, c3 = st.columns([2, 2, 1])
+
+                with c1:
+                    new_start = st.date_input(
+                        f"{y} range {i + 1} start",
+                        value=r["start"],
+                        key=f"{y}_r{i}_start"
+                    )
+                with c2:
+                    new_end = st.date_input(
+                        f"{y} range {i + 1} end",
+                        value=r["end"],
+                        key=f"{y}_r{i}_end"
+                    )
+
+                if new_end < new_start:
+                    st.error("❌ End date cannot be before start date.")
+                else:
+                    st.session_state["dcf_factor_year_ranges"][y][i]["start"] = new_start
+                    st.session_state["dcf_factor_year_ranges"][y][i]["end"] = new_end
+
+                with c3:
+                    if st.button("🗑️ Delete", key=f"{y}_r{i}_del"):
+                        st.session_state["dcf_factor_year_ranges"][y].pop(i)
+                        st.rerun()
+
+        # Apply factor to FX rows in selected ranges
+        if zig_factor <= 0:
+            st.error("❌ Factor must be > 0.")
+            st.stop()
+
+        fx_df["_factor_applied"] = False
+
+        for y in years_selected:
+            for r in st.session_state["dcf_factor_year_ranges"].get(y, []):
+                s = pd.Timestamp(r["start"])
+                e = pd.Timestamp(r["end"])
+                mask = (fx_df["Date"] >= s) & (fx_df["Date"] <= e)
+                if mask.any():
+                    fx_df.loc[mask, fx_col] = fx_df.loc[mask, fx_col] / float(zig_factor)
+                    fx_df.loc[mask, "_factor_applied"] = True
+
+        st.success(f"✅ Factor applied to {int(fx_df['_factor_applied'].sum()):,} FX rows.")
+        st.dataframe(fx_df.loc[fx_df["_factor_applied"], ["Date", fx_col]].head(20), width='stretch')
 
     # -------------------------------------------------
     # 7️⃣ Compute YEARLY AVERAGE FX (Income Statement)
@@ -539,11 +677,16 @@ else:
     # -------------------------------------------------
     # 1️⃣1️⃣ APPLY FX CONVERSION (RE-RUN IF SETTINGS CHANGE)
     # -------------------------------------------------
+    factor_signature = (
+        st.session_state.get("dcf_factor_enabled", False),
+        st.session_state.get("dcf_zig_factor", None),
+        str(st.session_state.get("dcf_factor_year_ranges", {}))
+    )
 
-    # Build an FX signature (so we re-apply only when user changes FX settings)
     fx_signature = (
         currency,
         fx_col,
+        factor_signature,
         tuple((y, str(st.session_state["dcf_bs_closing_dates"][y])) for y in bs_years)
     )
 
@@ -650,197 +793,339 @@ def clean_defaults(default_list, options):
     return [x for x in default_list if x in options]
 
 # ---------------------------------------------------------
-# BALANCE SHEET MAPPING (PERSISTENT)
+# BALANCE SHEET — OPTION C WIZARD (multi-select + preview)
 # ---------------------------------------------------------
-st.markdown("### 🟩 Balance Sheet Mapping (multi-select allowed)")
+BS_LINES = [
+    ("debt",   "Total Debt / Borrowings (multi-select)"),
+    ("cash",   "Cash & Cash Equivalents (multi-select)"),
+    ("ca",     "Current Assets (for Working Capital) (multi-select)"),
+    ("cl",     "Current Liabilities (for Working Capital) (multi-select)"),
+    ("equity", "Equity (multi-select)"),
+]
 
-bs_items = list(bs_df["Item"].astype(str))
-bs_labels = option_labels_from_items(bs_items)
+def map_bs_wizard(bs_df, year_cols_bs):
+    st.markdown("### 🟩 Balance Sheet — Mapping")
 
-# --- DEBT ---
-sel_debt_labels = st.multiselect(
-    "Select ALL rows that form Total Debt / Borrowings:",
-    bs_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["debt"], bs_labels),
-    key="dcf_map_debt"
-)
+    bs_items = list(bs_df["Item"].astype(str))
+    bs_labels = option_labels_from_items(bs_items)
 
-st.session_state["dcf_mapping"]["debt"] = sel_debt_labels
+    if "dcf_mapping" not in st.session_state:
+        st.session_state["dcf_mapping"] = {}
+    for k, _ in BS_LINES:
+        st.session_state["dcf_mapping"].setdefault(k, [])
 
-# --- CASH ---
-sel_cash_labels = st.multiselect(
-    "Select ALL rows that form Cash & Cash Equivalents:",
-    bs_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["cash"], bs_labels),
-    key="dcf_map_cash"
-)
-st.session_state["dcf_mapping"]["cash"] = sel_cash_labels
+    if "bs_map_step" not in st.session_state:
+        st.session_state["bs_map_step"] = 0
 
-# --- CURRENT ASSETS ---
-sel_ca_labels = st.multiselect(
-    "Select ALL rows that are Current Assets (for Working Capital):",
-    bs_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["ca"], bs_labels),
-    key="dcf_map_ca"
-)
-st.session_state["dcf_mapping"]["ca"] = sel_ca_labels
+    # --- progress
+    mapped = sum(1 for k, _ in BS_LINES if len(st.session_state["dcf_mapping"].get(k, [])) > 0)
+    st.progress(mapped / len(BS_LINES))
+    st.caption(f"Mapped: {mapped}/{len(BS_LINES)}")
 
-# --- CURRENT LIABILITIES ---
+    step_names = [name for _, name in BS_LINES]
 
-sel_cl_labels = st.multiselect(
-    "Select ALL rows that are Current Liabilities (for Working Capital):",
-    bs_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["cl"], bs_labels),
-    key="dcf_map_cl"
-)
-st.session_state["dcf_mapping"]["cl"] = sel_cl_labels
+    # ✅ make radio fully controlled
+    if "bs_jump_radio" not in st.session_state:
+        st.session_state["bs_jump_radio"] = step_names[st.session_state["bs_map_step"]]
 
-# --- EQUITY SELECTOR ---
+    def _set_step(i: int):
+        i = max(0, min(i, len(BS_LINES) - 1))
+        st.session_state["bs_map_step"] = i
+        st.session_state["bs_jump_radio"] = step_names[i]   # ✅ move red dot
+        st.rerun()
 
+    c1, c2, _ = st.columns([1, 1, 2])
+    with c1:
+        if st.button("⬅️ Back (BS)", disabled=st.session_state["bs_map_step"] == 0):
+            _set_step(st.session_state["bs_map_step"] - 1)
 
-valid_equity_defaults = clean_defaults(
-    st.session_state["dcf_mapping"].get("equity", []),
-    bs_labels
-)
+    with c2:
+        if st.button("➡️ Next unmapped (BS)"):
+            target = None
+            for i, (k, _) in enumerate(BS_LINES):
+                if len(st.session_state["dcf_mapping"].get(k, [])) == 0:
+                    target = i
+                    break
+            if target is None:
+                target = len(BS_LINES) - 1
+            _set_step(target)
 
-sel_equity_labels = st.multiselect(
-    "Select ALL rows that represent Equity:",
-    bs_labels,
-    default=valid_equity_defaults,
-    key="dcf_map_equity"
-)
+    # ✅ radio drives step too
+    chosen_step = st.radio(
+        "Jump to BS line:",
+        step_names,
+        key="bs_jump_radio",
+        horizontal=True
+    )
+    st.session_state["bs_map_step"] = step_names.index(chosen_step)
 
-st.session_state["dcf_mapping"]["equity"] = sel_equity_labels
-equity_idx_list = indices_from_labels(sel_equity_labels)
+    k, title = BS_LINES[st.session_state["bs_map_step"]]
+    stored = clean_defaults(st.session_state["dcf_mapping"].get(k, []), bs_labels)
 
-# Convert labels → row indices
-debt_idx_list = indices_from_labels(sel_debt_labels)
-cash_idx_list = indices_from_labels(sel_cash_labels)
-ca_idx_list = indices_from_labels(sel_ca_labels)
-cl_idx_list = indices_from_labels(sel_cl_labels)
+    # ✅ widget reset counters (versioned key)
+    if "bs_widget_reset" not in st.session_state:
+        st.session_state["bs_widget_reset"] = {}
+    st.session_state["bs_widget_reset"].setdefault(k, 0)
 
+    widget_key = f"bs_pick_{k}_{st.session_state['bs_widget_reset'][k]}"
+
+    with st.container(border=True):
+        st.markdown(f"#### {title}")
+
+        sel = st.multiselect(
+            "Select row(s):",
+            bs_labels,
+            default=stored,
+            key=widget_key
+        )
+
+        st.session_state["dcf_mapping"][k] = sel
+
+        if st.button("🧹 Clear selection", key=f"bs_clear_{k}"):
+            st.session_state["dcf_mapping"][k] = []
+            st.session_state["bs_widget_reset"][k] += 1  # ✅ forces a fresh widget
+            st.rerun()
+
+        # preview
+        if sel:
+            idx_list = indices_from_labels(sel)
+            preview_vals = bs_df.loc[idx_list, year_cols_bs].sum(axis=0)
+            st.caption("Preview (sum of selected rows):")
+            st.dataframe(
+                pd.DataFrame({"Year": year_cols_bs, "Total": preview_vals.values}),
+                hide_index=True,
+                width='stretch'
+            )
+
+    out = {}
+    for kk, _ in BS_LINES:
+        out[kk] = indices_from_labels(st.session_state["dcf_mapping"].get(kk, []))
+    return out
+
+bs_idx = map_bs_wizard(bs_df, year_cols_bs)
+
+debt_idx_list   = bs_idx["debt"]
+cash_idx_list   = bs_idx["cash"]
+ca_idx_list     = bs_idx["ca"]
+cl_idx_list     = bs_idx["cl"]
+equity_idx_list = bs_idx["equity"]
 # ---------------------------------------------------------
-# CASH FLOW MAPPING (PERSISTENT)
+# CASH FLOW — OPTION C WIZARD (multi-select + preview)
 # ---------------------------------------------------------
-st.markdown("### 📄 Cash Flow Mapping (multi-select allowed)")
+CF_LINES = [
+    ("dep",      "Depreciation & Amortisation (multi-select)"),
+    ("capex",    "Capex  (multi-select)"),
+    ("interest", "Interest paid (if using CF for interest) (multi-select)"),
+]
 
-cf_items = list(cf_df["Item"].astype(str))
-cf_labels = option_labels_from_items(cf_items)
+def map_cf_wizard(cf_df, year_cols_cf):
+    st.markdown("### 📄 Cash Flow — Mapping")
 
-# --- DEPRECIATION ---
-sel_dep_cf = st.multiselect(
-    "Select Depreciation & Amortisation rows (from Cash Flow):",
-    cf_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["dep"], cf_labels),
-    key="dcf_map_dep"
-)
+    cf_items = list(cf_df["Item"].astype(str))
+    cf_labels = option_labels_from_items(cf_items)
 
-st.session_state["dcf_mapping"]["dep"] = sel_dep_cf
+    if "dcf_mapping" not in st.session_state:
+        st.session_state["dcf_mapping"] = {}
+    for k, _ in CF_LINES:
+        st.session_state["dcf_mapping"].setdefault(k, [])
 
-# --- CAPEX ---
-sel_capex_cf = st.multiselect(
-    "Select ALL Capex rows (purchase of PPE / fixed assets):",
-    cf_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["capex"], cf_labels),
-    key="dcf_map_capex"
-)
-st.session_state["dcf_mapping"]["capex"] = sel_capex_cf
+    if "cf_map_step" not in st.session_state:
+        st.session_state["cf_map_step"] = 0
 
-# --- INTEREST ---
-sel_int_cf = st.multiselect(
-    "Select Interest paid rows (if using CF for interest):",
-    cf_labels,
-    default=clean_defaults(st.session_state["dcf_mapping"]["interest"], cf_labels),
-    key="dcf_map_interest"
-)
-st.session_state["dcf_mapping"]["interest"] = sel_int_cf
+    mapped = sum(1 for k, _ in CF_LINES if len(st.session_state["dcf_mapping"].get(k, [])) > 0)
+    st.progress(mapped / len(CF_LINES))
+    st.caption(f"Mapped: {mapped}/{len(CF_LINES)}")
 
-# Convert labels → row indices
-dep_cf_idx_list = indices_from_labels(sel_dep_cf)
-capex_cf_idx_list = indices_from_labels(sel_capex_cf)
-int_cf_idx_list = indices_from_labels(sel_int_cf)
+    step_names = [name for _, name in CF_LINES]
+
+    if "cf_jump_radio" not in st.session_state:
+        st.session_state["cf_jump_radio"] = step_names[st.session_state["cf_map_step"]]
+
+    def _set_step(i: int):
+        i = max(0, min(i, len(CF_LINES) - 1))
+        st.session_state["cf_map_step"] = i
+        st.session_state["cf_jump_radio"] = step_names[i]   # ✅ move red dot
+        st.rerun()
+
+    c1, c2, _ = st.columns([1, 1, 2])
+    with c1:
+        if st.button("⬅️ Back (CF)", disabled=st.session_state["cf_map_step"] == 0):
+            _set_step(st.session_state["cf_map_step"] - 1)
+
+    with c2:
+        if st.button("➡️ Next unmapped (CF)"):
+            target = None
+            for i, (k, _) in enumerate(CF_LINES):
+                if len(st.session_state["dcf_mapping"].get(k, [])) == 0:
+                    target = i
+                    break
+            if target is None:
+                target = len(CF_LINES) - 1
+            _set_step(target)
+
+    chosen_step = st.radio(
+        "Jump to CF line:",
+        step_names,
+        key="cf_jump_radio",
+        horizontal=True
+    )
+    st.session_state["cf_map_step"] = step_names.index(chosen_step)
+
+    k, title = CF_LINES[st.session_state["cf_map_step"]]
+    stored = clean_defaults(st.session_state["dcf_mapping"].get(k, []), cf_labels)
+
+    if "cf_widget_reset" not in st.session_state:
+        st.session_state["cf_widget_reset"] = {}
+    st.session_state["cf_widget_reset"].setdefault(k, 0)
+
+    widget_key = f"cf_pick_{k}_{st.session_state['cf_widget_reset'][k]}"
+
+    with st.container(border=True):
+        st.markdown(f"#### {title}")
+
+        sel = st.multiselect(
+            "Select row(s):",
+            cf_labels,
+            default=stored,
+            key=widget_key
+        )
+
+        st.session_state["dcf_mapping"][k] = sel
+
+        if st.button("🧹 Clear selection", key=f"cf_clear_{k}"):
+            st.session_state["dcf_mapping"][k] = []
+            st.session_state["cf_widget_reset"][k] += 1
+            st.rerun()
+
+        if sel:
+            idx_list = indices_from_labels(sel)
+            preview_vals = cf_df.loc[idx_list, year_cols_cf].sum(axis=0)
+            st.caption("Preview (sum of selected rows):")
+            st.dataframe(
+                pd.DataFrame({"Year": year_cols_cf, "Total": preview_vals.values}),
+                hide_index=True,
+                width='stretch'
+            )
+
+    out = {}
+    for kk, _ in CF_LINES:
+        out[kk] = indices_from_labels(st.session_state["dcf_mapping"].get(kk, []))
+    return out
+
+cf_idx = map_cf_wizard(cf_df, year_cols_cf)
+
+dep_cf_idx_list    = cf_idx["dep"]
+capex_cf_idx_list  = cf_idx["capex"]
+int_cf_idx_list    = cf_idx["interest"]
 
 # ---------------------------------------------------------
 # INCOME STATEMENT FORECASTING
 # ---------------------------------------------------------
-# find main rows
 # ---------------------------------------------------------
-# CORE INCOME STATEMENT MAPPING (USER-DRIVEN)
+# INCOME STATEMENT — OPTION C (WIZARD: steps + progress + next unmapped)
 # ---------------------------------------------------------
-def map_core_is_totals(is_df, key_prefix="is_core"):
-    """
-    Persistent Income Statement core totals mapping.
-    NEVER resets unless user explicitly changes selections.
-    """
+CORE_LINES = [
+    ("rev", "Revenue"),
+    ("cos", "Cost of Sales / Raw Materials (optional)"),
+    ("gp", "Gross Profit"),
+    ("ebitda", "EBITDA"),
+    ("op", "Operating Profit / EBIT"),
+    ("pbt", "Profit Before Tax"),
+    ("tax", "Income Tax (Tax expense)"),
+    ("np", "Profit for the Year"),
+]
 
+def _labels_from_items(items):
+    return ["N/A (not in statement)"] + [f"{i+1}: {str(name)}" for i, name in enumerate(items)]
+
+def map_core_is_totals_wizard(is_df, year_cols_is):
     st.markdown("### 🧾 Income Statement — Core Totals Mapping")
 
     items = list(is_df["Item"].astype(str))
-    labels = option_labels_from_items(items)
+    options = _labels_from_items(items)
 
-    # Initialize once
+    # init state once
     if "is_core_mapping" not in st.session_state:
-        st.session_state["is_core_mapping"] = {
-            "rev": None,
-            "cos": None,
-            "gp": None,
-            "ebitda": None,
-            "op": None,
-            "pbt": None,
-            "np": None,
-        }
+        st.session_state["is_core_mapping"] = {k: None for k, _ in CORE_LINES}
+    if "is_map_step" not in st.session_state:
+        st.session_state["is_map_step"] = 0
 
-    def pick(label, key):
-        stored = st.session_state["is_core_mapping"].get(key)
+    # progress
+    mapped = sum(1 for k, _ in CORE_LINES if st.session_state["is_core_mapping"].get(k))
+    st.progress(mapped / len(CORE_LINES))
+    st.caption(f"Mapped: {mapped}/{len(CORE_LINES)}")
 
-        options = ["N/A (not in statement)"] + labels
+    # quick navigation buttons
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if st.button("⬅️ Back", disabled=st.session_state["is_map_step"] == 0):
+            st.session_state["is_map_step"] -= 1
+            st.rerun()
 
-        # Determine default index safely
-        if stored in labels:
-            default_index = options.index(stored)
-        else:
-            default_index = 0
+    with c2:
+        # jump to next unmapped
+        if st.button("➡️ Next unmapped"):
+            for i, (k, _) in enumerate(CORE_LINES):
+                if not st.session_state["is_core_mapping"].get(k):
+                    st.session_state["is_map_step"] = i
+                    st.rerun()
+            # if all mapped, stay at end
+            st.session_state["is_map_step"] = len(CORE_LINES) - 1
+            st.rerun()
 
-        selected = st.selectbox(
-            label,
-            options,
-            index=default_index,
-            key=f"{key_prefix}_{key}",
+    # step selector (feels interactive + reduces page length)
+    step_names = [name for _, name in CORE_LINES]
+    step = st.radio(
+        "Jump to line:",
+        step_names,
+        index=int(st.session_state["is_map_step"]),
+        horizontal=True
+    )
+    st.session_state["is_map_step"] = step_names.index(step)
+
+    # current step UI
+    k, title = CORE_LINES[st.session_state["is_map_step"]]
+    stored = st.session_state["is_core_mapping"].get(k)
+    default = stored if stored in options else "N/A (not in statement)"
+    default_index = options.index(default)
+
+    chosen = st.selectbox(
+        f"Select statement line for: **{title}**",
+        options,
+        index=default_index,
+        key=f"is_pick_{k}"
+    )
+
+    st.session_state["is_core_mapping"][k] = None if chosen.startswith("N/A") else chosen
+
+    # small preview for selected row (makes it feel alive)
+    if not chosen.startswith("N/A"):
+        idx = int(chosen.split(":", 1)[0]) - 1
+        row_vals = is_df.iloc[idx][year_cols_is]
+        st.dataframe(
+            pd.DataFrame({"Year": year_cols_is, "Value": row_vals.values}),
+            hide_index=True,
+            width='stretch'
         )
 
-        # ✅ CRITICAL FIX: never store "N/A"
-        if selected == "N/A (not in statement)":
-            st.session_state["is_core_mapping"][key] = None
-            return None
-        else:
-            st.session_state["is_core_mapping"][key] = selected
-            return selected
+    # convert to indices
+    idx_map = {}
+    for kk, _ in CORE_LINES:
+        v = st.session_state["is_core_mapping"].get(kk)
+        idx_map[kk] = (int(v.split(":", 1)[0]) - 1) if v else None
 
-    # User selections
-    pick("Revenue", "rev")
-    pick("Cost of Sales", "cos")
-    pick("Gross Profit", "gp")
-    pick("EBITDA", "ebitda")
-    pick("Operating Profit / EBIT", "op")
-    pick("Profit Before Tax", "pbt")
-    pick("Profit for the Year", "np")
-
-    # Convert labels → indices
-    idx = {}
-    for k, v in st.session_state["is_core_mapping"].items():
-        if v:
-            idx[k] = int(v.split(":", 1)[0]) - 1
-        else:
-            idx[k] = None
-
-    # Validation
-    if idx["rev"] is None:
+    # required check
+    if idx_map["rev"] is None:
         st.error("❌ Revenue must be selected.")
         st.stop()
 
-    return idx
+    return idx_map
 
-core_idx = map_core_is_totals(is_df)
+
+# ✅ use this instead of your old mapping call
+core_idx = map_core_is_totals_wizard(is_df, year_cols_is)
+
+
 
 rev_idx    = core_idx["rev"]
 cos_idx    = core_idx["cos"]
@@ -848,12 +1133,20 @@ gp_idx     = core_idx["gp"]
 ebitda_idx = core_idx["ebitda"]
 op_idx     = core_idx["op"]
 pbt_idx    = core_idx["pbt"]
+tax_idx    = core_idx["tax"]   # ✅ ADD
 np_idx     = core_idx["np"]
 
 
-if rev_idx is None or cos_idx is None:
-    st.error("❌ Could not find both 'Revenue' and 'Cost of sales' rows.")
+
+# ✅ Only Revenue is mandatory
+if rev_idx is None:
+    st.error("❌ Revenue must be selected.")
     st.stop()
+
+# ✅ Cost of Sales is OPTIONAL
+if cos_idx is None:
+    st.warning("⚠️ Cost of Sales / Raw Materials not selected. Forecast will run using other lines as % of revenue.")
+
 
 revenue_row = is_df.iloc[[rev_idx]]
 
@@ -903,53 +1196,157 @@ for col in forecast_cols:
     if col not in forecast_is.columns:
         forecast_is[col] = np.nan
 
-# revenue forecast
+# revenue forecast (ALLOW YEAR-BY-YEAR GROWTH)
 rev_hist_vals = revenue_row[year_cols_is].values.flatten().astype(float)
 
+
+# INCOME TAX RATE (Income Tax / Profit Before Tax) → AVERAGE
+# ---------------------------------------------------------
+avg_tax_ratio = 0.0
+
+if isinstance(tax_idx, int) and isinstance(pbt_idx, int):
+
+    tax_hist_vals = forecast_is.iloc[tax_idx][year_cols_is].values.astype(float)
+    pbt_hist_vals = forecast_is.iloc[pbt_idx][year_cols_is].values.astype(float)
+
+    mask = (~np.isnan(tax_hist_vals)) & (~np.isnan(pbt_hist_vals)) & (pbt_hist_vals > 0)
+
+    if mask.any():
+        pbt_valid = pbt_hist_vals[mask]
+        tax_valid = tax_hist_vals[mask]
+
+        # only profitable years
+        profit_mask = pbt_valid > 0
+
+        # KEEP SIGN: tax is negative, so ratio should be negative
+        ratios = tax_valid[profit_mask] / pbt_valid[profit_mask]
+
+        # sane cap for negative tax ratios (-60% to 0%)
+        ratios = ratios[(ratios <= 0) & (ratios >= -1.50)]
+
+        if len(ratios):
+            avg_tax_ratio = float(np.mean(ratios))
+
+# --- UI choice: same growth vs year-by-year growth ---
+st.markdown("### 📈 Revenue Growth Method")
+
+if "dcf_rev_growth_mode" not in st.session_state:
+    st.session_state["dcf_rev_growth_mode"] = "Uniform (same % each year)"
+
+growth_mode = st.radio(
+    "Choose how you want to apply revenue growth:",
+    ["Uniform (same % each year)", "Different growth per year"],
+    index=0 if st.session_state["dcf_rev_growth_mode"].startswith("Uniform") else 1,
+    key="dcf_rev_growth_mode_radio"
+)
+st.session_state["dcf_rev_growth_mode"] = growth_mode
+
+# ---------------------------------------------------------
+# AUTO YEAR-BY-YEAR GROWTH ENGINE (fade to long-run)
+# ---------------------------------------------------------
+def auto_growth_curve(start_g: float, terminal_g: float, n: int, speed: float = 0.55):
+    """
+    Returns a list of n growth rates that fade from start_g to terminal_g.
+    speed in (0,1): higher = faster fade.
+    """
+    out = []
+    g = start_g
+    for _ in range(n):
+        # move part-way toward terminal each year
+        g = terminal_g + (g - terminal_g) * (1 - speed)
+        out.append(g)
+    return out
+
+# --- If year-by-year, store a % for each forecast year ---
+if "dcf_yearly_growth_pct" not in st.session_state:
+    st.session_state["dcf_yearly_growth_pct"] = {}
+
+yearly_g = {}
+
+if growth_mode == "Different growth per year":
+    st.markdown("#### Enter growth for each forecast year (%)")
+    for y in forecast_years_int:
+        default_pct = st.session_state["dcf_yearly_growth_pct"].get(str(y), avg_g * 100)
+        pct = st.number_input(
+            f"Growth for {y} (%)",
+            value=float(default_pct),
+            step=0.1,
+            format="%.2f",
+            key=f"growth_{y}"
+        )
+        st.session_state["dcf_yearly_growth_pct"][str(y)] = pct
+        yearly_g[y] = pct / 100.0
+else:
+    # Uniform growth uses avg_g from your existing logic
+    for y in forecast_years_int:
+        yearly_g[y] = avg_g
+
+# --- Now forecast revenue using the selected growth rates ---
 rev_forecast = {}
-current_rev = rev_hist_vals[-1]
+current_rev = float(rev_hist_vals[-1])
 
 for y in forecast_years_int:
-    current_rev = current_rev * (1 + avg_g)
+    g_y = yearly_g[y]
+    current_rev = current_rev * (1 + g_y)
     rev_forecast[y] = current_rev
-    forecast_is.iat[
-        rev_idx,
-        forecast_is.columns.get_loc(str(y))
-    ] = current_rev
+    forecast_is.iat[rev_idx, forecast_is.columns.get_loc(str(y))] = current_rev
 
 
 # ---------------------------------------------------------
-# COST HANDLING LOGIC
+# COST / GROSS PROFIT HANDLING (COS OPTIONAL)
 # ---------------------------------------------------------
-use_gp_method = (
-    isinstance(cos_idx, int)
-    and isinstance(gp_idx, int)
-)
+has_cos = isinstance(cos_idx, int)
+has_gp  = isinstance(gp_idx, int)
 
-
-if use_gp_method:
+# 1) If GP exists, compute historical GP margin
+avg_gp_margin = None
+if has_gp:
     gp_hist_vals = forecast_is.iloc[gp_idx][year_cols_is].values.astype(float)
-    mask = rev_hist_vals != 0
+    mask = (rev_hist_vals != 0) & (~np.isnan(gp_hist_vals)) & (~np.isnan(rev_hist_vals))
     gp_margins = gp_hist_vals[mask] / rev_hist_vals[mask]
     gp_margins = gp_margins[(gp_margins > -5) & (gp_margins < 5)]
-    avg_gp_margin = np.mean(gp_margins) if len(gp_margins) else 0.3
+    avg_gp_margin = float(np.mean(gp_margins)) if len(gp_margins) else 0.30
+
+# ✅ CASE A: GP + COS exist → forecast COS using GP margin (your original approach)
+if has_gp and has_cos and avg_gp_margin is not None:
 
     last_cos_hist = float(forecast_is.iloc[cos_idx][last_hist_label])
     cos_sign = -1 if last_cos_hist < 0 else 1
 
     for y in forecast_years_int:
-        forecast_is.iat[
-            cos_idx,
-            forecast_is.columns.get_loc(str(y))
-        ] = cos_sign * rev_forecast[y] * (1 - avg_gp_margin)
+        forecast_is.iat[cos_idx, forecast_is.columns.get_loc(str(y))] = (
+            cos_sign * rev_forecast[y] * (1 - avg_gp_margin)
+        )
 
+    st.success(f"✅ COS forecasted using average GP margin = {avg_gp_margin:.2%}")
 
+# ✅ CASE B: GP exists but COS missing → forecast GP directly
+elif has_gp and (not has_cos) and avg_gp_margin is not None:
+
+    for y in forecast_years_int:
+        forecast_is.iat[gp_idx, forecast_is.columns.get_loc(str(y))] = (
+            rev_forecast[y] * avg_gp_margin
+        )
+
+    st.info(f"ℹ️ COS not selected. GP forecasted using average GP margin = {avg_gp_margin:.2%}")
+
+# ✅ CASE C: COS exists but GP missing → forecast COS as % of revenue
+elif has_cos and (not has_gp):
+
+    cos_hist_vals = forecast_is.iloc[cos_idx][year_cols_is].values.astype(float)
+    cos_ratio = ratio_to_revenue(cos_hist_vals, rev_hist_vals)
+
+    for y in forecast_years_int:
+        forecast_is.iat[cos_idx, forecast_is.columns.get_loc(str(y))] = (
+            rev_forecast[y] * cos_ratio
+        )
+
+    st.info(f"ℹ️ GP not selected. COS forecasted as % of revenue (avg ratio = {cos_ratio:.2%})")
+
+# ✅ CASE D: Neither GP nor COS exists → do nothing special (rest of rows will still forecast)
 else:
-    # === MANUFACTURING / FLEXIBLE MODE ===
-    st.info(
-        "Cost of sales not explicitly modelled. "
-        "All cost items will be forecasted as % of revenue."
-    )
+    st.info("ℹ️ GP and COS not selected. Forecast will rely on other rows as % of revenue.")
+
 
 industry = st.session_state.get("dcf_industry", "General")
 
@@ -968,37 +1365,40 @@ total_keywords = [
     "profit before tax",
     "profit for the year",
 ]
+# ✅ gp_cos_mode should be True only when you actually forecast COS using GP margin
+# Put this right AFTER your upgraded COS/GP handling block:
+gp_cos_mode = (has_gp and has_cos and (avg_gp_margin is not None))
+
+total_keywords = [
+    "gross profit", "ebitda",
+    "operating profit",
+    "profit before tax",
+    "profit for the year",
+]
+
 for idx in range(len(forecast_is)):
 
-    # 🔒 PROTECT COST OF SALES WHEN USING GP MARGIN
-    if use_gp_method and idx == cos_idx:
+    # ✅ Build protected list safely (remove None)
+    protected = [x for x in [rev_idx, gp_idx, cos_idx, ebitda_idx, op_idx, pbt_idx, tax_idx, np_idx] if isinstance(x, int)]
+
+    # ✅ If COS was forecasted already using GP margin, skip COS so you don't overwrite it
+    if gp_cos_mode and has_cos and idx == cos_idx:
         continue
 
-    protected = [rev_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx]
-
-    # 🔥 Protect Cost of Sales ONLY when GP logic is active
-    if use_gp_method and cos_idx is not None:
-        protected.append(cos_idx)
-
+    # ✅ Don't forecast totals / protected rows
     if idx in protected:
-        continue
-
-    # ✅ add here
-    if use_gp_method and cos_idx is not None and idx == cos_idx:
         continue
 
     item = str(forecast_is.at[idx, "Item"]).lower()
     if any(k in item for k in total_keywords):
         continue
 
+    # Forecast everything else as % of revenue
     row_hist = forecast_is.iloc[idx][year_cols_is].values.astype(float)
     ratio = ratio_to_revenue(row_hist, rev_hist_vals)
 
     for y in forecast_years_int:
-        forecast_is.iat[
-            idx,
-            forecast_is.columns.get_loc(str(y))
-        ] = rev_forecast[y] * ratio
+        forecast_is.iat[idx, forecast_is.columns.get_loc(str(y))] = rev_forecast[y] * ratio
 
 
 
@@ -1060,6 +1460,12 @@ for col in forecast_cols:
     if pbt_idx is not None and op_idx is not None:
         forecast_is.iat[pbt_idx, forecast_is.columns.get_loc(col)] = \
             forecast_is.loc[op_idx:pbt_idx-1, col].sum()
+
+    # ✅ ADD THIS HERE
+    if isinstance(tax_idx, int) and isinstance(pbt_idx, int):
+        pbt_val = float(forecast_is.iat[pbt_idx, forecast_is.columns.get_loc(col)])
+        tax_val = pbt_val * avg_tax_ratio
+        forecast_is.iat[tax_idx, forecast_is.columns.get_loc(col)] = tax_val
 
     if np_idx is not None and pbt_idx is not None:
         forecast_is.iat[np_idx, forecast_is.columns.get_loc(col)] = \
@@ -1265,35 +1671,44 @@ if ca_idx_list and cl_idx_list:
         }),
         width='stretch'    )
 
-    # 3️⃣ AVERAGE WC% WITH OUTLIER HANDLING
+    # 3️⃣ WC% OF SALES — USER CHOICE (Average vs Most Recent) [PERSISTENT]
     wc_percent_array = wc_percent_hist.copy()
     mask_valid = (wc_percent_array > -5) & (wc_percent_array < 5)
     wc_percent_clean = wc_percent_array[mask_valid]
 
-    if len(wc_percent_clean) == 0:
-        wc_percent_avg = 0.0
-        st.warning("No valid WC% of sales ratios found – using 0% by default.")
+    # Compute BOTH candidates
+    wc_percent_mean = float(np.mean(wc_percent_clean)) if len(wc_percent_clean) else 0.0
+
+    last_year = common_hist[-1]
+    last_wc = float(wc_hist[last_year])
+    last_rev = float(revenue_row[last_year].values[0])
+    wc_percent_last = (last_wc / last_rev) if last_rev != 0 else 0.0
+
+    st.markdown("### ✅ Working Capital Assumption (WC % of Sales)")
+
+    # ✅ INITIALIZE SESSION STATE ONCE
+    if "dcf_wc_pct_method" not in st.session_state:
+        st.session_state["dcf_wc_pct_method"] = "last"  # default = most recent
+
+    wc_choice = st.radio(
+        "Which WC% of Sales should be used for forecasting?",
+        [
+            f"Use average of historical WC% ({wc_percent_mean:.2%})",
+            f"Use most recent WC% ({last_year}) = {wc_percent_last:.2%}"
+        ],
+        index=0 if st.session_state["dcf_wc_pct_method"] == "average" else 1,
+        key="dcf_wc_pct_method_radio"
+    )
+
+    # ✅ UPDATE SESSION STATE EXPLICITLY
+    if "average" in wc_choice.lower():
+        st.session_state["dcf_wc_pct_method"] = "average"
+        wc_percent_avg = wc_percent_mean
+        st.success(f"✅ Using historical average WC% of Sales = {wc_percent_avg:.2%}")
     else:
-        ratio_spread = float(wc_percent_clean.max() - wc_percent_clean.min())
-        spread_threshold = 0.05  # 5%
-
-        if ratio_spread > spread_threshold and len(wc_percent_clean) >= 2:
-            last_year = common_hist[-1]
-            last_wc = float(wc_hist[last_year])
-            last_rev = float(revenue_row[last_year].values[0])
-            wc_percent_avg = last_wc / last_rev
-
-            st.warning(
-                f"WC% of sales ratios differ a lot (spread ≈ {ratio_spread:.2%}). "
-                f"Using the **most recent WC% ({wc_percent_avg:.2%})** for forecasting "
-                f"instead of the average."
-            )
-        else:
-            wc_percent_avg = float(np.mean(wc_percent_clean))
-            st.success(
-                f"WC% of sales ratios are in a similar range (spread ≈ {ratio_spread:.2%}). "
-                f"Using the **average WC% = {wc_percent_avg:.2%}** for forecasting."
-            )
+        st.session_state["dcf_wc_pct_method"] = "last"
+        wc_percent_avg = wc_percent_last
+        st.info(f"📌 Using most recent WC% of Sales ({last_year}) = {wc_percent_avg:.2%}")
 
     # 4️⃣ FORECAST WC
     st.markdown("### **Forecast Working Capital**")
@@ -1397,9 +1812,11 @@ else:
 
 rd = cost_of_debt       # <-- ⭐⭐ VERY IMPORTANT ⭐⭐
 
+
 # ---------------------------------------------------------
 # DCF PARAMETERS — FINAL FIXED VERSION (NO RESETTING)
 # ---------------------------------------------------------
+
 st.markdown("---")
 st.subheader("💰 DCF Parameters")
 
