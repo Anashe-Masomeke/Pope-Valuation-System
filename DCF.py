@@ -5,9 +5,14 @@ from pathlib import Path
 from datetime import date
 import io
 
-BASE_DIR = Path(__file__).resolve().parent
-DCF_PARAMS_PATH = BASE_DIR / "data" / "dcf_parameters.xlsx"
-UNLEVERED_BETAS_PATH = BASE_DIR / "data" / "unlevered_betas.xlsx"
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]   # <-- go up from /pages to project root
+DATA_DIR = PROJECT_ROOT / "data"
+
+DCF_PARAMS_PATH = DATA_DIR / "dcf_parameters.xlsx"
+UNLEVERED_BETAS_PATH = DATA_DIR / "unlevered_betas.xlsx"
+
 
 
 # ---------------------------------------------------------
@@ -2203,12 +2208,15 @@ with col2:
     st.session_state["dcf_beta_manual_mode"] = beta_mode.startswith("Manual")
 
     # If AUTO mode and we have an auto beta, push it into the input (safe)
+    # ✅ If AUTO mode, allow applying auto βu to the input (NO rerun loop)
     if not st.session_state["dcf_beta_manual_mode"]:
-        if st.session_state.get("dcf_beta_auto_last") is not None:
-            if not st.session_state["dcf_beta_manual_mode"]:
-                if st.session_state.get("dcf_beta_auto_last") is not None:
-                    st.session_state["dcf_unlevered_beta"] = float(st.session_state["dcf_beta_auto_last"])
-                    st.rerun()
+        auto_beta = st.session_state.get("dcf_beta_auto_last")
+
+        if auto_beta is not None and np.isfinite(auto_beta):
+            st.caption(f"Auto βu available: {auto_beta:.2f}")
+
+            if st.button("✅ Apply Auto βu to input", key="apply_auto_beta_btn"):
+                st.session_state["dcf_unlevered_beta_input"] = float(auto_beta)
 
     # ---------------------------------------------------------
     # βu input (manual typing stays stored)
