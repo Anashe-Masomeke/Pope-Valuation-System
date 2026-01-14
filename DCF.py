@@ -1899,100 +1899,220 @@ else:
 
 rd = cost_of_debt       # <-- ⭐⭐ VERY IMPORTANT ⭐⭐
 
-
 # ---------------------------------------------------------
-# DCF PARAMETERS — AUTO FROM data/dcf_parameters.xlsx + OVERRIDE
+# DCF PARAMETERS — AUTO + OVERRIDE (WITH 2 OPTIONAL UPLOADS)
+# ✅ FIXED: when you upload Country ERP + Default Spread,
+#          RF + MRP textboxes IMMEDIATELY take those values
+#          (RF = AvgCoD - Spread, MRP = ERP)
+#          and the formulas use the textbox values.
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("💰 DCF Parameters (Auto + Override)")
 
+# =============== helpers ===============
 def _to_decimal(x):
     """Accepts 0.15 or 15; returns decimal 0.15"""
     try:
         x = float(x)
-    except:
+    except Exception:
         return None
     return x / 100.0 if x > 1.5 else x
 
-# --- Load ERP + Default Spread from local Excel (data folder) ---
-auto_erp_dec = None
-auto_spread_dec = None
+def _load_country_params_df(file_or_path) -> pd.DataFrame:
+    """
+    Excel required columns (flexible match):
+      Country | ERP | Default Spread
+    Returns normalized df with: Country, ERP, DefaultSpread
+    """
+    df = pd.read_excel(file_or_path)
+    df.columns = [str(c).strip() for c in df.columns]
 
-if not DCF_PARAMS_PATH.exists():
-    st.warning(f"⚠️ Missing file: {DCF_PARAMS_PATH}. Put dcf_parameters.xlsx in /data.")
-else:
-    try:
-        df_params = pd.read_excel(DCF_PARAMS_PATH)
-        df_params.columns = [str(c).strip() for c in df_params.columns]
+    col_country = [c for c in df.columns if c.lower() == "country"]
+    col_erp = [c for c in df.columns if c.lower() in ["erp", "equity risk premium", "equity_risk_premium"]]
+    col_spread = [c for c in df.columns if c.lower() in ["default spread", "default_spread", "spread"]]
 
-        # required columns (flexible matching)
-        col_country = [c for c in df_params.columns if c.lower() == "country"]
-        col_erp = [c for c in df_params.columns if c.lower() in ["erp", "equity risk premium", "equity_risk_premium"]]
-        col_spread = [c for c in df_params.columns if c.lower() in ["default spread", "default_spread", "spread"]]
+    if not (col_country and col_erp and col_spread):
+        raise ValueError("Excel must contain columns: Country, ERP, Default Spread")
 
-        if col_country and col_erp and col_spread:
-            col_country, col_erp, col_spread = col_country[0], col_erp[0], col_spread[0]
+    out = df[[col_country[0], col_erp[0], col_spread[0]]].copy()
+    out.columns = ["Country", "ERP", "DefaultSpread"]
+    out["Country"] = out["Country"].astype(str).str.strip()
+    return out
 
-            country_list = sorted(df_params[col_country].dropna().astype(str).unique().tolist())
-            default_country = "Zimbabwe" if "Zimbabwe" in country_list else (country_list[0] if country_list else None)
+@st.cache_data
+def _load_unlevered_betas_any(file_or_path) -> pd.DataFrame:
+    """
+    Excel required columns (flexible match):
+      Industry Name | Unlevered beta
+    Also supports: Column1 (industry) + Column6 (beta)
+    Returns normalized df with: Industry, UnleveredBeta
+    """
+    df = pd.read_excel(file_or_path)
+    df.columns = [str(c).strip() for c in df.columns]
 
-            if default_country is not None:
-                chosen_country = st.selectbox(
-                    "Select country (auto ERP + Default Spread):",
-                    country_list,
-                    index=country_list.index(default_country),
-                    key="dcf_country_select"
-                )
+    possible_industry_cols = [c for c in df.columns if c.lower() in ["industry name", "industry", "column1"]]
+    possible_beta_cols = [c for c in df.columns if c.lower() in ["unlevered beta", "unlevered_beta", "beta", "column6"]]
 
-                row = df_params[df_params[col_country].astype(str) == str(chosen_country)]
-                if not row.empty:
-                    auto_erp_dec = _to_decimal(row.iloc[0][col_erp])
-                    auto_spread_dec = _to_decimal(row.iloc[0][col_spread])
+    if not possible_industry_cols or not possible_beta_cols:
+        raise ValueError("Excel must have 'Industry Name' and 'Unlevered beta' (or Column1 + Column6).")
 
-        else:
-            st.error("❌ dcf_parameters.xlsx must have columns: Country, ERP, Default Spread")
+    ind_col = possible_industry_cols[0]
+    beta_col = possible_beta_cols[0]
 
-    except Exception as e:
-        st.error(f"❌ Failed to read dcf_parameters.xlsx: {e}")
-# ---------------------------------------------------------
-# Zimbabwe Avg Cost of Debt (USD) input  ✅ NEW
-# ---------------------------------------------------------
-if "dcf_zim_avg_cost_debt_pct" not in st.session_state:
-    st.session_state["dcf_zim_avg_cost_debt_pct"] = 18.0  # put your default here
+    out = df[[ind_col, beta_col]].copy()
+    out.columns = ["Industry", "UnleveredBeta"]
+    out["Industry"] = out["Industry"].astype(str).str.strip()
+    out["UnleveredBeta"] = pd.to_numeric(out["UnleveredBeta"], errors="coerce")
+    out = out.dropna(subset=["Industry", "UnleveredBeta"]).sort_values("Industry").reset_index(drop=True)
+    return out
 
-zim_avg_cod_pct = st.number_input(
-    "Average cost of debt Zimbabwe (US$) (%)",
-    value=float(st.session_state["dcf_zim_avg_cost_debt_pct"]),
-    step=0.1,
-    key="dcf_zim_avg_cost_debt_pct_input"
-)
-st.session_state["dcf_zim_avg_cost_debt_pct"] = zim_avg_cod_pct
+def init_widget_key(widget_key: str, master_key: str, default_val: float):
+    """
+    IMPORTANT: only set widget key if it doesn't exist yet
+    (prevents StreamlitAPIException).
+    """
+    if master_key not in st.session_state:
+        st.session_state[master_key] = float(default_val)
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = float(st.session_state[master_key])
 
-zim_avg_cod = zim_avg_cod_pct / 100.0  # decimal
+# =============== layout ===============
+left, right = st.columns([1.15, 1.0], vertical_alignment="top")
 
-# --- Derive auto RF and auto MRP ---
-auto_mrp_pct = auto_erp_dec * 100 if auto_erp_dec is not None else None
+# =========================================================
+# LEFT: Country ERP + Default Spread upload toggle
+# =========================================================
+with left:
+    st.markdown("#### 🌍 Country ERP & Default Spread (Auto RF + MRP)")
 
-# ✅ RF = Zimbabwe Avg Cost of Debt (USD) - Default Spread
-auto_rf_pct = (
-    (zim_avg_cod - auto_spread_dec) * 100
-    if (auto_spread_dec is not None)
-    else None
-)
+    # init upload states
+    st.session_state.setdefault("dcf_country_upload_enabled", False)
+    st.session_state.setdefault("dcf_country_params_bytes", None)
+    st.session_state.setdefault("dcf_country_params_name", None)
 
-
-if auto_mrp_pct is not None and auto_rf_pct is not None:
-    st.success(
-        f"✅ Auto from Excel: MRP={auto_mrp_pct:.2f}% | "
-        f"RF=(Avg CoD ZW USD − Spread)={auto_rf_pct:.2f}%"
+    # toggle
+    country_upload = st.checkbox(
+        "📤 Upload Country ERP + Default Spread Excel (optional)",
+        value=st.session_state["dcf_country_upload_enabled"],
+        key="dcf_country_upload_enabled_ui"
     )
+    st.session_state["dcf_country_upload_enabled"] = country_upload
 
-else:
-    st.info("ℹ️ Auto values not available yet (check Excel path/columns/values).")
+    if country_upload:
+        st.caption("Required Excel columns: **Country, ERP, Default Spread**")
+        up_country = st.file_uploader(
+            "Upload Country params Excel",
+            type=["xlsx"],
+            key="dcf_country_params_uploader"
+        )
+        if up_country is not None:
+            st.session_state["dcf_country_params_bytes"] = up_country.getvalue()
+            st.session_state["dcf_country_params_name"] = up_country.name
+    else:
+        st.session_state["dcf_country_params_bytes"] = None
+        st.session_state["dcf_country_params_name"] = None
 
-# ---------------------------------------------------------
-# Persisted defaults (only once)
-# ---------------------------------------------------------
+    # load params df (uploaded takes precedence)
+    df_params = None
+    params_source = None
+
+    try:
+        if country_upload and st.session_state["dcf_country_params_bytes"] is not None:
+            df_params = _load_country_params_df(io.BytesIO(st.session_state["dcf_country_params_bytes"]))
+            params_source = f"Uploaded: {st.session_state.get('dcf_country_params_name','(file)')}"
+        else:
+            if DCF_PARAMS_PATH.exists():
+                df_params = _load_country_params_df(DCF_PARAMS_PATH)
+                params_source = f"Default file: {DCF_PARAMS_PATH.name}"
+            else:
+                st.warning(f"⚠️ Missing default file: {DCF_PARAMS_PATH}. Upload a file above.")
+    except Exception as e:
+        st.error(f"❌ Country params file error: {e}")
+        df_params = None
+
+    if params_source:
+        st.caption(f"Source: **{params_source}**")
+
+    # choose country and get ERP + spread
+    auto_erp_dec = None
+    auto_spread_dec = None
+
+    if df_params is not None and not df_params.empty:
+        country_list = sorted(df_params["Country"].dropna().astype(str).unique().tolist())
+        default_country = "Zimbabwe" if "Zimbabwe" in country_list else (country_list[0] if country_list else None)
+
+        if default_country is not None:
+            chosen_country = st.selectbox(
+                "Select country (auto ERP + Default Spread):",
+                country_list,
+                index=country_list.index(default_country),
+                key="dcf_country_select"
+            )
+
+            row = df_params[df_params["Country"].astype(str) == str(chosen_country)]
+            if not row.empty:
+                auto_erp_dec = _to_decimal(row.iloc[0]["ERP"])               # ERP -> MRP
+                auto_spread_dec = _to_decimal(row.iloc[0]["DefaultSpread"])  # used in RF formula
+
+    # Zimbabwe Avg Cost of Debt (USD)
+    st.session_state.setdefault("dcf_zim_avg_cost_debt_pct", 18.0)
+    zim_avg_cod_pct = st.number_input(
+        "Average cost of debt Zimbabwe (US$) (%)",
+        value=float(st.session_state["dcf_zim_avg_cost_debt_pct"]),
+        step=0.1,
+        key="dcf_zim_avg_cost_debt_pct_input"
+    )
+    st.session_state["dcf_zim_avg_cost_debt_pct"] = zim_avg_cod_pct
+    zim_avg_cod = zim_avg_cod_pct / 100.0
+
+    # Derive Auto RF & Auto MRP (MRP=ERP)
+    auto_mrp_pct = (auto_erp_dec * 100) if auto_erp_dec is not None else None
+    auto_rf_pct = ((zim_avg_cod - auto_spread_dec) * 100) if (auto_spread_dec is not None) else None
+
+    if auto_mrp_pct is not None and auto_rf_pct is not None:
+        st.success(
+            f"✅ Auto from Excel: MRP={auto_mrp_pct:.2f}% | "
+            f"RF=(Avg CoD ZW USD − Spread)={auto_rf_pct:.2f}%"
+        )
+    else:
+        st.info("ℹ️ Auto values not available yet (check Excel columns/values).")
+
+
+# =========================================================
+# RIGHT: Industry Betas upload toggle
+# =========================================================
+with right:
+    st.markdown("#### 🧩 Industry Unlevered Betas (βu)")
+
+    st.session_state.setdefault("dcf_beta_upload_enabled", False)
+    st.session_state.setdefault("dcf_beta_file_bytes", None)
+    st.session_state.setdefault("dcf_beta_file_name", None)
+
+    beta_upload = st.checkbox(
+        "📤 Upload Industry Betas Excel (optional)",
+        value=st.session_state["dcf_beta_upload_enabled"],
+        key="dcf_beta_upload_enabled_ui"
+    )
+    st.session_state["dcf_beta_upload_enabled"] = beta_upload
+
+    if beta_upload:
+        st.caption("Required Excel columns: **Industry Name, Unlevered beta**")
+        up_beta = st.file_uploader(
+            "Upload Industry betas Excel",
+            type=["xlsx"],
+            key="dcf_beta_uploader"
+        )
+        if up_beta is not None:
+            st.session_state["dcf_beta_file_bytes"] = up_beta.getvalue()
+            st.session_state["dcf_beta_file_name"] = up_beta.name
+    else:
+        st.session_state["dcf_beta_file_bytes"] = None
+        st.session_state["dcf_beta_file_name"] = None
+
+
+# =========================================================
+# INIT defaults once (master keys + states)
+# =========================================================
 if "dcf_init" not in st.session_state:
     st.session_state["dcf_rf_pct"] = float(auto_rf_pct) if auto_rf_pct is not None else 11.61
     st.session_state["dcf_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
@@ -2001,12 +2121,23 @@ if "dcf_init" not in st.session_state:
     st.session_state["dcf_terminal_g_pct"] = 5.0
 
     st.session_state["dcf_use_auto_params"] = True
+
+    # beta states
+    st.session_state["dcf_industries_selected"] = []
+    st.session_state["dcf_beta_blend_method"] = "Simple average"
+    st.session_state["dcf_industry_weights"] = {}
+    st.session_state["dcf_beta_manual_mode"] = False
+    st.session_state["dcf_beta_manual_value"] = None
+    st.session_state["dcf_beta_auto_last"] = None
+
     st.session_state["dcf_init"] = True
 
-
-# ---------------------------------------------------------
-# Auto vs Override switch
-# ---------------------------------------------------------
+# =========================================================
+# Auto vs Override toggle (RF & MRP)  ✅ HARD SYNC FIX
+#    When auto is ON and we have auto values:
+#      - force RF textbox to auto_rf_pct
+#      - force MRP textbox to auto_mrp_pct
+# =========================================================
 use_auto = st.checkbox(
     "Use Auto (from Excel) for RF & MRP",
     value=bool(st.session_state.get("dcf_use_auto_params", True)),
@@ -2014,126 +2145,88 @@ use_auto = st.checkbox(
 )
 st.session_state["dcf_use_auto_params"] = use_auto
 
-# If auto is ON and available, push those into session_state (so widgets show them)
-# ---------------------------------------------------------
-# ✅ APPLY AUTO ONLY WHEN USER TURNS IT ON (or auto inputs change)
-# ---------------------------------------------------------
-if "dcf_auto_signature" not in st.session_state:
-    st.session_state["dcf_auto_signature"] = None
+# Build signature of the auto sources
+auto_signature = (
+    float(auto_rf_pct) if auto_rf_pct is not None else None,
+    float(auto_mrp_pct) if auto_mrp_pct is not None else None,
+    st.session_state.get("dcf_country_select", None),
+    float(st.session_state.get("dcf_zim_avg_cost_debt_pct", 0.0)),
+)
 
-if "dcf_use_auto_prev" not in st.session_state:
-    st.session_state["dcf_use_auto_prev"] = st.session_state.get("dcf_use_auto_params", True)
+# Track previous signature so we only "snap" inputs when auto data changes
+st.session_state.setdefault("dcf_auto_signature", None)
 
-auto_signature = (auto_rf_pct, auto_mrp_pct, st.session_state.get("dcf_country_select", None))
+should_snap_to_auto = (
+    use_auto
+    and (auto_rf_pct is not None)
+    and (auto_mrp_pct is not None)
+    and (auto_signature != st.session_state["dcf_auto_signature"])
+)
 
-auto_became_on = (use_auto is True) and (st.session_state["dcf_use_auto_prev"] is False)
-auto_changed = (auto_signature != st.session_state["dcf_auto_signature"])
-
-# Only apply auto when:
-# 1) user just switched auto ON, OR
-# 2) auto inputs changed (e.g., changed country) AND auto is ON
-if use_auto and (auto_rf_pct is not None) and (auto_mrp_pct is not None) and (auto_became_on or auto_changed):
+# If auto is ON and signature changed -> update BOTH master keys AND widget keys
+# so the textboxes visually change immediately.
+if should_snap_to_auto:
+    # master
     st.session_state["dcf_rf_pct"] = float(auto_rf_pct)
     st.session_state["dcf_mrp_pct"] = float(auto_mrp_pct)
 
-    # also update widgets so UI reflects the change ONCE
-    if use_auto and (auto_rf_pct is not None) and (auto_mrp_pct is not None) and (auto_became_on or auto_changed):
-        # update master values
-        st.session_state["dcf_rf_pct"] = float(auto_rf_pct)
-        st.session_state["dcf_mrp_pct"] = float(auto_mrp_pct)
-
-        # ✅ do NOT touch widget keys here (avoids StreamlitAPIException)
-        st.session_state["dcf_auto_signature"] = auto_signature
-
-        # ✅ force rerun so widgets pick up master values (only if you want UI to refresh)
-        st.rerun()
+    # widget keys (these control the textbox displayed values)
+    st.session_state["dcf_rf_pct_input"] = float(auto_rf_pct)
+    st.session_state["dcf_mrp_pct_input"] = float(auto_mrp_pct)
 
     st.session_state["dcf_auto_signature"] = auto_signature
+elif not use_auto:
+    # If auto OFF, don't overwrite manual values; just reset signature so next ON snaps again
+    st.session_state["dcf_auto_signature"] = None
 
-# update previous toggle state
-st.session_state["dcf_use_auto_prev"] = use_auto
-
-# ---------------------------------------------------------
-# ✅ BACKFILL widget keys from stored values ONLY (no defaults)
-# ---------------------------------------------------------
-
-def init_widget_key(widget_key: str, master_key: str, default_val: float):
-    if master_key not in st.session_state:
-        st.session_state[master_key] = float(default_val)
-
-    # IMPORTANT: only set widget key if it doesn't exist yet
-    if widget_key not in st.session_state:
-        st.session_state[widget_key] = float(st.session_state[master_key])
-
+# =========================================================
+# Backfill widget keys (safe)
+# =========================================================
 init_widget_key("dcf_rf_pct_input", "dcf_rf_pct", 11.61)
 init_widget_key("dcf_mrp_pct_input", "dcf_mrp_pct", 13.82)
 init_widget_key("dcf_tax_pct_input", "dcf_tax_pct", 25.0)
 init_widget_key("dcf_unlevered_beta_input", "dcf_unlevered_beta", 1.0)
 init_widget_key("dcf_terminal_g_pct_input", "dcf_terminal_g_pct", 5.0)
 
-
-# ---------------------------------------------------------
-# Widgets (manual override always possible)
-# ---------------------------------------------------------
+# =========================================================
+# Main input widgets
+# =========================================================
 col1, col2 = st.columns(2)
+
 with col1:
-    rf_input = st.number_input(
-        "Risk-free rate (%)",
-        step=0.1,
-        key="dcf_rf_pct_input"
-    )
-    mrp_input = st.number_input(
-        "Market risk premium (%)",
-        step=0.1,
-        key="dcf_mrp_pct_input"
-    )
-    tax_input = st.number_input(
-        "Tax rate (%)",
-        step=0.5,
-        key="dcf_tax_pct_input"
-    )
+    rf_input = st.number_input("Risk-free rate (%)", step=0.1, key="dcf_rf_pct_input")
+    mrp_input = st.number_input("Market risk premium (%)", step=0.1, key="dcf_mrp_pct_input")
+    tax_input = st.number_input("Tax rate (%)", step=0.5, key="dcf_tax_pct_input")
+
 with col2:
-
-    # ---------------------------------------------------------
-    # ✅ Multi-industry selector → blended unlevered beta (AUTO)
-    # ---------------------------------------------------------
-    if "dcf_industries_selected" not in st.session_state:
-        st.session_state["dcf_industries_selected"] = []
-
-    if "dcf_beta_blend_method" not in st.session_state:
-        st.session_state["dcf_beta_blend_method"] = "Simple average"
-
-    if "dcf_industry_weights" not in st.session_state:
-        st.session_state["dcf_industry_weights"] = {}  # {"Industry": weight}
-
-    # ✅ Manual/Auto beta control states (prevents resets)
-    if "dcf_beta_manual_mode" not in st.session_state:
-        st.session_state["dcf_beta_manual_mode"] = False
-
-    if "dcf_beta_manual_value" not in st.session_state:
-        st.session_state["dcf_beta_manual_value"] = None
-
-    if "dcf_beta_auto_last" not in st.session_state:
-        st.session_state["dcf_beta_auto_last"] = None
-
+    # Load betas df: uploaded takes precedence
     betas_df = None
-    if UNLEVERED_BETAS_PATH.exists():
-        try:
-            betas_df = load_unlevered_betas(UNLEVERED_BETAS_PATH)
-        except Exception as e:
-            st.warning(f"⚠️ Could not load industry betas: {e}")
-            betas_df = None
-    else:
-        st.warning(f"⚠️ Missing file: {UNLEVERED_BETAS_PATH} (put unlevered_betas.xlsx in /data)")
+    beta_source = None
+    try:
+        if st.session_state.get("dcf_beta_upload_enabled") and st.session_state.get("dcf_beta_file_bytes") is not None:
+            betas_df = _load_unlevered_betas_any(io.BytesIO(st.session_state["dcf_beta_file_bytes"]))
+            beta_source = f"Uploaded: {st.session_state.get('dcf_beta_file_name','(file)')}"
+        else:
+            if UNLEVERED_BETAS_PATH.exists():
+                betas_df = _load_unlevered_betas_any(UNLEVERED_BETAS_PATH)
+                beta_source = f"Default file: {UNLEVERED_BETAS_PATH.name}"
+            else:
+                st.warning(f"⚠️ Missing default file: {UNLEVERED_BETAS_PATH}. Upload a file above.")
+    except Exception as e:
+        st.warning(f"⚠️ Could not load industry betas: {e}")
+        betas_df = None
 
-    # --- Auto beta computation from selected industries
+    if beta_source:
+        st.caption(f"Source: **{beta_source}**")
+
+    # Multi-industry selector for blended beta
     if betas_df is not None and not betas_df.empty:
         industry_list = betas_df["Industry"].tolist()
 
         selected = st.multiselect(
             "Select Industry / Industries (for blended βu):",
             industry_list,
-            default=[i for i in st.session_state["dcf_industries_selected"] if i in industry_list],
+            default=[i for i in st.session_state.get("dcf_industries_selected", []) if i in industry_list],
             key="dcf_industries_multiselect"
         )
         st.session_state["dcf_industries_selected"] = selected
@@ -2141,26 +2234,23 @@ with col2:
         blend_method = st.radio(
             "How should industries be combined?",
             ["Simple average", "Weighted average"],
-            index=0 if st.session_state["dcf_beta_blend_method"] == "Simple average" else 1,
+            index=0 if st.session_state.get("dcf_beta_blend_method", "Simple average") == "Simple average" else 1,
             key="dcf_beta_blend_method_radio",
             horizontal=True
         )
         st.session_state["dcf_beta_blend_method"] = blend_method
 
         beta_u_auto = None
-
         if selected:
             sub = betas_df[betas_df["Industry"].isin(selected)].copy()
 
             if blend_method == "Simple average":
                 beta_u_auto = float(sub["UnleveredBeta"].mean())
-
             else:
                 st.markdown("#### Enter weights (they will be normalized to 100%)")
-
                 weights = []
                 for ind in selected:
-                    default_w = float(st.session_state["dcf_industry_weights"].get(ind, 1.0))
+                    default_w = float(st.session_state.get("dcf_industry_weights", {}).get(ind, 1.0))
                     w = st.number_input(
                         f"Weight for {ind}",
                         min_value=0.0,
@@ -2168,11 +2258,11 @@ with col2:
                         step=1.0,
                         key=f"w_{ind}"
                     )
+                    st.session_state.setdefault("dcf_industry_weights", {})
                     st.session_state["dcf_industry_weights"][ind] = w
                     weights.append(w)
 
                 total_w = float(sum(weights))
-
                 if total_w <= 0:
                     st.error("❌ Total weight must be > 0.")
                 else:
@@ -2188,16 +2278,14 @@ with col2:
                     })
                     st.dataframe(dfw, width="stretch", hide_index=True)
 
-            # ✅ Store the auto beta (DO NOT overwrite the manual input automatically)
             if beta_u_auto is not None and np.isfinite(beta_u_auto):
                 st.session_state["dcf_beta_auto_last"] = float(beta_u_auto)
                 st.caption(f"Blended industry βu (auto): **{beta_u_auto:.2f}**")
         else:
             st.info("Select at least 1 industry to auto-fill βu.")
 
-    # ---------------------------------------------------------
-    # ✅ Auto vs Manual control (prevents resetting)
-    # ---------------------------------------------------------
+    # Auto vs manual beta mode
+    st.session_state.setdefault("dcf_beta_manual_mode", False)
     beta_mode = st.radio(
         "Unlevered beta mode:",
         ["Use Auto (from industries)", "Manual override (type my own βu)"],
@@ -2207,46 +2295,29 @@ with col2:
     )
     st.session_state["dcf_beta_manual_mode"] = beta_mode.startswith("Manual")
 
-    # If AUTO mode and we have an auto beta, push it into the input (safe)
-    # ✅ If AUTO mode, allow applying auto βu to the input (NO rerun loop)
+    # Apply auto beta button
     if not st.session_state["dcf_beta_manual_mode"]:
         auto_beta = st.session_state.get("dcf_beta_auto_last")
-
         if auto_beta is not None and np.isfinite(auto_beta):
             st.caption(f"Auto βu available: {auto_beta:.2f}")
-
             if st.button("✅ Apply Auto βu to input", key="apply_auto_beta_btn"):
                 st.session_state["dcf_unlevered_beta_input"] = float(auto_beta)
 
-    # ---------------------------------------------------------
-    # βu input (manual typing stays stored)
-    # ---------------------------------------------------------
-    beta_u_input = st.number_input(
-        "Unlevered beta (asset beta)",
-        step=0.05,
-        key="dcf_unlevered_beta_input"
-    )
-
-    # If manual mode, store the typed value permanently
+    beta_u_input = st.number_input("Unlevered beta (asset beta)", step=0.05, key="dcf_unlevered_beta_input")
     if st.session_state.get("dcf_beta_manual_mode", False):
         st.session_state["dcf_beta_manual_value"] = float(beta_u_input)
 
-    # ---------------------------------------------------------
-    # Terminal growth
-    # ---------------------------------------------------------
-    g_input = st.number_input(
-        "Terminal growth rate (%)",
-        step=0.1,
-        key="dcf_terminal_g_pct_input"
-    )
+    g_input = st.number_input("Terminal growth rate (%)", step=0.1, key="dcf_terminal_g_pct_input")
 
 
-# Save user inputs
-st.session_state["dcf_rf_pct"] = rf_input
-st.session_state["dcf_mrp_pct"] = mrp_input
-st.session_state["dcf_tax_pct"] = tax_input
-st.session_state["dcf_unlevered_beta"] = beta_u_input
-st.session_state["dcf_terminal_g_pct"] = g_input
+# =========================================================
+# Save user inputs to master keys (USED BY FORMULAS)
+# =========================================================
+st.session_state["dcf_rf_pct"] = float(rf_input)
+st.session_state["dcf_mrp_pct"] = float(mrp_input)
+st.session_state["dcf_tax_pct"] = float(tax_input)
+st.session_state["dcf_unlevered_beta"] = float(beta_u_input)
+st.session_state["dcf_terminal_g_pct"] = float(g_input)
 
 # Decimals
 rf = st.session_state["dcf_rf_pct"] / 100
@@ -2267,11 +2338,15 @@ re = rf + beta_levered * mrp
 wacc = w_e * re + w_d * rd * (1 - tax)
 
 # Save computed
-st.session_state["levered_beta"] = beta_levered
-st.session_state["wacc"] = wacc
+st.session_state["levered_beta"] = float(beta_levered)
+st.session_state["wacc"] = float(wacc)
 
+# =========================================================
+# OUTPUT HEADER (STOP HERE)
+# =========================================================
 st.markdown('<div class="dcf-card">', unsafe_allow_html=True)
 st.markdown("### 📌 DCF Output")
+
 
 k1, k2, k3, k4 = st.columns(4)
 
