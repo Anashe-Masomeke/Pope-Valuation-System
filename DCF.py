@@ -273,19 +273,23 @@ def indices_from_labels(labels):
             pass
     return idx
 
-@st.cache_data
-def load_unlevered_betas(path: Path) -> pd.DataFrame:
-    df = pd.read_excel(path)
+@st.cache_data(show_spinner=False)
+def _load_unlevered_betas_any(file_or_path, file_mtime: float = 0.0) -> pd.DataFrame:
+    """
+    Excel required columns (flexible match):
+      Industry Name | Unlevered beta
+    Also supports: Column1 (industry) + Column6 (beta)
 
-    # normalize column names
+    file_mtime is used ONLY to invalidate Streamlit cache when the Excel file changes.
+    """
+    df = pd.read_excel(file_or_path)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # handle your current excel naming: Column1, Column6
     possible_industry_cols = [c for c in df.columns if c.lower() in ["industry name", "industry", "column1"]]
-    possible_beta_cols = [c for c in df.columns if c.lower() in ["unlevered beta", "beta", "column6"]]
+    possible_beta_cols = [c for c in df.columns if c.lower() in ["unlevered beta", "unlevered_beta", "beta", "column6"]]
 
     if not possible_industry_cols or not possible_beta_cols:
-        raise ValueError("unlevered_betas.xlsx must have Industry Name + Unlevered beta (or Column1 + Column6).")
+        raise ValueError("Excel must have 'Industry Name' and 'Unlevered beta' (or Column1 + Column6).")
 
     ind_col = possible_industry_cols[0]
     beta_col = possible_beta_cols[0]
@@ -296,6 +300,7 @@ def load_unlevered_betas(path: Path) -> pd.DataFrame:
     out["UnleveredBeta"] = pd.to_numeric(out["UnleveredBeta"], errors="coerce")
     out = out.dropna(subset=["Industry", "UnleveredBeta"]).sort_values("Industry").reset_index(drop=True)
     return out
+
 
 # ---------------------------------------------------------
 # STREAMLIT APP
@@ -1939,32 +1944,6 @@ def _load_country_params_df(file_or_path) -> pd.DataFrame:
     out["Country"] = out["Country"].astype(str).str.strip()
     return out
 
-@st.cache_data
-def _load_unlevered_betas_any(file_or_path) -> pd.DataFrame:
-    """
-    Excel required columns (flexible match):
-      Industry Name | Unlevered beta
-    Also supports: Column1 (industry) + Column6 (beta)
-    Returns normalized df with: Industry, UnleveredBeta
-    """
-    df = pd.read_excel(file_or_path)
-    df.columns = [str(c).strip() for c in df.columns]
-
-    possible_industry_cols = [c for c in df.columns if c.lower() in ["industry name", "industry", "column1"]]
-    possible_beta_cols = [c for c in df.columns if c.lower() in ["unlevered beta", "unlevered_beta", "beta", "column6"]]
-
-    if not possible_industry_cols or not possible_beta_cols:
-        raise ValueError("Excel must have 'Industry Name' and 'Unlevered beta' (or Column1 + Column6).")
-
-    ind_col = possible_industry_cols[0]
-    beta_col = possible_beta_cols[0]
-
-    out = df[[ind_col, beta_col]].copy()
-    out.columns = ["Industry", "UnleveredBeta"]
-    out["Industry"] = out["Industry"].astype(str).str.strip()
-    out["UnleveredBeta"] = pd.to_numeric(out["UnleveredBeta"], errors="coerce")
-    out = out.dropna(subset=["Industry", "UnleveredBeta"]).sort_values("Industry").reset_index(drop=True)
-    return out
 
 def init_widget_key(widget_key: str, master_key: str, default_val: float):
     """
@@ -2208,8 +2187,10 @@ with col2:
             beta_source = f"Uploaded: {st.session_state.get('dcf_beta_file_name','(file)')}"
         else:
             if UNLEVERED_BETAS_PATH.exists():
-                betas_df = _load_unlevered_betas_any(UNLEVERED_BETAS_PATH)
+                mtime = UNLEVERED_BETAS_PATH.stat().st_mtime  # ✅ changes when you save Excel
+                betas_df = _load_unlevered_betas_any(UNLEVERED_BETAS_PATH, file_mtime=mtime)
                 beta_source = f"Default file: {UNLEVERED_BETAS_PATH.name}"
+
             else:
                 st.warning(f"⚠️ Missing default file: {UNLEVERED_BETAS_PATH}. Upload a file above.")
     except Exception as e:
@@ -2309,7 +2290,6 @@ with col2:
 
     g_input = st.number_input("Terminal growth rate (%)", step=0.1, key="dcf_terminal_g_pct_input")
 
-
 # =========================================================
 # Save user inputs to master keys (USED BY FORMULAS)
 # =========================================================
@@ -2385,12 +2365,10 @@ with k4:
 st.markdown(f'<div class="small-note">Terminal growth (g): {g*100:.2f}% • D/E: {de_ratio:.2f}x</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-
 # ---------------------------------------------------------
 # DATE-BASED DISCOUNTING (FULLY PERSISTENT — NO RESETTING)
 # ---------------------------------------------------------
 st.markdown("### 📅 Valuation Timing & Mid-point")
-
 # 1️⃣ INITIALIZE DEFAULTS (only ONCE)
 if "dcf_timing_init" not in st.session_state:
 
@@ -2399,8 +2377,6 @@ if "dcf_timing_init" not in st.session_state:
     st.session_state["dcf_use_midyear"] = False
 
     st.session_state["dcf_timing_init"] = True
-
-
 # 2️⃣ WIDGETS (using separate keys so they do NOT overwrite session_state)
 valuation_date_input = st.date_input(
     "Valuation date (today / deal date)",
@@ -2458,7 +2434,6 @@ midpoint_table = pd.DataFrame(
 )
 
 st.dataframe(midpoint_table, width='stretch')
-
 
 # ---------------------------------------------------------
 # FCFF / UFCF
@@ -2554,7 +2529,7 @@ st.dataframe(
 # ---------------------------------------------------------
 st.subheader("📌 Valuation Summary")
 
-c_sum1, c_sum2 = st.columns(2)
+c_sum1, c_sum2, c_sum3 = st.columns(3)
 with c_sum1:
     st.metric("Enterprise Value (EV)", f"{enterprise_value:,.0f}")
     st.metric("Net Debt", f"{net_debt:,.0f}")
