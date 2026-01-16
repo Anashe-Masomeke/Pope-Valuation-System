@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pathlib import Path
-
+from io import BytesIO
 
 # =========================================================
-# Helper: nicely format numeric columns in a DF
+# Styling helpers
 # =========================================================
 def format_numeric_columns(df: pd.DataFrame):
     fmt = {}
@@ -16,89 +16,419 @@ def format_numeric_columns(df: pd.DataFrame):
 
 
 # =========================================================
-# Helper: filtered average for multiples (outlier-robust)
+# PEER UNIVERSE LOADER
 # =========================================================
-def filtered_average(values, band: float = 0.4):
-    """
-    Take an average after trimming values that are too far from the median.
-    """
-    arr = np.array(values, dtype=float)
-    arr = arr[~np.isnan(arr)]
-    arr = arr[arr != 0]
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"  # pages/ -> project root -> data
+DEFAULT_PEER_FILE = DATA_DIR / "peer_universe.xlsx"
 
-    if len(arr) == 0:
-        return np.nan
+def normalize_peer_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
 
-    median = np.median(arr)
-    lower = median * (1 - band)
-    upper = median * (1 + band)
-    keep = arr[(arr >= lower) & (arr <= upper)]
-    return float(np.mean(keep if len(keep) > 0 else arr))
+    # ✅ include PeerGroup + Active so your logic works reliably
+    needed = [
+        "Company", "Ticker", "Exchange", "Country",
+        "Sector", "Industry", "PeerGroup", "Active",
+        "EV/EBITDA", "P/B", "P/E"
+    ]
+    for c in needed:
+        if c not in df.columns:
+            df[c] = np.nan
 
+    # numeric
+    for c in ["EV/EBITDA", "P/B", "P/E"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # text cleanup
+    for c in ["Company", "Ticker", "Exchange", "Country", "Sector", "Industry", "PeerGroup"]:
+        df[c] = df[c].astype(str).replace("nan", "").str.strip()
+
+    # active cleanup (default TRUE if blank)
+    def to_bool(x):
+        s = str(x).strip().upper()
+        if s in ["", "NAN"]:
+            return True
+        return s in ["TRUE", "1", "YES", "Y"]
+
+    df["Active"] = df["Active"].apply(to_bool)
+
+    df = df[df["Company"].astype(str).str.len() > 0].copy()
+    df = df[df["Active"] == True].copy()
+
+    # stable Label
+    df["Label"] = df.apply(
+        lambda r: f"{r['Company']} ({r['Ticker']})" if str(r.get("Ticker", "")).strip() else f"{r['Company']}",
+        axis=1
+    )
+    return df
+
+# ✅ Cache that auto-refreshes when the Excel file changes (mtime is part of the cache key)
+@st.cache_data(show_spinner=False)
+def load_peer_universe_cached(path_str: str, mtime: float) -> pd.DataFrame:
+    df = pd.read_excel(path_str)
+    return normalize_peer_df(df)
+
+def load_peer_universe_from_bytes(file_bytes: bytes) -> pd.DataFrame:
+    df = pd.read_excel(BytesIO(file_bytes))
+    return normalize_peer_df(df)
 
 # =========================================================
-# PAGE CONFIG
+# ✅ Peer suggestions (STRICT PeerGroup only if present)
+#   - If target has PeerGroup: ONLY peers in same PeerGroup (no sector mixing)
+#   - If PeerGroup empty: fallback Industry -> Sector
+# =========================================================
+def suggest_peers(peer_df: pd.DataFrame, target_row: pd.Series, max_peers=10) -> pd.DataFrame:
+    target_company = str(target_row.get("Company", "")).strip()
+    target_pg = str(target_row.get("PeerGroup", "")).strip()
+    target_industry = str(target_row.get("Industry", "")).strip()
+    target_sector = str(target_row.get("Sector", "")).strip()
+
+    df = peer_df.copy()
+    df = df[df["Company"] != target_company].copy()
+
+    def eq_ci(series: pd.Series, value: str):
+        return series.astype(str).str.strip().str.lower() == str(value).strip().lower()
+
+    # STRICT: if PeerGroup exists, use it ONLY (prevents Delta pulling Innscor etc.)
+    if target_pg:
+        pool = df[eq_ci(df["PeerGroup"], target_pg)].copy()
+    else:
+        pool_ind = df[eq_ci(df["Industry"], target_industry)].copy() if target_industry else df.iloc[0:0].copy()
+        if len(pool_ind) >= 2:
+            pool = pool_ind
+        elif target_sector:
+            pool = df[eq_ci(df["Sector"], target_sector)].copy()
+        else:
+            pool = df.copy()
+
+    pool["has_mult"] = (
+        pool["EV/EBITDA"].notna().astype(int)
+        + pool["P/B"].notna().astype(int)
+        + pool["P/E"].notna().astype(int)
+    )
+
+    pool = (
+        pool.sort_values(["has_mult", "Company"], ascending=[False, True])
+            .head(int(max_peers))
+            .drop(columns="has_mult", errors="ignore")
+    )
+    return pool
+
+# =========================================================
+# CORE SYNC: peer multiselect -> Step 1 comparables
+# =========================================================
+def sync_selected_peers_to_comparables(peer_df: pd.DataFrame, selected_peer_labels):
+    """
+    Always keep Step 1 comps equal to selected peers.
+    - removing a peer removes it from comps immediately
+    - remaining peers keep their typed values AND include flags
+    - company names auto-match peers
+    """
+    S = st.session_state
+    peer_lookup = {r["Label"]: r for _, r in peer_df.iterrows()}
+
+    existing_by_label = {}
+    old_labels = S.get("comps_peer_labels", [])
+    old_comps = S.get("comps", {})
+
+    # Map old label -> comp dict (including include flags if present)
+    for i, lab in enumerate(old_labels):
+        if i in old_comps:
+            existing_by_label[lab] = old_comps[i].copy()
+
+    new_comps = {}
+    new_labels = []
+
+    for i, lab in enumerate(selected_peer_labels):
+        row = peer_lookup.get(lab, {})
+
+        default_name = row.get("Label") or lab
+        default_ev = float(row.get("EV/EBITDA", 0) or 0)
+        default_pb = float(row.get("P/B", 0) or 0)
+        default_pe = float(row.get("P/E", 0) or 0)
+
+        # include flags defaults
+        default_inc_ev = True
+        default_inc_pb = True
+        default_inc_pe = True
+
+        if lab in existing_by_label:
+            comp = existing_by_label[lab]
+
+            # keep include flags if they exist, otherwise default True
+            comp["inc_ev"] = bool(comp.get("inc_ev", default_inc_ev))
+            comp["inc_pb"] = bool(comp.get("inc_pb", default_inc_pb))
+            comp["inc_pe"] = bool(comp.get("inc_pe", default_inc_pe))
+
+            # keep typed values if any
+            comp["name"] = default_name
+            comp["ev"] = float(comp.get("ev", default_ev) or 0)
+            comp["pb"] = float(comp.get("pb", default_pb) or 0)
+            comp["pe"] = float(comp.get("pe", default_pe) or 0)
+        else:
+            comp = {
+                "name": default_name,
+                "ev": default_ev,
+                "pb": default_pb,
+                "pe": default_pe,
+                "inc_ev": default_inc_ev,
+                "inc_pb": default_inc_pb,
+                "inc_pe": default_inc_pe,
+            }
+
+        new_comps[i] = comp
+        new_labels.append(lab)
+
+        # push into widget keys BEFORE widgets exist
+        S[f"comp_name_{i}"] = comp["name"]
+        S[f"comp_ev_{i}"] = comp["ev"]
+        S[f"comp_pb_{i}"] = comp["pb"]
+        S[f"comp_pe_{i}"] = comp["pe"]
+
+        S[f"inc_ev_{i}"] = bool(comp["inc_ev"])
+        S[f"inc_pb_{i}"] = bool(comp["inc_pb"])
+        S[f"inc_pe_{i}"] = bool(comp["inc_pe"])
+
+    old_n = int(S.get("num_comps", 0))
+    new_n = len(new_labels)
+
+    # delete old widget keys beyond new_n (including include keys)
+    for i in range(new_n, old_n + 20):
+        for k in [
+            f"comp_name_{i}", f"comp_ev_{i}", f"comp_pb_{i}", f"comp_pe_{i}",
+            f"inc_ev_{i}", f"inc_pb_{i}", f"inc_pe_{i}"
+        ]:
+            if k in S:
+                del S[k]
+
+    S["comps"] = new_comps
+    S["comps_peer_labels"] = new_labels
+    S["num_comps"] = new_n
+    S["num_comps_input"] = new_n
+    S["comps_num"] = new_n
+
+# =========================================================
+# Streamlit Page
 # =========================================================
 st.set_page_config(page_title="Comparables Valuation (Excel Style)", layout="wide")
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
+st.caption("All values & inputs are saved in session_state (won’t reset when switching tabs).")
 
-st.markdown(
-    """
-All values & inputs are saved in `session_state`.
-"""
-)
-
-# Short alias
 S = st.session_state
 
+# =========================================================
+# ✅ Namespaced keys (prevents other pages overwriting your values)
+# =========================================================
+K_TARGET = "cmp_target_company"
+K_SELECTED = "cmp_selected_peer_companies"
+K_MAX = "cmp_max_peers"
+K_AUTOFILL = "cmp_auto_fill_now"
+K_PEERMODE = "cmp_peer_mode"
+K_PREV_MAX = "cmp_prev_max_peers"
+K_UP_BYTES = "cmp_peer_upload_bytes"
+K_UP_NAME = "cmp_peer_upload_name"
+
+# =========================================================
+# STEP 0 — PEER UNIVERSE AUTO-FILL
+# =========================================================
+st.header("Step 0 — Auto-Fill Comparables (Peer Universe)")
+
+S.setdefault(K_PEERMODE, True)
+peer_mode = st.toggle(
+    "Use Peer Universe Excel to auto-fill comparables",
+    value=bool(S[K_PEERMODE]),
+    key="cmp_peer_mode_toggle",
+)
+S[K_PEERMODE] = peer_mode
+
+peer_df = None
+
+if peer_mode:
+    # 1) If user previously uploaded a file, persist it across tab switches
+    if S.get(K_UP_BYTES):
+        try:
+            peer_df = load_peer_universe_from_bytes(S[K_UP_BYTES])
+            st.info(f"Loaded from uploaded file: {S.get(K_UP_NAME, 'peer_universe.xlsx')}")
+        except Exception as e:
+            st.error(f"Could not load previously uploaded peer file: {e}")
+            peer_df = None
+
+    # 2) Otherwise load default /data/peer_universe.xlsx (auto-refresh on file change)
+    if peer_df is None:
+        if DEFAULT_PEER_FILE.exists():
+            mtime = DEFAULT_PEER_FILE.stat().st_mtime
+            peer_df = load_peer_universe_cached(str(DEFAULT_PEER_FILE), mtime)
+            st.info(f"Loaded from: {DEFAULT_PEER_FILE} (auto-refresh when file changes)")
+        else:
+            st.warning(f"Missing: {DEFAULT_PEER_FILE}  → put peer_universe.xlsx inside /data/")
+
+    # 3) Optional uploader (and we persist bytes so it stays after tab switching)
+    up = st.file_uploader(
+        "Upload peer_universe.xlsx (optional)",
+        type=["xlsx"],
+        key="cmp_peer_universe_uploader",
+    )
+    if up is not None:
+        try:
+            file_bytes = up.getvalue()
+            peer_df = load_peer_universe_from_bytes(file_bytes)
+            S[K_UP_BYTES] = file_bytes
+            S[K_UP_NAME] = up.name
+            st.success("Peer universe uploaded, loaded, and saved for this session.")
+        except Exception as e:
+            st.error(f"Upload failed: {e}")
+
+    if peer_df is not None and len(peer_df) > 0:
+        labels_all = peer_df["Label"].tolist()
+        valid_set = set(labels_all)
+
+        S.setdefault(K_MAX, 8)
+        S.setdefault(K_AUTOFILL, True)
+        S.setdefault(K_TARGET, labels_all[0])
+        S.setdefault(K_SELECTED, [])
+
+        # Clean invalid selections after tab switch / refresh
+        S[K_SELECTED] = [x for x in S[K_SELECTED] if x in valid_set]
+        if S[K_TARGET] not in valid_set:
+            S[K_TARGET] = labels_all[0]
+
+        c0a, c0b = st.columns([2, 1])
+        with c0a:
+            target_label = st.selectbox(
+                "Select Target Company (the one you are valuing)",
+                options=labels_all,
+                index=labels_all.index(S[K_TARGET]),
+                key="cmp_target_company_select",
+            )
+        with c0b:
+            max_peers = st.number_input(
+                "Max peers",
+                min_value=3,
+                max_value=20,
+                value=int(S[K_MAX]),
+                step=1,
+                key="cmp_max_peers_input",
+            )
+
+        auto_fill_now = st.checkbox(
+            "Auto-fill comparables instantly when I choose a target",
+            value=bool(S[K_AUTOFILL]),
+            key="cmp_auto_fill_now_checkbox",
+        )
+        S[K_AUTOFILL] = bool(auto_fill_now)
+        S[K_MAX] = int(max_peers)
+
+        # Detect changes
+        target_changed = (target_label != S.get(K_TARGET))
+        max_changed = (int(max_peers) != int(S.get(K_PREV_MAX, -999)))
+
+        if target_changed or max_changed:
+            S[K_TARGET] = target_label
+            S[K_PREV_MAX] = int(max_peers)
+
+            target_row = peer_df.loc[peer_df["Label"] == target_label].iloc[0]
+            suggested_df = suggest_peers(peer_df, target_row, max_peers=int(max_peers))
+            suggested_labels = suggested_df["Label"].tolist()
+
+            S[K_SELECTED] = suggested_labels
+
+            if S[K_AUTOFILL]:
+                sync_selected_peers_to_comparables(peer_df, suggested_labels)
+
+        # Multiselect persists and remains editable after tab switching
+        def on_peers_change():
+            S[K_SELECTED] = [x for x in S.get(K_SELECTED, []) if x in valid_set]
+            sync_selected_peers_to_comparables(peer_df, S.get(K_SELECTED, []))
+
+        st.multiselect(
+            "Peer companies (auto-selected — edit only if needed)",
+            options=labels_all,
+            key=K_SELECTED,
+            on_change=on_peers_change,
+        )
+
+        # ✅ ONLY CLEAR BUTTON (as you requested)
+        if st.button("🧹 Clear Comparables", width='stretch'):
+            old_n = int(S.get("num_comps", 3))
+
+            # wipe widget keys so UI becomes blank/0
+            for i in range(0, max(old_n, 20)):
+                S[f"comp_name_{i}"] = ""
+                S[f"comp_ev_{i}"] = 0.0
+                S[f"comp_pb_{i}"] = 0.0
+                S[f"comp_pe_{i}"] = 0.0
+                S[f"inc_ev_{i}"] = True
+                S[f"inc_pb_{i}"] = True
+                S[f"inc_pe_{i}"] = True
+
+            # reset internal comps structure (blank)
+            S["num_comps"] = 3
+            S["num_comps_input"] = 3
+            S["comps"] = {
+                0: {"name": "", "ev": 0.0, "pb": 0.0, "pe": 0.0, "inc_ev": True, "inc_pb": True, "inc_pe": True},
+                1: {"name": "", "ev": 0.0, "pb": 0.0, "pe": 0.0, "inc_ev": True, "inc_pb": True, "inc_pe": True},
+                2: {"name": "", "ev": 0.0, "pb": 0.0, "pe": 0.0, "inc_ev": True, "inc_pb": True, "inc_pe": True},
+            }
+
+            # clear helper lists used by summary
+            for k in ["comps_peer_labels", "comps_num", "comps_ev_list", "comps_pb_list", "comps_pe_list"]:
+                if k in S:
+                    del S[k]
+
+            st.success("Comparables cleared (company names + multiples).")
+            st.rerun()
+
+st.markdown("---")
 
 # =========================================================
 # STEP 1 — INPUT COMPARABLE COMPANIES & MULTIPLES
 # =========================================================
 st.header("Step 1 — Input Comparable Companies & Multiples")
 
-default_num_comps = int(S.get("num_comps", 3))
+S.setdefault("num_comps", 3)
+S.setdefault("comps", {})
+
 num_comps = st.number_input(
     "How many comparables?",
     min_value=1,
     max_value=20,
-    value=default_num_comps,
+    value=int(S.get("num_comps", 3)),
     key="num_comps_input",
 )
 S["num_comps"] = int(num_comps)
 
-# Ensure structure for comps
-if "comps" not in S:
-    S["comps"] = {}
-
 for i in range(int(num_comps)):
-    S["comps"].setdefault(
-        i,
-        {
-            "name": f"Comp {i + 1}",
-            "ev": 0.0,
-            "pb": 0.0,
-            "pe": 0.0,
-        },
-    )
+    S["comps"].setdefault(i, {
+        "name": f"Comp {i + 1}",
+        "ev": 0.0, "pb": 0.0, "pe": 0.0,
+        "inc_ev": True, "inc_pb": True, "inc_pe": True
+    })
+
 
 rows_comps = []
+
 for i in range(int(num_comps)):
     st.subheader(f"Comparable {i + 1}")
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
 
+    # 4 inputs + 1 include/exclude column
+    c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1.3])
+
+    # ---------- Name ----------
     with c1:
+        default_name = S.get(f"comp_name_{i}", S["comps"][i]["name"])
         name_val = st.text_input(
             f"Company {i + 1} name",
-            value=S["comps"][i]["name"],
+            value=str(default_name),
             key=f"comp_name_{i}",
         )
         S["comps"][i]["name"] = name_val
 
+    # ---------- Multiples ----------
     with c2:
+        default_ev = float(S.get(f"comp_ev_{i}", S["comps"][i]["ev"]))
         ev_val = st.number_input(
             f"{name_val} EV/EBITDA",
-            value=float(S["comps"][i]["ev"]),
+            value=float(default_ev),
             step=0.01,
             format="%.2f",
             key=f"comp_ev_{i}",
@@ -106,9 +436,10 @@ for i in range(int(num_comps)):
         S["comps"][i]["ev"] = ev_val
 
     with c3:
+        default_pb = float(S.get(f"comp_pb_{i}", S["comps"][i]["pb"]))
         pb_val = st.number_input(
             f"{name_val} P/B",
-            value=float(S["comps"][i]["pb"]),
+            value=float(default_pb),
             step=0.01,
             format="%.2f",
             key=f"comp_pb_{i}",
@@ -116,46 +447,96 @@ for i in range(int(num_comps)):
         S["comps"][i]["pb"] = pb_val
 
     with c4:
+        default_pe = float(S.get(f"comp_pe_{i}", S["comps"][i]["pe"]))
         pe_val = st.number_input(
             f"{name_val} P/E",
-            value=float(S["comps"][i]["pe"]),
+            value=float(default_pe),
             step=0.01,
             format="%.2f",
             key=f"comp_pe_{i}",
         )
         S["comps"][i]["pe"] = pe_val
 
-    rows_comps.append([name_val, ev_val, pb_val, pe_val])
+    # ---------- Analyst relevance toggles (persisted) ----------
+    # Defaults to True (include) unless user switches off
+    # ---------- Analyst relevance toggles (persisted) ----------
+    # ---------- Analyst relevance toggles (persisted + stored in comps) ----------
+    ev_key = f"inc_ev_{i}"
+    pb_key = f"inc_pb_{i}"
+    pe_key = f"inc_pe_{i}"
 
-df_comps = pd.DataFrame(rows_comps, columns=["Company", "EV/EBITDA", "P/B", "P/E"])
+    # make sure comps has flags
+    S["comps"][i].setdefault("inc_ev", True)
+    S["comps"][i].setdefault("inc_pb", True)
+    S["comps"][i].setdefault("inc_pe", True)
+
+    # set widget defaults BEFORE widgets exist (only if keys not already created)
+    if ev_key not in S: S[ev_key] = bool(S["comps"][i]["inc_ev"])
+    if pb_key not in S: S[pb_key] = bool(S["comps"][i]["inc_pb"])
+    if pe_key not in S: S[pe_key] = bool(S["comps"][i]["inc_pe"])
+
+    with c5:
+        st.caption("Analyst filter")
+        st.checkbox("Include EV", key=ev_key)
+        st.checkbox("Include P/B", key=pb_key)
+        st.checkbox("Include P/E", key=pe_key)
+
+    # read values AFTER widgets
+    inc_ev = bool(S[ev_key])
+    inc_pb = bool(S[pb_key])
+    inc_pe = bool(S[pe_key])
+
+    # store back to comps structure (safe: not modifying widget keys)
+    S["comps"][i]["inc_ev"] = inc_ev
+    S["comps"][i]["inc_pb"] = inc_pb
+    S["comps"][i]["inc_pe"] = inc_pe
+
+    rows_comps.append([name_val, ev_val, pb_val, pe_val, inc_ev, inc_pb, inc_pe])
+
+df_comps = pd.DataFrame(
+    rows_comps,
+    columns=["Company", "EV/EBITDA", "P/B", "P/E", "Include_EV", "Include_PB", "Include_PE"]
+)
+
 st.subheader("Entered Comparables")
 st.dataframe(df_comps, width='stretch')
 
-# Save for summary page
+# keep your existing lists if you want, but now you also have include flags
 S["comps_num"] = int(num_comps)
 S["comps_ev_list"] = df_comps["EV/EBITDA"].astype(float).tolist()
 S["comps_pb_list"] = df_comps["P/B"].astype(float).tolist()
 S["comps_pe_list"] = df_comps["P/E"].astype(float).tolist()
 
+# NEW: store include masks too (useful later)
+S["comps_inc_ev"] = df_comps["Include_EV"].astype(bool).tolist()
+S["comps_inc_pb"] = df_comps["Include_PB"].astype(bool).tolist()
+S["comps_inc_pe"] = df_comps["Include_PE"].astype(bool).tolist()
 
 # =========================================================
 # STEP 2 — AVERAGE & IMPLIED MULTIPLES
 # =========================================================
 st.header("Step 2 — Average & Implied Multiples")
 
-avg_ev = filtered_average(df_comps["EV/EBITDA"])
-avg_pb = filtered_average(df_comps["P/B"])
-avg_pe = filtered_average(df_comps["P/E"])
+# Analyst filter ONLY (whatever you untick is excluded)
+ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"].replace(0, np.nan)
+pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"].replace(0, np.nan)
+pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"].replace(0, np.nan)
 
-default_discount_pct = float(S.get("discount_pct", 25.0))
+avg_ev = float(ev_series.mean()) if ev_series.notna().any() else np.nan
+avg_pb = float(pb_series.mean()) if pb_series.notna().any() else np.nan
+avg_pe = float(pe_series.mean()) if pe_series.notna().any() else np.nan
+
+
+
+S.setdefault("discount_pct", 25.0)
 discount_pct = st.number_input(
     "Discount factor (%)",
-    value=default_discount_pct,
+    value=float(S["discount_pct"]),
     step=1.0,
     key="discount_pct_input",
 )
-S["discount_pct"] = discount_pct
-discount = discount_pct / 100.0
+S["discount_pct"] = float(discount_pct)
+discount = float(discount_pct) / 100.0
 
 implied_ev = avg_ev * (1 - discount)
 implied_pb = avg_pb * (1 - discount)
@@ -169,16 +550,12 @@ df_mult = pd.DataFrame(
         "Implied": [implied_ev, implied_pb, implied_pe],
     }
 )
-st.dataframe(
-    df_mult.style.format({"Average": "{:,.2f}", "Implied": "{:,.2f}"}),
-    width='stretch',
-)
 
-# Persist implied multiples for summary
-S["implied_ev"] = float(implied_ev)
-S["implied_pb"] = float(implied_pb)
-S["implied_pe"] = float(implied_pe)
+st.dataframe(df_mult.style.format({"Average": "{:,.2f}", "Implied": "{:,.2f}"}), width='stretch')
 
+S["implied_ev"] = float(implied_ev) if not pd.isna(implied_ev) else 0.0
+S["implied_pb"] = float(implied_pb) if not pd.isna(implied_pb) else 0.0
+S["implied_pe"] = float(implied_pe) if not pd.isna(implied_pe) else 0.0
 
 # =========================================================
 # TIMING SOURCE (from DCF) — BASE USED BY BOTH EBITDA & EARNINGS
@@ -186,8 +563,6 @@ S["implied_pe"] = float(implied_pe)
 st.header("Timing Source (from DCF)")
 
 dcf_timing_list = S.get("dcf_discount_periods_n", [])
-
-# Default base timing from state (if already chosen)
 default_base = float(S.get("comp_timing_base", 0.0))
 
 if not dcf_timing_list:
@@ -195,7 +570,6 @@ if not dcf_timing_list:
         "⚠ No timing values detected from DCF. "
         "Either run the DCF model first or set a manual timing base."
     )
-
     base_timing = st.number_input(
         "Enter starting timing value for comparables (year 1):",
         value=default_base,
@@ -204,12 +578,8 @@ if not dcf_timing_list:
         key="comp_timing_base_manual_no_dcf",
     )
 else:
-    # Show full DCF timing table (for info)
     timing_df = pd.DataFrame(
-        {
-            "Forecast Year Index": list(range(len(dcf_timing_list))),
-            "DCF Timing n": dcf_timing_list,
-        }
+        {"Forecast Year Index": list(range(len(dcf_timing_list))), "DCF Timing n": dcf_timing_list}
     )
     st.dataframe(timing_df, width='stretch')
 
@@ -218,10 +588,7 @@ else:
 
     timing_choice = st.radio(
         "Choose timing base for Comparables timing effect:",
-        [
-            f"Use DCF n₀ = {dcf_n0}",
-            "Manually override starting timing value",
-        ],
+        [f"Use DCF n₀ = {dcf_n0}", "Manually override starting timing value"],
         index=0 if default_base == 0.0 or np.isclose(default_base, dcf_n0) else 1,
         key="comp_timing_choice",
     )
@@ -237,10 +604,8 @@ else:
             key="comp_timing_base_manual",
         )
 
-# Save chosen base timing (used below for EBITDA & Earnings)
 S["comp_timing_base"] = float(base_timing)
 st.success(f"Timing base for comparables = **{base_timing:.4f}**")
-
 
 # =========================================================
 # STEP 3 — MAINTAINABLE EBITDA (with locked timing)
@@ -255,15 +620,13 @@ if not dcf_eb_all:
     st.error("⚠ No EBITDA found in DCF. Please run the DCF page first.")
     st.stop()
 
-# All EBITDA years from DCF (hist + forecast)
 eb_years_all = sorted(int(y) for y in dcf_eb_all.keys())
 eb_min_year = min(eb_years_all)
 eb_max_year = max(eb_years_all)
 
-# Persist controls
 S.setdefault("comp_eb_start_year", eb_min_year)
 S.setdefault("comp_eb_end_year", eb_max_year)
-S.setdefault("comp_eb_weights", {})      # {year: weight}
+S.setdefault("comp_eb_weights", {})
 S.setdefault("comp_use_timing_eb", True)
 
 use_timing_eb = st.checkbox(
@@ -272,7 +635,7 @@ use_timing_eb = st.checkbox(
     key="comp_use_timing_eb_checkbox",
 )
 S["comp_use_timing_eb"] = use_timing_eb
-# New toggle — Apply timing only to first year
+
 use_first_year_only = st.checkbox(
     "Apply timing ONLY to the first year?",
     value=bool(S.get("comp_use_first_year_only_eb", False)),
@@ -296,7 +659,6 @@ with c_eb2:
         key="comp_eb_end_year_input",
     )
 
-# Clamp to valid range
 eb_start_year = int(max(eb_start_year, eb_min_year))
 eb_end_year = int(min(eb_end_year, eb_max_year))
 if eb_end_year < eb_start_year:
@@ -307,18 +669,15 @@ S["comp_eb_start_year"] = eb_start_year
 S["comp_eb_end_year"] = eb_end_year
 
 selected_eb_years = list(range(eb_start_year, eb_end_year + 1))
-
 st.subheader("EBITDA Weighting")
-rows_eb = []
 
-# Use the global timing base picked above
+rows_eb = []
 base_timing = float(S.get("comp_timing_base", 0.0))
 
 for idx, yr in enumerate(selected_eb_years):
     eb_val = float(dcf_eb_all.get(str(yr), 0.0))
     default_w = float(S["comp_eb_weights"].get(str(yr), 0.0))
 
-    # Calculate timing internally (NOT displayed)
     if not use_timing_eb:
         timing_val = 1.0
     elif use_first_year_only:
@@ -326,26 +685,11 @@ for idx, yr in enumerate(selected_eb_years):
     else:
         timing_val = base_timing + idx
 
-    # UI layout but WITHOUT timing input
     c1, c2, c4 = st.columns([1, 2, 1])
-
     with c1:
-        st.number_input(
-            f"EB Year {yr}",
-            value=int(yr),
-            disabled=True,
-            key=f"comp_eb_year_display_{yr}",
-        )
-
+        st.number_input(f"EB Year {yr}", value=int(yr), disabled=True, key=f"comp_eb_year_display_{yr}")
     with c2:
-        st.number_input(
-            f"EBITDA {yr}",
-            value=eb_val,
-            disabled=True,
-            format="%.2f",
-            key=f"comp_eb_value_display_{yr}",
-        )
-
+        st.number_input(f"EBITDA {yr}", value=eb_val, disabled=True, format="%.2f", key=f"comp_eb_value_display_{yr}")
     with c4:
         weight_val = st.number_input(
             f"EB Weight {yr} (%)",
@@ -373,23 +717,18 @@ for idx, yr in enumerate(selected_eb_years):
 
 df_eb = pd.DataFrame(rows_eb)
 
-# Display table (hide timing columns when toggle is off)
 if use_timing_eb:
-    df_eb_display = df_eb[
-        ["Year", "EBITDA", "Timing", "Weight (%)", "Adjusted EBITDA", "Weighted EBITDA"]
-    ]
+    df_eb_display = df_eb[["Year", "EBITDA", "Timing", "Weight (%)", "Adjusted EBITDA", "Weighted EBITDA"]]
 else:
     df_eb_display = df_eb[["Year", "EBITDA", "Weight (%)", "Weighted EBITDA"]]
 
 df_eb_display = df_eb_display.copy()
-df_eb_display.index = df_eb_display.index + 1  # start index at 1
-
+df_eb_display.index = df_eb_display.index + 1
 st.dataframe(format_numeric_columns(df_eb_display), width='stretch')
 
 maintainable_ebitda = float(df_eb["Weighted EBITDA"].sum())
 st.success(f"Maintainable EBITDA = {maintainable_ebitda:,.2f}")
 S["maintainable_ebitda"] = maintainable_ebitda
-
 
 # =========================================================
 # STEP 4 — MAINTAINABLE EARNINGS (with locked timing)
@@ -408,7 +747,6 @@ np_years_all = sorted(int(y) for y in dcf_np_all.keys())
 np_min_year = min(np_years_all)
 np_max_year = max(np_years_all)
 
-# Persist controls
 S.setdefault("comp_np_start_year", np_min_year)
 S.setdefault("comp_np_end_year", np_max_year)
 S.setdefault("comp_np_weights", {})
@@ -420,6 +758,7 @@ use_timing_np = st.checkbox(
     key="comp_use_timing_np_checkbox",
 )
 S["comp_use_timing_np"] = use_timing_np
+
 use_first_year_only_np = st.checkbox(
     "Apply timing ONLY to the first year? (Earnings)",
     value=bool(S.get("comp_use_first_year_only_np", False)),
@@ -429,19 +768,9 @@ S["comp_use_first_year_only_np"] = use_first_year_only_np
 
 c_np1, c_np2 = st.columns(2)
 with c_np1:
-    np_start_year = st.number_input(
-        "NP Start Year",
-        value=int(S["comp_np_start_year"]),
-        step=1,
-        key="comp_np_start_year_input",
-    )
+    np_start_year = st.number_input("NP Start Year", value=int(S["comp_np_start_year"]), step=1, key="comp_np_start_year_input")
 with c_np2:
-    np_end_year = st.number_input(
-        "NP End Year",
-        value=int(S["comp_np_end_year"]),
-        step=1,
-        key="comp_np_end_year_input",
-    )
+    np_end_year = st.number_input("NP End Year", value=int(S["comp_np_end_year"]), step=1, key="comp_np_end_year_input")
 
 np_start_year = int(max(np_start_year, np_min_year))
 np_end_year = int(min(np_end_year, np_max_year))
@@ -453,18 +782,15 @@ S["comp_np_start_year"] = np_start_year
 S["comp_np_end_year"] = np_end_year
 
 selected_np_years = list(range(np_start_year, np_end_year + 1))
-
 st.subheader("Earnings Weighting")
-rows_np = []
 
-# Same timing base as EBITDA
+rows_np = []
 base_timing = float(S.get("comp_timing_base", 0.0))
 
 for idx, yr in enumerate(selected_np_years):
     np_val = float(dcf_np_all.get(str(yr), 0.0))
     default_w = float(S["comp_np_weights"].get(str(yr), 0.0))
 
-    # Internal timing calculation
     if not use_timing_np:
         timing_val = 1.0
     elif use_first_year_only_np:
@@ -473,24 +799,10 @@ for idx, yr in enumerate(selected_np_years):
         timing_val = base_timing + idx
 
     c1, c2, c4 = st.columns([1, 2, 1])
-
     with c1:
-        st.number_input(
-            f"Earnings Year {yr}",
-            value=int(yr),
-            disabled=True,
-            key=f"comp_np_year_display_{yr}",
-        )
-
+        st.number_input(f"Earnings Year {yr}", value=int(yr), disabled=True, key=f"comp_np_year_display_{yr}")
     with c2:
-        st.number_input(
-            f"Earnings {yr}",
-            value=np_val,
-            disabled=True,
-            format="%.2f",
-            key=f"comp_np_value_display_{yr}",
-        )
-
+        st.number_input(f"Earnings {yr}", value=np_val, disabled=True, format="%.2f", key=f"comp_np_value_display_{yr}")
     with c4:
         weight_val = st.number_input(
             f"NP Weight {yr} (%)",
@@ -519,21 +831,17 @@ for idx, yr in enumerate(selected_np_years):
 df_np = pd.DataFrame(rows_np)
 
 if use_timing_np:
-    df_np_display = df_np[
-        ["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]
-    ]
+    df_np_display = df_np[["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]]
 else:
     df_np_display = df_np[["Year", "Earnings", "Weight (%)", "Weighted Earnings"]]
 
 df_np_display = df_np_display.copy()
 df_np_display.index = df_np_display.index + 1
-
 st.dataframe(format_numeric_columns(df_np_display), width='stretch')
 
 maintainable_earnings = float(df_np["Weighted Earnings"].sum())
 st.success(f"Maintainable Earnings = {maintainable_earnings:,.2f}")
 S["maintainable_earnings"] = maintainable_earnings
-
 
 # =========================================================
 # STEP 5 — BOOK VALUE & NET DEBT
@@ -543,24 +851,11 @@ st.header("Step 5 — Book Value & Net Debt")
 book_equity_default = float(S.get("book_equity", 0.0))
 net_debt_default = float(S.get("net_debt", 0.0))
 
-book_equity = st.number_input(
-    "Book Equity (USD)",
-    value=book_equity_default,
-    step=0.01,
-    format="%.2f",
-    key="book_equity_input",
-)
+book_equity = st.number_input("Book Equity (USD)", value=book_equity_default, step=0.01, format="%.2f", key="book_equity_input")
 S["book_equity"] = float(book_equity)
 
-net_debt = st.number_input(
-    "Net Debt (USD)",
-    value=net_debt_default,
-    step=0.01,
-    format="%.2f",
-    key="net_debt_input",
-)
+net_debt = st.number_input("Net Debt (USD)", value=net_debt_default, step=0.01, format="%.2f", key="net_debt_input")
 S["net_debt"] = float(net_debt)
-
 
 # =========================================================
 # STEP 6 — FINAL EQUITY VALUES
@@ -579,10 +874,6 @@ S["value_pbv"] = float(equity_pb)
 S["value_pe"] = float(equity_pe)
 
 df_res = pd.DataFrame(
-    {
-        "Method": ["EV/EBITDA", "P/B", "P/E"],
-        "Equity Value (USD)": [equity_ev, equity_pb, equity_pe],
-    }
+    {"Method": ["EV/EBITDA", "P/B", "P/E"], "Equity Value (USD)": [equity_ev, equity_pb, equity_pe]}
 )
-
 st.dataframe(format_numeric_columns(df_res), width='stretch')
