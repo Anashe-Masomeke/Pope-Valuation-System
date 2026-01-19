@@ -1227,9 +1227,30 @@ op_idx     = core_idx["op"]
 pbt_idx    = core_idx["pbt"]
 tax_idx    = core_idx["tax"]   # ✅ ADD
 np_idx     = core_idx["np"]
+# ---------------------------------------------------------
+# VALIDATE MAPPING ORDER (top-to-bottom in statement)
+# ---------------------------------------------------------
+order_pairs = [
+    ("Revenue", rev_idx),
+    ("Gross Profit", gp_idx),
+    ("EBITDA", ebitda_idx),
+    ("Operating Profit", op_idx),
+    ("Profit Before Tax", pbt_idx),
+    ("Tax", tax_idx),
+    ("Profit for the Year", np_idx),
+]
+mapped = [(n, i) for (n, i) in order_pairs if isinstance(i, int)]
 
+# Check monotonic increasing indices
+bad = []
+for a, b in zip(mapped, mapped[1:]):
+    if b[1] <= a[1]:
+        bad.append((a, b))
 
-
+if bad:
+    st.error("❌ Mapping order problem: totals must appear top-to-bottom in the statement.")
+    st.write("Current mapped order:", mapped)
+    st.stop()
 # ✅ Only Revenue is mandatory
 if rev_idx is None:
     st.error("❌ Revenue must be selected.")
@@ -1439,129 +1460,135 @@ elif has_cos and (not has_gp):
 else:
     st.info("ℹ️ GP and COS not selected. Forecast will rely on other rows as % of revenue.")
 
+# ---------------------------------------------------------
+# FORECAST ALL NON-TOTAL ROWS AS % OF REVENUE (NO KEYWORDS)
+# ---------------------------------------------------------
 
-industry = st.session_state.get("dcf_industry", "General")
+# 1) Define "total rows" from mapping (these must be CALCULATED, not forecasted)
+total_rows = [gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx]
+total_rows = [i for i in total_rows if isinstance(i, int)]
+total_set = set(total_rows)
 
-treat_cos_as_normal = (
-    industry == "Manufacturing"
-    or cos_idx is None
-)
+# 2) Revenue is never forecasted as % of itself
+protected_set = set([rev_idx]) | total_set
 
-# forecast other non-total, non-CoS rows as % of revenue
-industry = st.session_state.get("dcf_industry", "General")
-treat_cos_as_normal = industry == "Manufacturing" or cos_idx is None
-
-total_keywords = [
-    "gross profit", "ebitda",
-    "operating profit",
-    "profit before tax",
-    "profit for the year",
-]
-# ✅ gp_cos_mode should be True only when you actually forecast COS using GP margin
-# Put this right AFTER your upgraded COS/GP handling block:
+# 3) If COS was forecasted using GP-margin (Case A), don't overwrite COS
 gp_cos_mode = (has_gp and has_cos and (avg_gp_margin is not None))
-
-total_keywords = [
-    "gross profit", "ebitda",
-    "operating profit",
-    "profit before tax",
-    "profit for the year",
-]
 
 for idx in range(len(forecast_is)):
 
-    # ✅ Build protected list safely (remove None)
-    protected = [x for x in [rev_idx, gp_idx, cos_idx, ebitda_idx, op_idx, pbt_idx, tax_idx, np_idx] if isinstance(x, int)]
-
-    # ✅ If COS was forecasted already using GP margin, skip COS so you don't overwrite it
-    if gp_cos_mode and has_cos and idx == cos_idx:
+    # Skip revenue + totals
+    if idx in protected_set:
         continue
 
-    # ✅ Don't forecast totals / protected rows
-    if idx in protected:
+    # Skip COS if already handled via GP-margin method
+    if gp_cos_mode and isinstance(cos_idx, int) and idx == cos_idx:
         continue
 
-    item = str(forecast_is.at[idx, "Item"]).lower()
-    if any(k in item for k in total_keywords):
-        continue
-
-    # Forecast everything else as % of revenue
+    # Forecast row as % of revenue
     row_hist = forecast_is.iloc[idx][year_cols_is].values.astype(float)
     ratio = ratio_to_revenue(row_hist, rev_hist_vals)
 
     for y in forecast_years_int:
         forecast_is.iat[idx, forecast_is.columns.get_loc(str(y))] = rev_forecast[y] * ratio
+# ---------------------------------------------------------
+# TOTALS CHAIN ENGINE (previous mapped total -> next mapped total)
+# ---------------------------------------------------------
 
+def safe_sum(df, start_i, end_i, col):
+    """Sum from start_i to end_i-1 inclusive."""
+    if not (isinstance(start_i, int) and isinstance(end_i, int)):
+        return np.nan
+    if end_i <= start_i:
+        return np.nan
+    return df.loc[start_i:end_i - 1, col].sum(skipna=True)
 
+# Build totals chain based on the lines YOU mapped
+chain = [
+    ("REV", rev_idx),
+    ("GP", gp_idx),
+    ("EBITDA", ebitda_idx),
+    ("OP", op_idx),
+    ("PBT", pbt_idx),
+    ("NP", np_idx),
+]
 
-
-def sum_rows(df, start_idx, end_idx, col):
-    """Sum from start_idx to end_idx-1 inclusive."""
-    if start_idx is None or end_idx is None:
-        return df.iloc[start_idx][col] if start_idx is not None else np.nan
-    if end_idx <= start_idx:
-        return df.iloc[start_idx][col]
-    return df.loc[start_idx:end_idx - 1, col].sum(skipna=True)
+# Keep only mapped items and ensure correct order top-to-bottom in the statement
+chain = [(name, idx) for (name, idx) in chain if isinstance(idx, int)]
+chain = sorted(chain, key=lambda x: x[1])
 
 for col in forecast_cols:
 
-    # 🔹 Derive Gross Profit if row exists
-    if gp_idx is not None and cos_idx is not None:
-        forecast_is.iat[
-            gp_idx,
-            forecast_is.columns.get_loc(col)
-        ] = (
-            forecast_is.iloc[rev_idx][col]
-            + forecast_is.iloc[cos_idx][col]
-        )
-
-    # -------------------------------------------------
-    # EBITDA recomputation (robust to missing GP)
-    # -------------------------------------------------
-    if ebitda_idx is not None:
-
-        col_idx = forecast_is.columns.get_loc(col)
-
-        existing_val = pd.to_numeric(
-            forecast_is.iat[ebitda_idx, col_idx],
+    # 1) GP special case: if both Revenue and COS exist, derive GP = Revenue + COS
+    if isinstance(gp_idx, int) and isinstance(cos_idx, int):
+        rev_val = pd.to_numeric(
+            forecast_is.iat[rev_idx, forecast_is.columns.get_loc(col)],
             errors="coerce"
         )
+        cos_val = pd.to_numeric(
+            forecast_is.iat[cos_idx, forecast_is.columns.get_loc(col)],
+            errors="coerce"
+        )
+        rev_val = 0.0 if pd.isna(rev_val) else float(rev_val)
+        cos_val = 0.0 if pd.isna(cos_val) else float(cos_val)
 
-        # Only recompute if not explicitly forecasted
-        if pd.isna(existing_val) or existing_val == 0:
+        forecast_is.iat[gp_idx, forecast_is.columns.get_loc(col)] = rev_val + cos_val
 
-            # 🔹 Decide where to start summing from
-            if isinstance(gp_idx, int):
-                start_idx = gp_idx
-            else:
-                # 🔥 GP missing → start from Revenue
-                start_idx = rev_idx
+    # 2) For each mapped total: sum from previous mapped total down to just above current total
+    for j in range(1, len(chain)):
+        prev_name, prev_idx = chain[j - 1]
+        curr_name, curr_idx = chain[j]
 
-            if ebitda_idx > start_idx:
-                ebitda_val = forecast_is.loc[
-                    start_idx:ebitda_idx - 1,
-                    col
-                ].sum(skipna=True)
+        # Skip overwriting GP if we already computed it using Revenue + COS above
+        if curr_name == "GP" and isinstance(cos_idx, int):
+            continue
 
-                forecast_is.iat[ebitda_idx, col_idx] = ebitda_val
+        val = safe_sum(forecast_is, prev_idx, curr_idx, col)
+        if np.isfinite(val):
+            forecast_is.iat[curr_idx, forecast_is.columns.get_loc(col)] = val
 
-    if op_idx is not None and ebitda_idx is not None:
-        forecast_is.iat[op_idx, forecast_is.columns.get_loc(col)] = \
-            forecast_is.loc[ebitda_idx:op_idx-1, col].sum()
-
-    if pbt_idx is not None and op_idx is not None:
-        forecast_is.iat[pbt_idx, forecast_is.columns.get_loc(col)] = \
-            forecast_is.loc[op_idx:pbt_idx-1, col].sum()
-
-    # ✅ ADD THIS HERE
+    # 3) Tax derived from PBT (if both mapped)
     if isinstance(tax_idx, int) and isinstance(pbt_idx, int):
-        pbt_val = float(forecast_is.iat[pbt_idx, forecast_is.columns.get_loc(col)])
-        tax_val = pbt_val * avg_tax_ratio
-        forecast_is.iat[tax_idx, forecast_is.columns.get_loc(col)] = tax_val
+        pbt_val = pd.to_numeric(
+            forecast_is.iat[pbt_idx, forecast_is.columns.get_loc(col)],
+            errors="coerce"
+        )
+        pbt_val = 0.0 if pd.isna(pbt_val) else float(pbt_val)
 
-    if np_idx is not None and pbt_idx is not None:
-        forecast_is.iat[np_idx, forecast_is.columns.get_loc(col)] = \
-            forecast_is.loc[pbt_idx:np_idx-1, col].sum()
+        forecast_is.iat[tax_idx, forecast_is.columns.get_loc(col)] = pbt_val * avg_tax_ratio
+
+    # 4) Profit for the Year (PAT/NP) MUST be after tax:
+    #    NP = PBT + Tax + any after-tax lines between Tax and NP
+    if isinstance(np_idx, int) and isinstance(pbt_idx, int):
+
+        pbt_val = pd.to_numeric(
+            forecast_is.iat[pbt_idx, forecast_is.columns.get_loc(col)],
+            errors="coerce"
+        )
+        pbt_val = 0.0 if pd.isna(pbt_val) else float(pbt_val)
+
+        tax_val = 0.0
+        if isinstance(tax_idx, int):
+            tax_val = pd.to_numeric(
+                forecast_is.iat[tax_idx, forecast_is.columns.get_loc(col)],
+                errors="coerce"
+            )
+            tax_val = 0.0 if pd.isna(tax_val) else float(tax_val)
+
+        # add any after-tax adjustments between tax line and NP line
+        extra_after_tax = 0.0
+        if isinstance(tax_idx, int) and (tax_idx + 1) <= (np_idx - 1):
+            extra_after_tax = forecast_is.loc[tax_idx + 1: np_idx - 1, col].sum(skipna=True)
+
+        forecast_is.iat[np_idx, forecast_is.columns.get_loc(col)] = pbt_val + tax_val + extra_after_tax
+
+
+# 5) Cleanup: remove None and force numeric
+all_year_cols = [c for c in forecast_is.columns if c != "Item"]
+forecast_is[all_year_cols] = forecast_is[all_year_cols].replace(
+    {None: np.nan, "None": np.nan, "none": np.nan}
+)
+forecast_is[all_year_cols] = forecast_is[all_year_cols].apply(pd.to_numeric, errors="coerce")
 
 # ---------------------------------------------------------
 # STORE FORECASTED NET PROFIT (Profit for the Year) FOR COMPARABLES
