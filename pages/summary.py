@@ -484,14 +484,19 @@ else:
 
 with c_up2:
     if upside_pct is not None:
-        colour = ACCENT_CYAN if upside_pct >= 0 else DANGER
-        label = "Upside" if upside_pct >= 0 else "Downside"
+        is_upside = upside_pct >= 0
+
+        colour = ACCENT_CYAN if is_upside else DANGER
+        label = "Upside" if is_upside else "Downside"
+        arrow = "🔺" if is_upside else "🔻"
+        sign = "+" if is_upside else ""
+
         st.markdown(
             f"""
-            <div class="kpi-card" style="border-left-color:{colour};">
-                <div class="kpi-title">{label}</div>
-                <div class="kpi-value" style="color:{colour};">
-                    {upside_pct:.1f}%
+            <div class="kpi-card" style="border-left: 6px solid {colour};">
+                <div class="kpi-title">{arrow} {label}</div>
+                <div class="kpi-value" style="color:{colour} !important;">
+                    {sign}{upside_pct:.1f}%
                 </div>
                 <div class="kpi-sub">
                     Versus current market price of {current_price:,.2f} USD
@@ -502,5 +507,8 @@ with c_up2:
         )
     else:
         st.info("Upside will appear once intrinsic value and current price are available.")
+
+
+
 
 # (Export section intentionally omitted to avoid xlsxwriter dependency)
