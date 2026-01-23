@@ -517,14 +517,18 @@ S["comps_inc_pe"] = df_comps["Include_PE"].astype(bool).tolist()
 # =========================================================
 st.header("Step 2 — Average & Implied Multiples")
 
-# Analyst filter ONLY (whatever you untick is excluded)
-ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"].replace(0, np.nan)
-pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"].replace(0, np.nan)
-pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"].replace(0, np.nan)
+# Excel-style averaging:
+# - zeros INCLUDED
+# - blanks (NaN) ignored
+
+ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
+pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"]
+pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
 
 avg_ev = float(ev_series.mean()) if ev_series.notna().any() else np.nan
 avg_pb = float(pb_series.mean()) if pb_series.notna().any() else np.nan
 avg_pe = float(pe_series.mean()) if pe_series.notna().any() else np.nan
+
 
 
 
@@ -616,119 +620,132 @@ dcf_eb_all = S.get("dcf_ebitda_all", None)
 if dcf_eb_all is None:
     dcf_eb_all = S.get("dcf_ebitda_forecast", {})
 
+# ✅ If no DCF EBITDA → SKIP Step 3 (no manual inputs)
 if not dcf_eb_all:
-    st.error("⚠ No EBITDA found in DCF. Please run the DCF page first.")
-    st.stop()
+    st.warning("⚠ No EBITDA found from DCF — skipping EV/EBITDA method.")
+    S["maintainable_ebitda"] = np.nan
 
-eb_years_all = sorted(int(y) for y in dcf_eb_all.keys())
-eb_min_year = min(eb_years_all)
-eb_max_year = max(eb_years_all)
-
-S.setdefault("comp_eb_start_year", eb_min_year)
-S.setdefault("comp_eb_end_year", eb_max_year)
-S.setdefault("comp_eb_weights", {})
-S.setdefault("comp_use_timing_eb", True)
-
-use_timing_eb = st.checkbox(
-    "Apply timing effect from DCF to EBITDA?",
-    value=bool(S.get("comp_use_timing_eb", True)),
-    key="comp_use_timing_eb_checkbox",
-)
-S["comp_use_timing_eb"] = use_timing_eb
-
-use_first_year_only = st.checkbox(
-    "Apply timing ONLY to the first year?",
-    value=bool(S.get("comp_use_first_year_only_eb", False)),
-    key="comp_use_first_year_only_eb_checkbox",
-)
-S["comp_use_first_year_only_eb"] = use_first_year_only
-
-c_eb1, c_eb2 = st.columns(2)
-with c_eb1:
-    eb_start_year = st.number_input(
-        "EBITDA Start Year",
-        value=int(S["comp_eb_start_year"]),
-        step=1,
-        key="comp_eb_start_year_input",
-    )
-with c_eb2:
-    eb_end_year = st.number_input(
-        "EBITDA End Year",
-        value=int(S["comp_eb_end_year"]),
-        step=1,
-        key="comp_eb_end_year_input",
-    )
-
-eb_start_year = int(max(eb_start_year, eb_min_year))
-eb_end_year = int(min(eb_end_year, eb_max_year))
-if eb_end_year < eb_start_year:
-    st.error("❌ EBITDA End Year must be ≥ Start Year.")
-    st.stop()
-
-S["comp_eb_start_year"] = eb_start_year
-S["comp_eb_end_year"] = eb_end_year
-
-selected_eb_years = list(range(eb_start_year, eb_end_year + 1))
-st.subheader("EBITDA Weighting")
-
-rows_eb = []
-base_timing = float(S.get("comp_timing_base", 0.0))
-
-for idx, yr in enumerate(selected_eb_years):
-    eb_val = float(dcf_eb_all.get(str(yr), 0.0))
-    default_w = float(S["comp_eb_weights"].get(str(yr), 0.0))
-
-    if not use_timing_eb:
-        timing_val = 1.0
-    elif use_first_year_only:
-        timing_val = base_timing if idx == 0 else 1.0
-    else:
-        timing_val = base_timing + idx
-
-    c1, c2, c4 = st.columns([1, 2, 1])
-    with c1:
-        st.number_input(f"EB Year {yr}", value=int(yr), disabled=True, key=f"comp_eb_year_display_{yr}")
-    with c2:
-        st.number_input(f"EBITDA {yr}", value=eb_val, disabled=True, format="%.2f", key=f"comp_eb_value_display_{yr}")
-    with c4:
-        weight_val = st.number_input(
-            f"EB Weight {yr} (%)",
-            value=float(default_w),
-            step=0.1,
-            format="%.2f",
-            key=f"comp_eb_weight_{yr}",
-        )
-
-    S["comp_eb_weights"][str(yr)] = float(weight_val)
-
-    adj_eb = eb_val * timing_val
-    weighted_eb = adj_eb * weight_val / 100.0
-
-    rows_eb.append(
-        {
-            "Year": int(yr),
-            "EBITDA": eb_val,
-            "Timing": timing_val if use_timing_eb else np.nan,
-            "Weight (%)": weight_val,
-            "Adjusted EBITDA": adj_eb,
-            "Weighted EBITDA": weighted_eb,
-        }
-    )
-
-df_eb = pd.DataFrame(rows_eb)
-
-if use_timing_eb:
-    df_eb_display = df_eb[["Year", "EBITDA", "Timing", "Weight (%)", "Adjusted EBITDA", "Weighted EBITDA"]]
 else:
-    df_eb_display = df_eb[["Year", "EBITDA", "Weight (%)", "Weighted EBITDA"]]
+    # ✅ SAFETY: only accept 4-digit year keys (e.g., 2024)
+    eb_years_all = sorted(
+        int(y) for y in dcf_eb_all.keys()
+        if str(y).strip().isdigit() and len(str(y).strip()) == 4
+    )
 
-df_eb_display = df_eb_display.copy()
-df_eb_display.index = df_eb_display.index + 1
-st.dataframe(format_numeric_columns(df_eb_display), width='stretch')
+    if not eb_years_all:
+        st.warning("⚠ DCF EBITDA found, but no valid 4-digit year keys — skipping EV/EBITDA method.")
+        S["maintainable_ebitda"] = np.nan
 
-maintainable_ebitda = float(df_eb["Weighted EBITDA"].sum())
-st.success(f"Maintainable EBITDA = {maintainable_ebitda:,.2f}")
-S["maintainable_ebitda"] = maintainable_ebitda
+    else:
+        eb_min_year = min(eb_years_all)
+        eb_max_year = max(eb_years_all)
+
+        S.setdefault("comp_eb_start_year", eb_min_year)
+        S.setdefault("comp_eb_end_year", eb_max_year)
+        S.setdefault("comp_eb_weights", {})
+        S.setdefault("comp_use_timing_eb", True)
+
+        use_timing_eb = st.checkbox(
+            "Apply timing effect from DCF to EBITDA?",
+            value=bool(S.get("comp_use_timing_eb", True)),
+            key="comp_use_timing_eb_checkbox",
+        )
+        S["comp_use_timing_eb"] = use_timing_eb
+
+        use_first_year_only = st.checkbox(
+            "Apply timing ONLY to the first year?",
+            value=bool(S.get("comp_use_first_year_only_eb", False)),
+            key="comp_use_first_year_only_eb_checkbox",
+        )
+        S["comp_use_first_year_only_eb"] = use_first_year_only
+
+        c_eb1, c_eb2 = st.columns(2)
+        with c_eb1:
+            eb_start_year = st.number_input(
+                "EBITDA Start Year",
+                value=int(S["comp_eb_start_year"]),
+                step=1,
+                key="comp_eb_start_year_input",
+            )
+        with c_eb2:
+            eb_end_year = st.number_input(
+                "EBITDA End Year",
+                value=int(S["comp_eb_end_year"]),
+                step=1,
+                key="comp_eb_end_year_input",
+            )
+
+        eb_start_year = int(max(eb_start_year, eb_min_year))
+        eb_end_year = int(min(eb_end_year, eb_max_year))
+        if eb_end_year < eb_start_year:
+            st.error("❌ EBITDA End Year must be ≥ Start Year.")
+            st.stop()
+
+        S["comp_eb_start_year"] = eb_start_year
+        S["comp_eb_end_year"] = eb_end_year
+
+        selected_eb_years = list(range(eb_start_year, eb_end_year + 1))
+        st.subheader("EBITDA Weighting")
+
+        rows_eb = []
+        base_timing = float(S.get("comp_timing_base", 0.0))
+
+        for idx, yr in enumerate(selected_eb_years):
+            eb_val = float(dcf_eb_all.get(str(yr), 0.0))
+            default_w = float(S["comp_eb_weights"].get(str(yr), 0.0))
+
+            if not use_timing_eb:
+                timing_val = 1.0
+            elif use_first_year_only:
+                timing_val = base_timing if idx == 0 else 1.0
+            else:
+                timing_val = base_timing + idx
+
+            c1, c2, c4 = st.columns([1, 2, 1])
+            with c1:
+                st.number_input(f"EB Year {yr}", value=int(yr), disabled=True, key=f"comp_eb_year_display_{yr}")
+            with c2:
+                st.number_input(f"EBITDA {yr}", value=eb_val, disabled=True, format="%.2f", key=f"comp_eb_value_display_{yr}")
+            with c4:
+                weight_val = st.number_input(
+                    f"EB Weight {yr} (%)",
+                    value=float(default_w),
+                    step=0.1,
+                    format="%.2f",
+                    key=f"comp_eb_weight_{yr}",
+                )
+
+            S["comp_eb_weights"][str(yr)] = float(weight_val)
+
+            adj_eb = eb_val * timing_val
+            weighted_eb = adj_eb * weight_val / 100.0
+
+            rows_eb.append(
+                {
+                    "Year": int(yr),
+                    "EBITDA": eb_val,
+                    "Timing": timing_val if use_timing_eb else np.nan,
+                    "Weight (%)": weight_val,
+                    "Adjusted EBITDA": adj_eb,
+                    "Weighted EBITDA": weighted_eb,
+                }
+            )
+
+        df_eb = pd.DataFrame(rows_eb)
+
+        if use_timing_eb:
+            df_eb_display = df_eb[["Year", "EBITDA", "Timing", "Weight (%)", "Adjusted EBITDA", "Weighted EBITDA"]]
+        else:
+            df_eb_display = df_eb[["Year", "EBITDA", "Weight (%)", "Weighted EBITDA"]]
+
+        df_eb_display = df_eb_display.copy()
+        df_eb_display.index = df_eb_display.index + 1
+        st.dataframe(format_numeric_columns(df_eb_display), width='stretch')
+
+        maintainable_ebitda = float(df_eb["Weighted EBITDA"].sum())
+        st.success(f"Maintainable EBITDA = {maintainable_ebitda:,.2f}")
+        S["maintainable_ebitda"] = maintainable_ebitda
+
 
 # =========================================================
 # STEP 4 — MAINTAINABLE EARNINGS (with locked timing)
@@ -739,135 +756,194 @@ dcf_np_all = S.get("dcf_profit_all", None)
 if dcf_np_all is None:
     dcf_np_all = S.get("dcf_profit_forecast", {})
 
+# ✅ If no DCF Earnings → SKIP Step 4 (no manual inputs)
 if not dcf_np_all:
-    st.error("⚠ No Profit-for-the-Year found in DCF.")
-    st.stop()
+    st.warning("⚠ No Earnings found from DCF — skipping P/E method.")
+    S["maintainable_earnings"] = np.nan
 
-np_years_all = sorted(int(y) for y in dcf_np_all.keys())
-np_min_year = min(np_years_all)
-np_max_year = max(np_years_all)
-
-S.setdefault("comp_np_start_year", np_min_year)
-S.setdefault("comp_np_end_year", np_max_year)
-S.setdefault("comp_np_weights", {})
-S.setdefault("comp_use_timing_np", True)
-
-use_timing_np = st.checkbox(
-    "Apply timing effect from DCF to Earnings?",
-    value=bool(S.get("comp_use_timing_np", True)),
-    key="comp_use_timing_np_checkbox",
-)
-S["comp_use_timing_np"] = use_timing_np
-
-use_first_year_only_np = st.checkbox(
-    "Apply timing ONLY to the first year? (Earnings)",
-    value=bool(S.get("comp_use_first_year_only_np", False)),
-    key="comp_use_first_year_only_np_checkbox",
-)
-S["comp_use_first_year_only_np"] = use_first_year_only_np
-
-c_np1, c_np2 = st.columns(2)
-with c_np1:
-    np_start_year = st.number_input("NP Start Year", value=int(S["comp_np_start_year"]), step=1, key="comp_np_start_year_input")
-with c_np2:
-    np_end_year = st.number_input("NP End Year", value=int(S["comp_np_end_year"]), step=1, key="comp_np_end_year_input")
-
-np_start_year = int(max(np_start_year, np_min_year))
-np_end_year = int(min(np_end_year, np_max_year))
-if np_end_year < np_start_year:
-    st.error("❌ NP End Year cannot be before Start Year.")
-    st.stop()
-
-S["comp_np_start_year"] = np_start_year
-S["comp_np_end_year"] = np_end_year
-
-selected_np_years = list(range(np_start_year, np_end_year + 1))
-st.subheader("Earnings Weighting")
-
-rows_np = []
-base_timing = float(S.get("comp_timing_base", 0.0))
-
-for idx, yr in enumerate(selected_np_years):
-    np_val = float(dcf_np_all.get(str(yr), 0.0))
-    default_w = float(S["comp_np_weights"].get(str(yr), 0.0))
-
-    if not use_timing_np:
-        timing_val = 1.0
-    elif use_first_year_only_np:
-        timing_val = base_timing if idx == 0 else 1.0
-    else:
-        timing_val = base_timing + idx
-
-    c1, c2, c4 = st.columns([1, 2, 1])
-    with c1:
-        st.number_input(f"Earnings Year {yr}", value=int(yr), disabled=True, key=f"comp_np_year_display_{yr}")
-    with c2:
-        st.number_input(f"Earnings {yr}", value=np_val, disabled=True, format="%.2f", key=f"comp_np_value_display_{yr}")
-    with c4:
-        weight_val = st.number_input(
-            f"NP Weight {yr} (%)",
-            value=float(default_w),
-            step=0.1,
-            format="%.2f",
-            key=f"comp_np_weight_{yr}",
-        )
-
-    S["comp_np_weights"][str(yr)] = float(weight_val)
-
-    adj_np = np_val * timing_val
-    weighted_np = adj_np * weight_val / 100.0
-
-    rows_np.append(
-        {
-            "Year": int(yr),
-            "Earnings": np_val,
-            "Timing": timing_val if use_timing_np else np.nan,
-            "Weight (%)": weight_val,
-            "Adjusted Earnings": adj_np,
-            "Weighted Earnings": weighted_np,
-        }
+else:
+    # ✅ SAFETY: only accept 4-digit year keys (e.g., 2024)
+    np_years_all = sorted(
+        int(y) for y in dcf_np_all.keys()
+        if str(y).strip().isdigit() and len(str(y).strip()) == 4
     )
 
-df_np = pd.DataFrame(rows_np)
+    if not np_years_all:
+        st.warning("⚠ DCF Earnings found, but no valid 4-digit year keys — skipping P/E method.")
+        S["maintainable_earnings"] = np.nan
 
-if use_timing_np:
-    df_np_display = df_np[["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]]
-else:
-    df_np_display = df_np[["Year", "Earnings", "Weight (%)", "Weighted Earnings"]]
+    else:
+        np_min_year = min(np_years_all)
+        np_max_year = max(np_years_all)
 
-df_np_display = df_np_display.copy()
-df_np_display.index = df_np_display.index + 1
-st.dataframe(format_numeric_columns(df_np_display), width='stretch')
+        S.setdefault("comp_np_start_year", np_min_year)
+        S.setdefault("comp_np_end_year", np_max_year)
+        S.setdefault("comp_np_weights", {})
+        S.setdefault("comp_use_timing_np", True)
 
-maintainable_earnings = float(df_np["Weighted Earnings"].sum())
-st.success(f"Maintainable Earnings = {maintainable_earnings:,.2f}")
-S["maintainable_earnings"] = maintainable_earnings
+        use_timing_np = st.checkbox(
+            "Apply timing effect from DCF to Earnings?",
+            value=bool(S.get("comp_use_timing_np", True)),
+            key="comp_use_timing_np_checkbox",
+        )
+        S["comp_use_timing_np"] = use_timing_np
+
+        use_first_year_only_np = st.checkbox(
+            "Apply timing ONLY to the first year? (Earnings)",
+            value=bool(S.get("comp_use_first_year_only_np", False)),
+            key="comp_use_first_year_only_np_checkbox",
+        )
+        S["comp_use_first_year_only_np"] = use_first_year_only_np
+
+        c_np1, c_np2 = st.columns(2)
+        with c_np1:
+            np_start_year = st.number_input(
+                "NP Start Year",
+                value=int(S["comp_np_start_year"]),
+                step=1,
+                key="comp_np_start_year_input"
+            )
+        with c_np2:
+            np_end_year = st.number_input(
+                "NP End Year",
+                value=int(S["comp_np_end_year"]),
+                step=1,
+                key="comp_np_end_year_input"
+            )
+
+        np_start_year = int(max(np_start_year, np_min_year))
+        np_end_year = int(min(np_end_year, np_max_year))
+        if np_end_year < np_start_year:
+            st.error("❌ NP End Year cannot be before Start Year.")
+            st.stop()
+
+        S["comp_np_start_year"] = np_start_year
+        S["comp_np_end_year"] = np_end_year
+
+        selected_np_years = list(range(np_start_year, np_end_year + 1))
+        st.subheader("Earnings Weighting")
+
+        rows_np = []
+        base_timing = float(S.get("comp_timing_base", 0.0))
+
+        for idx, yr in enumerate(selected_np_years):
+            np_val = float(dcf_np_all.get(str(yr), 0.0))
+            default_w = float(S["comp_np_weights"].get(str(yr), 0.0))
+
+            if not use_timing_np:
+                timing_val = 1.0
+            elif use_first_year_only_np:
+                timing_val = base_timing if idx == 0 else 1.0
+            else:
+                timing_val = base_timing + idx
+
+            c1, c2, c4 = st.columns([1, 2, 1])
+            with c1:
+                st.number_input(f"Earnings Year {yr}", value=int(yr), disabled=True, key=f"comp_np_year_display_{yr}")
+            with c2:
+                st.number_input(f"Earnings {yr}", value=np_val, disabled=True, format="%.2f", key=f"comp_np_value_display_{yr}")
+            with c4:
+                weight_val = st.number_input(
+                    f"NP Weight {yr} (%)",
+                    value=float(default_w),
+                    step=0.1,
+                    format="%.2f",
+                    key=f"comp_np_weight_{yr}",
+                )
+
+            S["comp_np_weights"][str(yr)] = float(weight_val)
+
+            adj_np = np_val * timing_val
+            weighted_np = adj_np * weight_val / 100.0
+
+            rows_np.append(
+                {
+                    "Year": int(yr),
+                    "Earnings": np_val,
+                    "Timing": timing_val if use_timing_np else np.nan,
+                    "Weight (%)": weight_val,
+                    "Adjusted Earnings": adj_np,
+                    "Weighted Earnings": weighted_np,
+                }
+            )
+
+        df_np = pd.DataFrame(rows_np)
+
+        if use_timing_np:
+            df_np_display = df_np[["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]]
+        else:
+            df_np_display = df_np[["Year", "Earnings", "Weight (%)", "Weighted Earnings"]]
+
+        df_np_display = df_np_display.copy()
+        df_np_display.index = df_np_display.index + 1
+        st.dataframe(format_numeric_columns(df_np_display), width='stretch')
+
+        maintainable_earnings = float(df_np["Weighted Earnings"].sum())
+        st.success(f"Maintainable Earnings = {maintainable_earnings:,.2f}")
+        S["maintainable_earnings"] = maintainable_earnings
 
 # =========================================================
 # STEP 5 — BOOK VALUE & NET DEBT
 # =========================================================
 st.header("Step 5 — Book Value & Net Debt")
 
+# ✅ Pull Beginning Book Value from Banking page (Totals / BV)
+bank_outputs = (S.get("bank", {}) or {}).get("outputs", {}) or {}
+bank_book_equity = bank_outputs.get("book_equity_0", None)  # Beginning Book Value (Total Equity)
+
+# If user hasn't typed anything yet, auto-fill book equity from banking
+if bank_book_equity is not None:
+    # only auto-set if user hasn't created/edited the input widget yet
+    if "book_equity_input" not in S:
+        S["book_equity"] = float(bank_book_equity)
+        S["book_equity_input"] = float(bank_book_equity)
+
 book_equity_default = float(S.get("book_equity", 0.0))
 net_debt_default = float(S.get("net_debt", 0.0))
 
-book_equity = st.number_input("Book Equity (USD)", value=book_equity_default, step=0.01, format="%.2f", key="book_equity_input")
+book_equity = st.number_input(
+    "Book Equity (USD)",
+    value=book_equity_default,
+    step=0.01,
+    format="%.2f",
+    key="book_equity_input"
+)
 S["book_equity"] = float(book_equity)
 
-net_debt = st.number_input("Net Debt (USD)", value=net_debt_default, step=0.01, format="%.2f", key="net_debt_input")
+net_debt = st.number_input(
+    "Net Debt (USD)",
+    value=net_debt_default,
+    step=0.01,
+    format="%.2f",
+    key="net_debt_input"
+)
 S["net_debt"] = float(net_debt)
+
 
 # =========================================================
 # STEP 6 — FINAL EQUITY VALUES
 # =========================================================
 st.header("Step 6 — Computed Equity Values")
 
-maintainable_ebitda = float(S.get("maintainable_ebitda", 0.0))
-maintainable_earnings = float(S.get("maintainable_earnings", 0.0))
+maintainable_ebitda = S.get("maintainable_ebitda", np.nan)
+maintainable_earnings = S.get("maintainable_earnings", np.nan)
 
-equity_ev = implied_ev * maintainable_ebitda - net_debt
-equity_pb = implied_pb * book_equity
-equity_pe = implied_pe * maintainable_earnings
+equity_ev = np.nan
+equity_pb = np.nan
+equity_pe = np.nan
+
+# EV/EBITDA only if EBITDA exists
+if maintainable_ebitda is not None and np.isfinite(float(maintainable_ebitda)) and not pd.isna(implied_ev):
+    equity_ev = implied_ev * float(maintainable_ebitda) - net_debt
+
+# P/B works as long as Book Equity exists
+if book_equity is not None and np.isfinite(float(book_equity)) and not pd.isna(implied_pb):
+    equity_pb = implied_pb * float(book_equity)
+
+# P/E only if Earnings exists
+if maintainable_earnings is not None and np.isfinite(float(maintainable_earnings)) and not pd.isna(implied_pe):
+    equity_pe = implied_pe * float(maintainable_earnings)
+
 
 S["value_ev_ebitda"] = float(equity_ev)
 S["value_pbv"] = float(equity_pb)
