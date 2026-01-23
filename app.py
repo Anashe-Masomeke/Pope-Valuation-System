@@ -36,19 +36,6 @@ CUSTOM_STYLE = """
 .feature-box:hover { background: #e8f0ff; box-shadow: 0 0 18px #00339955; transform: translateY(-4px); }
 .feature-icon { font-size: 22px; color: #003399; margin-right: 8px; }
 
-.profile-card {
-    background: linear-gradient(135deg, #ffffffee 0%, #eef3ffdd 100%);
-    border: 1px solid #c5d3ee; border-radius: 16px; padding: 18px; text-align: center;
-    margin-bottom: 22px; box-shadow: 0 4px 12px rgba(0,45,120,0.15);
-    transition: all 0.22s ease-in-out;
-}
-.profile-card:hover { transform: translateY(-3px); box-shadow: 0 6px 18px rgba(0,60,160,0.25); }
-.profile-avatar { width: 78px; height: 78px; border-radius: 50%; border: 3px solid #003399;
-    box-shadow: 0 0 8px rgba(0,0,0,0.15); margin-bottom: 10px; }
-.profile-name { font-size: 1.05rem; font-weight: 700; color: #003399; }
-.profile-role { font-size: 0.83rem; color: #667fb0; margin-bottom: 4px; }
-.profile-company { font-size: 0.78rem; color: #3b4b6c; font-weight: 600; }
-
 .footer { text-align: center; padding: 25px; margin-top: 40px; color: #003399; font-weight: 600; }
 </style>
 """
@@ -63,22 +50,6 @@ st.markdown("<span class='top-title'>FBC Valuation Dashboard</span>", unsafe_all
 st.markdown("</div>", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.markdown("## ")
-    avatar_path = "assets/profile.png"
-    if not Path(avatar_path).exists():
-        avatar_path = "https://ui-avatars.com/api/?name=A+M&background=003399&color=fff&size=128"
-
-    st.markdown(
-        f"""
-        <div class="profile-card">
-            <img src="{avatar_path}" class="profile-avatar">
-            <div class="profile-name">ANASHE MASOMEKE</div>
-            <div class="profile-role">ENGINEER</div>
-            <div class="profile-company">FBC SECURITIES</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     st.markdown("### 📂 Navigation")
     st.markdown("""
