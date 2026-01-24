@@ -351,10 +351,6 @@ with tab1:
         width='stretch',
     )
 
-    st.subheader(f"🟩 Weighted Equity Value: **{weighted_equity:,.2f}**")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
 # -------- TAB 2: INTERACTIVE DASHBOARD --------
 with tab2:
     st.markdown('<div class="glass-panel">', unsafe_allow_html=True)
@@ -422,15 +418,15 @@ with tab2:
     st.altair_chart(chart_weighted, width='stretch')
 
     st.markdown("</div>", unsafe_allow_html=True)
-
 # ------------------------------------------------------------------------------
-# NUMBER OF SHARES & PER SHARE VALUE
+# 📌 GENERAL VALUATION SUMMARY TABLE (DOWNLOADABLE)
 # ------------------------------------------------------------------------------
-st.header("📘 Number of Shares & Per Share Value")
+st.header("📌 Valuation Summary")
 
-c_sh1, c_sh2 = st.columns([2, 3])
+# ---- Inputs (unchanged logic) ----
+c1, c2 = st.columns(2)
 
-with c_sh1:
+with c1:
     num_shares = st.number_input(
         "Number of Shares in Issue",
         value=float(st.session_state["num_shares"]),
@@ -440,75 +436,132 @@ with c_sh1:
     )
     st.session_state["num_shares"] = num_shares
 
-if num_shares > 0:
-    intrinsic_value = weighted_equity / num_shares
-else:
-    intrinsic_value = None
-
-with c_sh2:
-    iv_text = f"{intrinsic_value:,.4f}" if intrinsic_value is not None else "—"
-    st.markdown(
-        f"""
-        <div class="kpi-card">
-            <div class="kpi-title">Intrinsic Value per Share</div>
-            <div class="kpi-value">{iv_text}</div>
-            <div class="kpi-sub">Based on blended equity and shares in issue</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# ------------------------------------------------------------------------------
-# CURRENT PRICE & UPSIDE
-# ------------------------------------------------------------------------------
-st.header("📘 Current Price & Upside")
-
-c_up1, c_up2 = st.columns([2, 3])
-
-with c_up1:
+with c2:
     current_price = st.number_input(
         "Current Share Price (USD)",
         value=float(st.session_state["current_price"]),
         step=0.01,
+        format="%.2f",
         key="current_price_input",
     )
     st.session_state["current_price"] = current_price
 
-if intrinsic_value is not None and current_price > 0:
-    upside = (intrinsic_value - current_price) / current_price
-    st.session_state["upside"] = upside
-    upside_pct = upside * 100
+# ---- Calculations ----
+intrinsic_value = (weighted_equity / num_shares) if (num_shares and num_shares > 0) else np.nan
+
+if not np.isnan(intrinsic_value) and current_price > 0:
+    upside_pct = (intrinsic_value - current_price) / current_price * 100
 else:
-    upside = None
-    upside_pct = None
+    upside_pct = np.nan
+# ---- Recommendation Logic (Buy / Hold / Reduce) ----
+rec_label = "N/A"
+rec_color = "#94a3b8"  # neutral grey
+rec_reason = "Enter shares (>0) and current price (>0) to get a recommendation."
 
-with c_up2:
-    if upside_pct is not None:
-        is_upside = upside_pct >= 0
+if (not np.isnan(intrinsic_value)) and (current_price > 0) and (not np.isnan(upside_pct)):
 
-        colour = ACCENT_CYAN if is_upside else DANGER
-        label = "Upside" if is_upside else "Downside"
-        arrow = "🔺" if is_upside else "🔻"
-        sign = "+" if is_upside else ""
+    # thresholds you can adjust
+    BUY_TH = 15.0      # >= +15% upside => Buy/Accumulate
+    HOLD_LOW = -10.0   # between -10% and +10% => Hold
+    HOLD_HIGH = 10.0
 
-        st.markdown(
-            f"""
-            <div class="kpi-card" style="border-left: 6px solid {colour};">
-                <div class="kpi-title">{arrow} {label}</div>
-                <div class="kpi-value" style="color:{colour} !important;">
-                    {sign}{upside_pct:.1f}%
-                </div>
-                <div class="kpi-sub">
-                    Versus current market price of {current_price:,.2f} USD
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    if upside_pct >= BUY_TH:
+        rec_label = "🟢 BUY / ACCUMULATE"
+        rec_color = "#22c55e"
+        rec_reason = (
+            f"Intrinsic value ({intrinsic_value:,.4f}) is above market price "
+            f"({current_price:,.2f}), implying upside of +{upside_pct:.1f}%."
+        )
+    elif HOLD_LOW <= upside_pct <= HOLD_HIGH:
+        rec_label = "🟡 HOLD / FAIRLY VALUED"
+        rec_color = "#fbbf24"
+        rec_reason = (
+            f"Intrinsic value ({intrinsic_value:,.4f}) is close to market price "
+            f"({current_price:,.2f}), implying limited upside/downside ({upside_pct:+.1f}%)."
         )
     else:
-        st.info("Upside will appear once intrinsic value and current price are available.")
+        rec_label = "🔴 REDUCE / AVOID"
+        rec_color = "#f97373"
+        rec_reason = (
+            f"Intrinsic value ({intrinsic_value:,.4f}) is below market price "
+            f"({current_price:,.2f}), implying downside of {upside_pct:.1f}%."
+        )
 
+# ---- Display Recommendation (simple + clean) ----
+st.markdown(
+    f"""
+    <div class="glass-panel" style="border-left: 6px solid {rec_color}; margin-top: 12px;">
+        <div style="font-size: 0.85rem; color: #c7d4e8; text-transform: uppercase; letter-spacing: 0.06em;">
+            Recommendation
+        </div>
+        <div style="font-size: 1.25rem; font-weight: 800; color: {rec_color}; margin-top: 4px;">
+            {rec_label}
+        </div>
+        <div style="font-size: 0.9rem; color: #b4c2d6; margin-top: 6px;">
+            {rec_reason}
+        </div>
+        <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 8px;">
+            Note: Based on blended valuation assumptions; sensitive to WACC, growth, and model weights.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
+# ---- Build general summary table ----
+summary_rows = [
+    ["Weighted Equity Value", weighted_equity, "USD"],
+    ["Number of Shares", num_shares, "Shares"],
+    ["Intrinsic Value per Share", intrinsic_value, "USD"],
+    ["Current Share Price", current_price, "USD"],
+    ["Upside / Downside (%)", upside_pct, "%"],
+]
 
+df_valuation_summary = pd.DataFrame(
+    summary_rows,
+    columns=["Metric", "Value", "Unit"]
+)
 
-# (Export section intentionally omitted to avoid xlsxwriter dependency)
+# ---- Formatting for display ----
+def format_value(row):
+    if pd.isna(row["Value"]):
+        return "—"
+    if row["Unit"] == "USD" and row["Metric"] == "Intrinsic Value per Share":
+        return f"{row['Value']:,.4f}"
+    if row["Unit"] == "USD":
+        return f"{row['Value']:,.2f}"
+    if row["Unit"] == "%":
+        sign = "+" if row["Value"] >= 0 else ""
+        return f"{sign}{row['Value']:.1f}%"
+    if row["Unit"] == "Shares":
+        return f"{row['Value']:,.0f}"
+    return str(row["Value"])
+
+df_display = df_valuation_summary.copy()
+df_display["Value"] = df_display.apply(format_value, axis=1)
+
+# ---- Display table ----
+def highlight_upside(row):
+    if row["Metric"] == "Upside / Downside (%)":
+        try:
+            val = float(row["Value"].replace("%", "").replace("+", ""))
+            if val < 0:
+                return ["", "color: #f97373;", ""]
+            else:
+                return ["", "color: #22c55e;", ""]
+        except:
+            return ["", "", ""]
+    return ["", "", ""]
+
+styled_table = df_display.style.apply(highlight_upside, axis=1)
+
+st.dataframe(styled_table, width="stretch", hide_index=True)
+
+# ---- Download button ----
+csv_data = df_valuation_summary.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="⬇️ Download Valuation Summary (CSV)",
+    data=csv_data,
+    file_name="valuation_summary.csv",
+    mime="text/csv",
+)
