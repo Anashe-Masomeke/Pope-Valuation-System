@@ -1627,19 +1627,69 @@ for y in forecast_years_int:
 
 # Save to session_state
 st.session_state["dcf_profit_all"] = dcf_profit_all
+FORECAST_BLUE = "#1d4ed8"  # strong blue (tailwind blue-700)
 
+def style_forecast_columns(styler: pd.io.formats.style.Styler, forecast_cols):
+    # color ONLY the forecast year columns
+    def _blue_forecast(col_name):
+        if str(col_name) in set(map(str, forecast_cols)):
+            return f"color: {FORECAST_BLUE}; font-weight: 700;"
+        return ""
+
+    return styler.apply(
+        lambda df: pd.DataFrame(
+            {c: [_blue_forecast(c)] * len(df) for c in df.columns},
+            index=df.index
+        ),
+        axis=None
+    )
+# ---------------------------------------------------------
+# STYLING: Historical vs Forecast columns
+# ---------------------------------------------------------
+HIST_COLOR = "#111827"     # near-black / dark blue-gray
+FORECAST_COLOR = "#1d4ed8" # light blue (forecast)
+
+def style_hist_vs_forecast(styler, hist_cols, forecast_cols):
+    hist_cols = set(map(str, hist_cols))
+    forecast_cols = set(map(str, forecast_cols))
+
+    def apply_colors(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+        for c in df.columns:
+            if c in forecast_cols:
+                styles[c] = f"color: {FORECAST_COLOR}; font-weight: 700;"
+            elif c in hist_cols:
+                styles[c] = f"color: {HIST_COLOR};"
+
+        return styles
+
+    return styler.apply(apply_colors, axis=None)
 st.subheader(
     f"📘 Forecasted Income Statement ({forecast_horizon} years, USD)"
 )
+# ---------------------------------------------------------
+# DISPLAY: Historical vs Forecast styled table
+# ---------------------------------------------------------
 
-st.dataframe(
-    forecast_is.style.format(
-        {c: "{:,.0f}".format for c in forecast_is.select_dtypes(include=[np.number]).columns},
-        na_rep="",
-    ),
-    width='stretch',
+fmt_map = {
+    c: "{:,.0f}".format
+    for c in forecast_is.select_dtypes(include=[np.number]).columns
+}
+
+styled_is = (
+    forecast_is.style
+        .format(fmt_map, na_rep="")
 )
 
+# ✅ Apply Historical vs Forecast coloring
+styled_is = style_hist_vs_forecast(
+    styled_is,
+    hist_cols=year_cols_is,   # historical years
+    forecast_cols=forecast_cols
+)
+
+st.dataframe(styled_is, width='stretch')
 
 # Extract EBITDA row for forecast years
 if isinstance(ebitda_idx, int):
@@ -1764,7 +1814,6 @@ if ca_idx_list and cl_idx_list:
             "Working Capital (CA-CL)": "{:,.0f}",
         }),
         width='stretch'    )
-
     # 2️⃣ WC% OF SALES
     st.markdown("### **Historical Working Capital as % of Sales**")
 
@@ -1773,7 +1822,8 @@ if ca_idx_list and cl_idx_list:
     wc_vals_hist = wc_hist[common_hist].astype(float).values
     rev_vals_hist = revenue_row[common_hist].values.flatten().astype(float)
 
-    wc_percent_hist = wc_vals_hist / rev_vals_hist
+    # avoid divide-by-zero warnings
+    wc_percent_hist = np.where(rev_vals_hist != 0, wc_vals_hist / rev_vals_hist, 0.0)
 
     df_wc_pct = pd.DataFrame({
         "Year": common_hist,
@@ -1782,26 +1832,71 @@ if ca_idx_list and cl_idx_list:
         "WC % of Sales": wc_percent_hist,
     })
 
-    st.dataframe(
-        df_wc_pct.style.format({
-            "Working Capital": "{:,.0f}".format,
-            "Revenue": "{:,.0f}".format,
-            "WC % of Sales": "{:.2%}".format,
-        }),
-        width='stretch'    )
+    # ---------------------------------------------------------
+    # ✅ ANALYST FILTER (Include/Exclude each WC% year)
+    # ---------------------------------------------------------
+    # session store: which years are included
+    if "dcf_wc_include_years" not in st.session_state:
+        st.session_state["dcf_wc_include_years"] = {str(y): True for y in common_hist}
 
+    # ensure new years added automatically
+    for y in common_hist:
+        st.session_state["dcf_wc_include_years"].setdefault(str(y), True)
+
+    df_wc_pct_editor = df_wc_pct.copy()
+    df_wc_pct_editor["Include"] = [bool(st.session_state["dcf_wc_include_years"].get(str(y), True)) for y in
+                                   common_hist]
+
+    edited_wc = st.data_editor(
+        df_wc_pct_editor,
+        width="stretch",
+        hide_index=True,
+        disabled=["Year", "Working Capital", "Revenue", "WC % of Sales"],
+        column_config={
+            "Include": st.column_config.CheckboxColumn("Include",
+                                                       help="Tick to include this year's WC% in the average"),
+            "Working Capital": st.column_config.NumberColumn("Working Capital", format="%,d"),
+            "Revenue": st.column_config.NumberColumn("Revenue", format="%,d"),
+            "WC % of Sales": st.column_config.NumberColumn("WC % of Sales", format="%.2f%%"),
+        },
+        key="dcf_wc_pct_editor"
+    )
+
+    # write back checkbox state to session
+    st.session_state["dcf_wc_include_years"] = {
+        str(row["Year"]): bool(row["Include"])
+        for _, row in edited_wc.iterrows()
+    }
+
+    # ---------------------------------------------------------
     # 3️⃣ WC% OF SALES — USER CHOICE (Average vs Most Recent) [PERSISTENT]
-    wc_percent_array = wc_percent_hist.copy()
-    mask_valid = (wc_percent_array > -5) & (wc_percent_array < 5)
+    #     ✅ Average uses ONLY included years
+    #     ✅ Most recent uses MOST RECENT INCLUDED year
+    # ---------------------------------------------------------
+    include_mask = edited_wc["Include"].astype(bool).values
+    wc_percent_array = edited_wc["WC % of Sales"].astype(float).values
+
+    # sanity filter + include filter
+    mask_valid = (wc_percent_array > -5) & (wc_percent_array < 5) & include_mask
     wc_percent_clean = wc_percent_array[mask_valid]
 
-    # Compute BOTH candidates
     wc_percent_mean = float(np.mean(wc_percent_clean)) if len(wc_percent_clean) else 0.0
 
-    last_year = common_hist[-1]
-    last_wc = float(wc_hist[last_year])
-    last_rev = float(revenue_row[last_year].values[0])
-    wc_percent_last = (last_wc / last_rev) if last_rev != 0 else 0.0
+    # most recent INCLUDED year
+    included_years = edited_wc.loc[edited_wc["Include"] == True, "Year"].astype(str).tolist()
+
+    if included_years:
+        last_year = included_years[-1]
+        last_wc = float(wc_hist[last_year])
+        last_rev = float(revenue_row[last_year].values[0])
+        wc_percent_last = (last_wc / last_rev) if last_rev != 0 else 0.0
+    else:
+        # if user unticks all, fallback safely
+        last_year = common_hist[-1]
+        last_wc = float(wc_hist[last_year])
+        last_rev = float(revenue_row[last_year].values[0])
+        wc_percent_last = (last_wc / last_rev) if last_rev != 0 else 0.0
+        st.warning("⚠️ You excluded all years. Using the last available year as fallback for 'Most recent'.")
 
     st.markdown("### ✅ Working Capital Assumption (WC % of Sales)")
 
@@ -2550,17 +2645,51 @@ st.dataframe(
     df_term.style.format(fmt_term, na_rep=""),
     width='stretch',
 )
-
 # ---------------------------------------------------------
-# SUMMARY
+# SUMMARY (STYLED TABLE)
 # ---------------------------------------------------------
 st.subheader("📌 Valuation Summary")
+summary_rows = [
+    ("Enterprise Value (EV)", enterprise_value, "USD"),
+    ("Net Debt", net_debt, "USD"),
+    ("Equity Value", equity_value, "USD"),
+    ("WACC", wacc * 100, "%"),
+    ("Terminal Growth Rate (g)", g * 100, "%"),
+]
+df_summary = pd.DataFrame(summary_rows, columns=["Metric", "Value", "Unit"])
+def _fmt_row(v, unit):
+    if pd.isna(v):
+        return ""
+    if unit == "USD":
+        return f"{v:,.0f}"
+    if unit == "%":
+        return f"{v:.2f}%"
+    return str(v)
 
-c_sum1, c_sum2, c_sum3 = st.columns(3)
-with c_sum1:
-    st.metric("Enterprise Value (EV)", f"{enterprise_value:,.0f}")
-    st.metric("Net Debt", f"{net_debt:,.0f}")
-with c_sum2:
-    st.metric("Equity Value", f"{equity_value:,.0f}")
-    st.metric("WACC", f"{wacc*100:.2f}%")
-    st.metric("Terminal Growth Rate", f"{g*100:.2f}%")
+df_summary["Value"] = [
+    _fmt_row(v, u) for v, u in zip(df_summary["Value"], df_summary["Unit"])
+]
+styled_summary = (
+    df_summary[["Metric", "Value"]]
+    .style
+    .set_properties(**{
+        "font-size": "15px",
+        "padding": "10px",
+    })
+    .set_table_styles([
+        {"selector": "thead th", "props": [
+            ("background-color", "#071426"),
+            ("color", "white"),
+            ("font-weight", "700"),
+            ("text-align", "left"),
+            ("padding", "12px"),
+        ]},
+        {"selector": "tbody td", "props": [
+            ("border-bottom", "1px solid rgba(0,0,0,0.08)"),
+        ]},
+        {"selector": "tbody tr:hover", "props": [
+            ("background-color", "rgba(0,51,153,0.06)"),
+        ]},
+    ])
+)
+st.dataframe(styled_summary, width="stretch", hide_index=True)
