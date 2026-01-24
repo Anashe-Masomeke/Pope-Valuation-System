@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -652,13 +653,6 @@ else:
         )
         S["comp_use_timing_eb"] = use_timing_eb
 
-        use_first_year_only = st.checkbox(
-            "Apply timing ONLY to the first year?",
-            value=bool(S.get("comp_use_first_year_only_eb", False)),
-            key="comp_use_first_year_only_eb_checkbox",
-        )
-        S["comp_use_first_year_only_eb"] = use_first_year_only
-
         c_eb1, c_eb2 = st.columns(2)
         with c_eb1:
             eb_start_year = st.number_input(
@@ -696,8 +690,6 @@ else:
 
             if not use_timing_eb:
                 timing_val = 1.0
-            elif use_first_year_only:
-                timing_val = base_timing if idx == 0 else 1.0
             else:
                 timing_val = base_timing + idx
 
@@ -780,6 +772,40 @@ else:
         S.setdefault("comp_np_end_year", np_max_year)
         S.setdefault("comp_np_weights", {})
         S.setdefault("comp_use_timing_np", True)
+        # ---------------------------------------------------------
+        # AUTO-SYNC Earnings weighting from EBITDA weighting
+        # (same years + same weights)
+        # ---------------------------------------------------------
+        S.setdefault("comp_sync_np_to_eb", True)
+
+        sync_np_to_eb = st.checkbox(
+            "Auto-use the SAME years & weights as EBITDA (recommended)",
+            value=bool(S.get("comp_sync_np_to_eb", True)),
+            key="comp_sync_np_to_eb_checkbox",
+        )
+        S["comp_sync_np_to_eb"] = bool(sync_np_to_eb)
+
+        if sync_np_to_eb:
+            # Copy start/end year from EBITDA section
+            eb_sy = int(S.get("comp_eb_start_year", np_min_year))
+            eb_ey = int(S.get("comp_eb_end_year", np_max_year))
+
+            # Clamp within NP available year range
+            eb_sy = max(eb_sy, np_min_year)
+            eb_ey = min(eb_ey, np_max_year)
+
+            S["comp_np_start_year"] = eb_sy
+            S["comp_np_end_year"] = eb_ey
+
+            # Copy per-year weights from EBITDA section
+            eb_w = S.get("comp_eb_weights", {}) or {}
+            S["comp_np_weights"] = {str(y): float(eb_w.get(str(y), 0.0)) for y in range(eb_sy, eb_ey + 1)}
+
+            # IMPORTANT: also prefill the Earnings weight widgets (so UI matches)
+            for y in range(eb_sy, eb_ey + 1):
+                S[f"comp_np_weight_{y}"] = float(S["comp_np_weights"].get(str(y), 0.0))
+
+            st.info("✅ Earnings years & weights copied from EBITDA automatically.")
 
         use_timing_np = st.checkbox(
             "Apply timing effect from DCF to Earnings?",
@@ -787,38 +813,53 @@ else:
             key="comp_use_timing_np_checkbox",
         )
         S["comp_use_timing_np"] = use_timing_np
+        # Show locked years when sync is ON, otherwise allow manual selection
+        if sync_np_to_eb:
+            np_start_year = int(S["comp_np_start_year"])
+            np_end_year = int(S["comp_np_end_year"])
 
-        use_first_year_only_np = st.checkbox(
-            "Apply timing ONLY to the first year? (Earnings)",
-            value=bool(S.get("comp_use_first_year_only_np", False)),
-            key="comp_use_first_year_only_np_checkbox",
-        )
-        S["comp_use_first_year_only_np"] = use_first_year_only_np
+            c_np1, c_np2 = st.columns(2)
+            with c_np1:
+                st.number_input(
+                    "NP Start Year (auto from EBITDA)",
+                    value=int(np_start_year),
+                    disabled=True,
+                    key="np_start_locked",
+                )
+            with c_np2:
+                st.number_input(
+                    "NP End Year (auto from EBITDA)",
+                    value=int(np_end_year),
+                    disabled=True,
+                    key="np_end_locked",
+                )
 
-        c_np1, c_np2 = st.columns(2)
-        with c_np1:
-            np_start_year = st.number_input(
-                "NP Start Year",
-                value=int(S["comp_np_start_year"]),
-                step=1,
-                key="comp_np_start_year_input"
-            )
-        with c_np2:
-            np_end_year = st.number_input(
-                "NP End Year",
-                value=int(S["comp_np_end_year"]),
-                step=1,
-                key="comp_np_end_year_input"
-            )
+        else:
+            c_np1, c_np2 = st.columns(2)
+            with c_np1:
+                np_start_year = st.number_input(
+                    "NP Start Year",
+                    value=int(S.get("comp_np_start_year", np_min_year)),
+                    step=1,
+                    key="comp_np_start_year_input"
+                )
+            with c_np2:
+                np_end_year = st.number_input(
+                    "NP End Year",
+                    value=int(S.get("comp_np_end_year", np_max_year)),
+                    step=1,
+                    key="comp_np_end_year_input"
+                )
 
-        np_start_year = int(max(np_start_year, np_min_year))
-        np_end_year = int(min(np_end_year, np_max_year))
-        if np_end_year < np_start_year:
-            st.error("❌ NP End Year cannot be before Start Year.")
-            st.stop()
+            # clamp
+            np_start_year = int(max(np_start_year, np_min_year))
+            np_end_year = int(min(np_end_year, np_max_year))
+            if np_end_year < np_start_year:
+                st.error("❌ NP End Year cannot be before Start Year.")
+                st.stop()
 
-        S["comp_np_start_year"] = np_start_year
-        S["comp_np_end_year"] = np_end_year
+            S["comp_np_start_year"] = np_start_year
+            S["comp_np_end_year"] = np_end_year
 
         selected_np_years = list(range(np_start_year, np_end_year + 1))
         st.subheader("Earnings Weighting")
@@ -828,12 +869,10 @@ else:
 
         for idx, yr in enumerate(selected_np_years):
             np_val = float(dcf_np_all.get(str(yr), 0.0))
-            default_w = float(S["comp_np_weights"].get(str(yr), 0.0))
+            default_w = float(S.get(f"comp_np_weight_{yr}", S["comp_np_weights"].get(str(yr), 0.0)))
 
             if not use_timing_np:
                 timing_val = 1.0
-            elif use_first_year_only_np:
-                timing_val = base_timing if idx == 0 else 1.0
             else:
                 timing_val = base_timing + idx
 
@@ -904,21 +943,26 @@ net_debt_default = float(S.get("net_debt", 0.0))
 book_equity = st.number_input(
     "Book Equity (USD)",
     value=book_equity_default,
-    step=0.01,
-    format="%.2f",
+    step=1000.0,
+    format="%.2f",   # ⚠ no commas here
     key="book_equity_input"
 )
 S["book_equity"] = float(book_equity)
 
+# Pretty display with commas (read-only)
+st.caption(f"💰 Book Equity: **{book_equity:,.2f} USD**")
+
 net_debt = st.number_input(
     "Net Debt (USD)",
     value=net_debt_default,
-    step=0.01,
-    format="%.2f",
+    step=1000.0,
+    format="%.2f",   # ⚠ no commas here
     key="net_debt_input"
 )
 S["net_debt"] = float(net_debt)
 
+# Pretty display with commas (read-only)
+st.caption(f"💳 Net Debt: **{net_debt:,.2f} USD**")
 
 # =========================================================
 # STEP 6 — FINAL EQUITY VALUES
