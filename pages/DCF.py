@@ -4,6 +4,10 @@ import numpy as np
 from pathlib import Path
 from datetime import date
 import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
 
 from pathlib import Path
 
@@ -1751,6 +1755,7 @@ else:
     )
 # After building rev_forecast dict
 st.session_state["dcf_rev_forecast"] = {str(y): float(rev_forecast[y]) for y in forecast_years_int}
+st.session_state["forecast_is_df"] = forecast_is.copy()
 
 # ---------------------------------------------------------
 # CAPITAL STRUCTURE FROM BS: Total Debt, Cash, CA, CL
@@ -2645,6 +2650,9 @@ st.dataframe(
     df_term.style.format(fmt_term, na_rep=""),
     width='stretch',
 )
+st.session_state["df_dcf_export"] = df_dcf.copy()
+st.session_state["rd"] = float(rd)  # so the download page can use Rd
+
 # ---------------------------------------------------------
 # SUMMARY (STYLED TABLE)
 # ---------------------------------------------------------
@@ -2693,3 +2701,715 @@ styled_summary = (
     ])
 )
 st.dataframe(styled_summary, width="stretch", hide_index=True)
+# =========================================================
+# ✅ FULL DCF EXCEL EXPORT (FULL INCOME STATEMENT + FORMULAS)
+# Paste AFTER: st.dataframe(styled_summary, ...)
+# =========================================================
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
+def _excel_col(n: int) -> str:
+    return get_column_letter(n)
+
+def build_full_dcf_excel_model(
+    is_df,                 # original cleaned historical IS (optional use)
+    forecast_is_df,        # your forecast_is dataframe (has Item + hist + forecast cols)
+    year_cols_is,          # historical year columns (strings)
+    forecast_years_int,    # forecast years int list
+    forecast_cols,         # forecast cols strings
+    # mapping indices (ints or None)
+    rev_idx, cos_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, tax_idx, np_idx,
+    # computed forecast logic inputs
+    growth_mode,           # "Uniform..." or "Different..."
+    yearly_g_dict,         # dict {year_int: growth_decimal}
+    avg_g,                 # decimal
+    avg_tax_ratio,         # decimal (negative usually)
+    avg_gp_margin,         # decimal or None
+    cos_ratio,             # decimal or 0.0
+    # working capital inputs
+    wc_percent_used,       # decimal (WC% of sales used)
+    last_wc_hist_value,    # last historical WC value used as starting point
+    # DCF inputs
+        discount_periods_n,  # array/list
+        dep_forecast_vals,  # array/list (same length as forecast years)
+        capex_forecast_vals,  # array/list (same length as forecast years)
+        wacc, tax, g, net_debt,
+        rf=rf, mrp=mrp,
+):
+    wb = Workbook()
+
+    # -----------------------------
+    # Theme (FBC-ish)
+    # -----------------------------
+    BLUE = "003399"
+    GOLD = "F5B400"
+    DARK = "071426"
+    LIGHT_BG = "F7FAFF"
+    GRID = "D9E2EF"
+
+    thin = Side(style="thin", color=GRID)
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def style_title(ws, title, end_col=8):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
+        c = ws.cell(1, 1, title)
+        c.font = Font(bold=True, color="FFFFFF", size=14)
+        c.fill = PatternFill("solid", fgColor=DARK)
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[1].height = 26
+
+    def style_header_row(ws, r, c1, c2):
+        for c in range(c1, c2 + 1):
+            cell = ws.cell(r, c)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor=BLUE)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border_all
+        ws.row_dimensions[r].height = 20
+
+    def style_body(ws, r1, r2, c1, c2, money_cols=None, pct_cols=None, dec_cols=None):
+        money_cols = set(money_cols or [])
+        pct_cols = set(pct_cols or [])
+        dec_cols = set(dec_cols or [])
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                cell = ws.cell(r, c)
+                cell.border = border_all
+                cell.alignment = Alignment(vertical="center")
+                if r % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor=LIGHT_BG)
+                if c in money_cols:
+                    cell.number_format = '#,##0'
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                if c in pct_cols:
+                    cell.number_format = '0.00%'
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                if c in dec_cols:
+                    cell.number_format = '0.000'
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+
+    # =========================================================
+    # 1) PARAMETERS SHEET (assumptions + ratios + growth)
+    # =========================================================
+    wsP = wb.active
+    wsP.title = "Parameters"
+
+    all_years = list(map(str, year_cols_is)) + [str(y) for y in forecast_years_int]
+    n_fore = len(forecast_years_int)
+
+    style_title(wsP, "DCF Parameters & Assumptions", end_col=8)
+
+    wsP["A3"] = "Key Inputs"
+    wsP["A3"].font = Font(bold=True)
+
+    key_rows = [
+        ("WACC",
+         "=((1/(1+Inputs!$F$13))*(Inputs!$F$4 + (Inputs!$F$6*(1+(1-Inputs!$F$7)*Inputs!$F$13))*Inputs!$F$5)) + ((Inputs!$F$13/(1+Inputs!$F$13))*Inputs!$F$9*(1-Inputs!$F$7))",
+         "decimal"),
+        ("Tax rate (DCF)", "=Inputs!$F$7", "decimal"),
+        ("Terminal growth (g)", "=Inputs!$F$8", "decimal"),
+        ("Net debt", "=(Inputs!$F$10-Inputs!$F$11)", "money"),
+        ("Income tax ratio (IS): Tax/PBT", avg_tax_ratio, "decimal"),
+        ("Revenue growth mode", growth_mode, "text"),
+        ("Uniform growth (if used)", avg_g, "decimal"),
+        ("GP margin (if used)", (avg_gp_margin if avg_gp_margin is not None else 0.0), "decimal"),
+        ("COS ratio (if used)", cos_ratio, "decimal"),
+        ("WC % of Sales used", wc_percent_used, "decimal"),
+        ("Last historical WC used", last_wc_hist_value, "money"),
+    ]
+
+    start_r = 5
+    wsP["A4"], wsP["B4"], wsP["C4"] = "Item", "Value", "Format"
+    style_header_row(wsP, 4, 1, 3)
+
+    for i, (k, v, kind) in enumerate(key_rows):
+        r = start_r + i
+        wsP.cell(r, 1, k)
+        if kind == "text":
+            wsP.cell(r, 2, str(v))
+        else:
+            if isinstance(v, str) and v.startswith("="):
+                wsP.cell(r, 2, v)  # Excel formula
+            else:
+                wsP.cell(r, 2, float(v))
+        wsP.cell(r, 3, kind)
+
+        for c in range(1, 4):
+            wsP.cell(r, c).border = border_all
+
+        if kind == "money":
+            wsP.cell(r, 2).number_format = '#,##0'
+        elif kind == "decimal":
+            wsP.cell(r, 2).number_format = '0.00%'
+
+    # Named (fixed) key cells for formulas (we'll reference these)
+    # WACC = B5, TaxDCF = B6, g = B7, NetDebt = B8, avg_tax_ratio = B9, avg_g = B11, gp_margin=B12, cos_ratio=B13, wc_pct=B14, last_wc=B15
+    # (Note: these row numbers depend on key_rows length; we keep them stable by not changing order.)
+
+    wsP.column_dimensions["A"].width = 30
+    wsP.column_dimensions["B"].width = 22
+    wsP.column_dimensions["C"].width = 12
+
+    # ---- Growth table (per forecast year) ----
+    growth_table_r = start_r + len(key_rows) + 2
+    wsP.cell(growth_table_r, 1, "Forecast Growth Rates (editable)")
+    wsP.cell(growth_table_r, 1).font = Font(bold=True)
+
+    hdr = growth_table_r + 1
+    wsP.cell(hdr, 1, "Year")
+    wsP.cell(hdr, 2, "Growth (decimal)")
+    style_header_row(wsP, hdr, 1, 2)
+
+    for j, y in enumerate(forecast_years_int):
+        r = hdr + 1 + j
+        wsP.cell(r, 1, int(y))
+        wsP.cell(r, 2, float(yearly_g_dict.get(y, avg_g)))
+        wsP.cell(r, 2).number_format = "0.00%"
+        wsP.cell(r, 1).border = border_all
+        wsP.cell(r, 2).border = border_all
+
+    # ---- Ratio table (each IS row as % of revenue) ----
+    # We’ll store ratio for EVERY row (except protected totals)
+    ratio_table_r = hdr + 1 + n_fore + 2
+    wsP.cell(ratio_table_r, 1, "Income Statement Row Ratios (Row / Revenue) (editable)")
+    wsP.cell(ratio_table_r, 1).font = Font(bold=True)
+
+    rrh = ratio_table_r + 1
+    wsP.cell(rrh, 1, "IS Row #")
+    wsP.cell(rrh, 2, "Item")
+    wsP.cell(rrh, 3, "Ratio to Revenue")
+    style_header_row(wsP, rrh, 1, 3)
+
+    # Compute ratios from historical (same as your logic)
+    rev_hist_vals = forecast_is_df.iloc[rev_idx][year_cols_is].values.astype(float)
+
+    def ratio_to_rev_hist(row_vals, rev_vals):
+        import numpy as np
+        mask = (~np.isnan(row_vals)) & (~np.isnan(rev_vals)) & (rev_vals != 0)
+        if not mask.any():
+            return 0.0
+        ratios = row_vals[mask] / rev_vals[mask]
+        ratios = ratios[(ratios > -5) & (ratios < 5)]
+        return float(np.mean(ratios)) if len(ratios) else 0.0
+
+    protected = set([rev_idx])
+    for x in [gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx]:
+        if isinstance(x, int):
+            protected.add(x)
+
+    # Also protect tax row from ratio forecast because it’s derived from PBT ratio
+    if isinstance(tax_idx, int):
+        protected.add(tax_idx)
+
+    rr = rrh + 1
+    for i in range(len(forecast_is_df)):
+        item = str(forecast_is_df.iloc[i]["Item"])
+        wsP.cell(rr, 1, int(i))
+        wsP.cell(rr, 2, item)
+
+        if i in protected:
+            ratio = 0.0
+        else:
+            row_hist = forecast_is_df.iloc[i][year_cols_is].values.astype(float)
+            ratio = ratio_to_rev_hist(row_hist, rev_hist_vals)
+
+        wsP.cell(rr, 3, float(ratio))
+        wsP.cell(rr, 3).number_format = "0.0000"
+        for c in range(1, 4):
+            wsP.cell(rr, c).border = border_all
+        rr += 1
+
+    wsP.freeze_panes = "A5"
+
+    # =========================================================
+    # 2) FULL INCOME STATEMENT SHEET (HIST + FORECAST FORMULAS)
+    # =========================================================
+    wsIS = wb.create_sheet("IncomeStatement")
+
+    end_col = 2 + len(all_years)  # A=Item, B=Type, then years start C
+    style_title(wsIS, "Forecast Income Statement (Full, with formulas)", end_col=end_col)
+
+    # header row
+    hdr_row = 3
+    wsIS.cell(hdr_row, 1, "Item")
+    wsIS.cell(hdr_row, 2, "Section")
+    for j, y in enumerate(all_years):
+        wsIS.cell(hdr_row, 3 + j, str(y))
+    style_header_row(wsIS, hdr_row, 1, end_col)
+
+    base_row = hdr_row + 1
+
+    # Write items + historical VALUES
+    for i in range(len(forecast_is_df)):
+        r = base_row + i
+        wsIS.cell(r, 1, str(forecast_is_df.iloc[i]["Item"]))
+        wsIS.cell(r, 2, "IS")
+        # historical values
+        for j, y in enumerate(year_cols_is):
+            wsIS.cell(r, 3 + j, float(forecast_is_df.iloc[i][y]) if forecast_is_df.iloc[i][y] == forecast_is_df.iloc[i][y] else None)
+
+    # Column widths
+    wsIS.column_dimensions["A"].width = 42
+    wsIS.column_dimensions["B"].width = 10
+    for j in range(len(all_years)):
+        wsIS.column_dimensions[_excel_col(3 + j)].width = 14
+
+    # Helpful references
+    # Revenue row in IS sheet = base_row + rev_idx
+    rev_row_excel = base_row + rev_idx
+
+    # Growth table location in Parameters:
+    # We wrote growth table at:
+    # growth_table_r = start_r + len(key_rows) + 2
+    # hdr = growth_table_r + 1
+    # data starts hdr+1
+    growth_data_start = (start_r + len(key_rows) + 2) + 2  # hdr+1
+    # Growth for forecast year k is in Parameters!B(growth_data_start + k)
+
+    # Ratio table start:
+    ratio_hdr_row = (start_r + len(key_rows) + 2) + 2 + n_fore + 2 + 1
+    ratio_data_start = ratio_hdr_row + 1  # first ratio row
+
+    # Key input cells fixed:
+    # avg_tax_ratio in Parameters is at B(start_r + 4) because key_rows begins at start_r
+    # Let's compute: avg_tax_ratio is 5th item in key_rows -> row = start_r + 4
+    avg_tax_ratio_cell = f"Parameters!$B${start_r + 4}"
+    gp_margin_cell = f"Parameters!$B${start_r + 7}"      # "GP margin (if used)"
+    cos_ratio_cell = f"Parameters!$B${start_r + 8}"      # "COS ratio (if used)"
+
+    # Determine COS/GP case like your app did
+    has_cos = isinstance(cos_idx, int)
+    has_gp = isinstance(gp_idx, int)
+
+    # Add forecast formulas for each forecast year column
+    for f_i, y_int in enumerate(forecast_years_int):
+        col = 3 + len(year_cols_is) + f_i
+        colL = _excel_col(col)
+
+        # Revenue formula:
+        # first forecast year = last historical year cell * (1 + growth_for_year)
+        if f_i == 0:
+            prev_col = 3 + len(year_cols_is) - 1
+            prevL = _excel_col(prev_col)
+            growth_cell = f"Parameters!$B${growth_data_start + f_i}"
+            wsIS[f"{colL}{rev_row_excel}"] = f"={prevL}{rev_row_excel}*(1+{growth_cell})"
+        else:
+            prevL = _excel_col(col - 1)
+            growth_cell = f"Parameters!$B${growth_data_start + f_i}"
+            wsIS[f"{colL}{rev_row_excel}"] = f"={prevL}{rev_row_excel}*(1+{growth_cell})"
+
+        # COS / GP special handling (match your logic)
+        if has_gp and has_cos and avg_gp_margin is not None:
+            # COS = sign * Revenue*(1-gp_margin)
+            cos_row_excel = base_row + cos_idx
+            gp_row_excel = base_row + gp_idx
+            # Determine sign from last historical COS value (same as your code)
+            last_cos_hist = float(forecast_is_df.iloc[cos_idx][year_cols_is[-1]]) if forecast_is_df.iloc[cos_idx][year_cols_is[-1]] == forecast_is_df.iloc[cos_idx][year_cols_is[-1]] else 0.0
+            cos_sign = -1 if last_cos_hist < 0 else 1
+            wsIS[f"{colL}{cos_row_excel}"] = f"={cos_sign}*{colL}{rev_row_excel}*(1-{gp_margin_cell})"
+            # GP = Revenue + COS
+            wsIS[f"{colL}{gp_row_excel}"] = f"={colL}{rev_row_excel}+{colL}{cos_row_excel}"
+
+        elif has_gp and (not has_cos) and avg_gp_margin is not None:
+            # GP = Revenue * gp_margin
+            gp_row_excel = base_row + gp_idx
+            wsIS[f"{colL}{gp_row_excel}"] = f"={colL}{rev_row_excel}*{gp_margin_cell}"
+
+        elif has_cos and (not has_gp):
+            # COS = Revenue * cos_ratio
+            cos_row_excel = base_row + cos_idx
+            wsIS[f"{colL}{cos_row_excel}"] = f"={colL}{rev_row_excel}*{cos_ratio_cell}"
+
+        # For every other non-protected row: = Revenue * ratio(from Parameters table)
+        for i in range(len(forecast_is_df)):
+            r = base_row + i
+
+            # Skip revenue (already formula)
+            if i == rev_idx:
+                continue
+
+            # Totals (computed later via chain)
+            if i in [gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx] and isinstance(i, int):
+                continue
+
+            # Tax is derived from PBT, handle later
+            if isinstance(tax_idx, int) and i == tax_idx:
+                continue
+
+            # Skip COS/GP if already set in special case
+            if has_gp and has_cos and avg_gp_margin is not None and isinstance(cos_idx, int) and i == cos_idx:
+                continue
+            if has_gp and has_cos and avg_gp_margin is not None and isinstance(gp_idx, int) and i == gp_idx:
+                continue
+            if has_gp and (not has_cos) and avg_gp_margin is not None and isinstance(gp_idx, int) and i == gp_idx:
+                continue
+            if has_cos and (not has_gp) and isinstance(cos_idx, int) and i == cos_idx:
+                continue
+
+            # ratio row in Parameters table = ratio_data_start + i
+            ratio_cell = f"Parameters!$C${ratio_data_start + i}"
+            wsIS[f"{colL}{r}"] = f"={colL}{rev_row_excel}*{ratio_cell}"
+
+        # Totals chain (match your "safe_sum" which includes prev total row)
+        chain = [("REV", rev_idx), ("GP", gp_idx), ("EBITDA", ebitda_idx), ("OP", op_idx), ("PBT", pbt_idx), ("NP", np_idx)]
+        chain = [(nm, idx) for nm, idx in chain if isinstance(idx, int)]
+        chain = sorted(chain, key=lambda x: x[1])
+
+        # If GP was already computed by Revenue+COS, we skip overwriting GP (matches your code)
+        for j in range(1, len(chain)):
+            prev_nm, prev_idx0 = chain[j - 1]
+            cur_nm, cur_idx0 = chain[j]
+            prev_r = base_row + prev_idx0
+            cur_r = base_row + cur_idx0
+
+            if cur_nm == "GP" and has_cos and isinstance(gp_idx, int) and isinstance(cos_idx, int):
+                continue
+
+            # SUM from prev_total_row to row above current total (inclusive of prev total)
+            wsIS[f"{colL}{cur_r}"] = f"=SUM({colL}{prev_r}:{colL}{cur_r-1})"
+
+        # Tax = PBT * avg_tax_ratio
+        if isinstance(tax_idx, int) and isinstance(pbt_idx, int):
+            tax_r = base_row + tax_idx
+            pbt_r = base_row + pbt_idx
+            wsIS[f"{colL}{tax_r}"] = f"={colL}{pbt_r}*{avg_tax_ratio_cell}"
+
+        # NP = PBT + Tax + sum(lines between Tax and NP)
+        if isinstance(np_idx, int) and isinstance(pbt_idx, int):
+            np_r = base_row + np_idx
+            pbt_r = base_row + pbt_idx
+            if isinstance(tax_idx, int):
+                tax_r = base_row + tax_idx
+                if (tax_r + 1) <= (np_r - 1):
+                    wsIS[f"{colL}{np_r}"] = f"={colL}{pbt_r}+{colL}{tax_r}+SUM({colL}{tax_r+1}:{colL}{np_r-1})"
+                else:
+                    wsIS[f"{colL}{np_r}"] = f"={colL}{pbt_r}+{colL}{tax_r}"
+            else:
+                wsIS[f"{colL}{np_r}"] = f"={colL}{pbt_r}"
+
+    # Format styling (money)
+    money_cols = list(range(3, end_col + 1))
+    style_body(wsIS, base_row, base_row + len(forecast_is_df) - 1, 1, end_col, money_cols=money_cols)
+
+    wsIS.freeze_panes = f"C{base_row}"
+
+    # =========================================================
+    # 3) WORKING CAPITAL SHEET (FORMULAS)
+    # =========================================================
+    wsWC = wb.create_sheet("WorkingCapital")
+    style_title(wsWC, "Working Capital (Forecast & ΔWC)", end_col=8)
+
+    wsWC["A3"], wsWC["B3"], wsWC["C3"], wsWC["D3"] = "Year", "Revenue", "WC (Rev*WC%)", "ΔWC (Old-New)"
+    style_header_row(wsWC, 3, 1, 4)
+
+    # revenue references from IncomeStatement revenue row
+    # Revenue year col letters in IncomeStatement: historical + forecast
+    # We'll only fill forecast years for WC forecast (like your DCF uses)
+    wc_pct_cell = f"Parameters!$B${start_r + 9}"      # "WC % of Sales used"
+    last_wc_cell = f"Parameters!$B${start_r + 10}"    # "Last historical WC used"
+
+    r0 = 4
+    for i, y in enumerate(forecast_years_int):
+        r = r0 + i
+        wsWC.cell(r, 1, int(y))
+
+        # Revenue cell in IncomeStatement sheet
+        # Column index for this forecast year in IS:
+        col_index_is = 3 + len(year_cols_is) + i
+        colL_is = _excel_col(col_index_is)
+        wsWC.cell(r, 2, f"=IncomeStatement!{colL_is}{rev_row_excel}")
+
+        # WC = Revenue * WC%
+        wsWC.cell(r, 3, f"=B{r}*{wc_pct_cell}")
+
+        # ΔWC = Old - New ; Old is last hist for first year, else previous WC
+        if i == 0:
+            wsWC.cell(r, 4, f"={last_wc_cell}-C{r}")
+        else:
+            wsWC.cell(r, 4, f"=C{r-1}-C{r}")
+
+    wsWC.column_dimensions["A"].width = 10
+    wsWC.column_dimensions["B"].width = 16
+    wsWC.column_dimensions["C"].width = 18
+    wsWC.column_dimensions["D"].width = 18
+
+    style_body(wsWC, 4, 4 + n_fore - 1, 1, 4, money_cols=[2, 3, 4])
+    wsWC.freeze_panes = "A4"
+    # =========================================================
+    # 3) INPUTS SHEET (Dep + Capex values exactly as system used)
+    # =========================================================
+    wsI = wb.create_sheet("Inputs")
+    style_title(wsI, "Model Inputs (Used by DCF)", end_col=6)
+
+    wsI["A3"], wsI["B3"], wsI["C3"] = "Year", "Depreciation (forecast)", "Capex (forecast)"
+    style_header_row(wsI, 3, 1, 3)
+    # -----------------------------
+    # DCF Inputs used (exactly from system)
+    # -----------------------------
+    wsI["E3"], wsI["F3"] = "DCF Input", "Value"
+    style_header_row(wsI, 3, 5, 6)
+
+    # fixed row cells we will reference from Parameters formulas
+    wsI["E4"], wsI["F4"] = "Risk-free rate (RF)", float(rf)
+    wsI["E5"], wsI["F5"] = "Market risk premium (MRP)", float(mrp)
+    wsI["E6"], wsI["F6"] = "Unlevered beta (βu)", float(st.session_state.get("dcf_unlevered_beta", 1.0))
+    wsI["E7"], wsI["F7"] = "Tax rate (T)", float(tax)
+    wsI["E8"], wsI["F8"] = "Terminal growth (g)", float(g)
+    wsI["E9"], wsI["F9"] = "Cost of debt (Rd)", float(st.session_state.get("rd", 0.0))
+    wsI["E10"], wsI["F10"] = "Total Debt", float(st.session_state.get("total_debt", 0.0))
+    wsI["E11"], wsI["F11"] = "Cash", float(st.session_state.get("cash_balance", 0.0))
+    wsI["E12"], wsI["F12"] = "Book Equity", float(st.session_state.get("book_equity", 0.0))
+    wsI["E13"], wsI["F13"] = "D/E ratio (book)", float(st.session_state.get("de_ratio", 0.0))
+
+    # formats + borders
+    for rr in range(4, 14):
+        wsI.cell(rr, 5).border = border_all
+        wsI.cell(rr, 6).border = border_all
+
+    wsI["F4"].number_format = "0.00%"
+    wsI["F5"].number_format = "0.00%"
+    wsI["F6"].number_format = "0.00"
+    wsI["F7"].number_format = "0.00%"
+    wsI["F8"].number_format = "0.00%"
+    wsI["F9"].number_format = "0.00%"
+    wsI["F10"].number_format = "#,##0"
+    wsI["F11"].number_format = "#,##0"
+    wsI["F12"].number_format = "#,##0"
+    wsI["F13"].number_format = "0.00"
+
+    r0 = 4
+    for i, y in enumerate(forecast_years_int):
+        r = r0 + i
+        wsI.cell(r, 1, int(y))
+        wsI.cell(r, 2, float(dep_forecast_vals[i]))
+        wsI.cell(r, 3, float(capex_forecast_vals[i]))
+
+        wsI.cell(r, 2).number_format = "#,##0"
+        wsI.cell(r, 3).number_format = "#,##0"
+
+        for c in range(1, 4):
+            wsI.cell(r, c).border = border_all
+
+    wsI.column_dimensions["A"].width = 10
+    wsI.column_dimensions["B"].width = 22
+    wsI.column_dimensions["C"].width = 18
+    wsI.freeze_panes = "A4"
+
+    # =========================================================
+    # 4) DCF SHEET (FORMULAS: UFCF, DF, PV, TV, EV, Equity)
+    # =========================================================
+    wsD = wb.create_sheet("DCF")
+    end_col = 2 + n_fore
+    style_title(wsD, "DCF Valuation (Formulas)", end_col=end_col)
+
+    wsD.cell(3, 1, "Line")
+    wsD.cell(3, 2, "Unit")
+    for j, y in enumerate(forecast_years_int):
+        wsD.cell(3, 3 + j, str(y))
+    style_header_row(wsD, 3, 1, end_col)
+
+    # Lines
+    lines = [
+        ("EBITDA × (1−T)", "USD"),
+        ("Depreciation × Tax", "USD"),
+        ("Δ Working capital", "USD"),
+        ("Capex", "USD"),
+        ("UFCF", "USD"),
+        ("Discount factor", "x"),
+        ("PV of UFCF", "USD"),
+    ]
+    r_start = 4
+    for i, (nm, unit) in enumerate(lines):
+        wsD.cell(r_start + i, 1, nm)
+        wsD.cell(r_start + i, 2, unit)
+
+    # References
+    TAX_DCF = f"Parameters!$B${start_r + 1}"  # Tax rate (DCF)
+    WACC = f"Parameters!$B${start_r + 0}"     # WACC
+    G = f"Parameters!$B${start_r + 2}"        # g
+    NETDEBT = f"Parameters!$B${start_r + 3}"  # Net debt
+
+    # For DCF, pull EBITDA/Dep from IncomeStatement rows (more “complete model” feel)
+    # If you mapped EBITDA, use that row; Dep we do NOT have a guaranteed IS row (you used keyword dep),
+    # so we keep dep from your computed Dep forecast using ratios stored OR you can later map it.
+    # For now: EBITDA comes from mapped row if exists, else 0.
+
+    ebitda_row_excel = (base_row + ebitda_idx) if isinstance(ebitda_idx, int) else None
+
+    # Build year columns formulas
+    for j in range(n_fore):
+        col = 3 + j
+        colL = _excel_col(col)
+
+        # IncomeStatement col letter for this forecast year
+        is_col = _excel_col(3 + len(year_cols_is) + j)
+
+        # EBITDA*(1-T)
+        if ebitda_row_excel is not None:
+            wsD[f"{colL}{r_start+0}"] = f"=IncomeStatement!{is_col}{ebitda_row_excel}*(1-{TAX_DCF})"
+        else:
+            wsD[f"{colL}{r_start+0}"] = f"=0*(1-{TAX_DCF})"
+        # Depreciation × Tax (match your Python: dep_tax_vals = -dep_forecast_vals * tax)
+        # Dep forecast comes from Inputs sheet
+        wsD[f"{colL}{r_start+1}"] = f"=-Inputs!B{4+j}*{TAX_DCF}"
+        # ΔWC from WC sheet
+        wsD[f"{colL}{r_start+2}"] = f"=WorkingCapital!D{4+j}"
+        # Capex (match your Python: capex_forecast_vals already includes sign)
+        wsD[f"{colL}{r_start+3}"] = f"=Inputs!C{4+j}"
+
+        # UFCF
+        wsD[f"{colL}{r_start+4}"] = f"={colL}{r_start+0}+{colL}{r_start+1}+{colL}{r_start+2}+{colL}{r_start+3}"
+
+        # Discount factor from discount period n (we will store n in Parameters growth table? better: store n values directly in DCF)
+        # Here we just write n values as constants in a hidden row and use them:
+        # We'll put n in row r_start+7 (hidden later) - simplest
+        n_row = r_start + 8
+        wsD[f"{colL}{n_row}"] = float(discount_periods_n[j])
+        wsD[f"{colL}{r_start+5}"] = f"=1/(1+{WACC})^{colL}{n_row}"
+
+        # PV
+        wsD[f"{colL}{r_start+6}"] = f"={colL}{r_start+4}*{colL}{r_start+5}"
+
+    # Hidden n row label
+    wsD.cell(r_start + 8, 1, "Discount period n (hidden)")
+    wsD.row_dimensions[r_start + 8].hidden = True
+
+    # Terminal and totals
+    term_r = r_start + 10
+    wsD.cell(term_r, 1, "Terminal Value")
+    wsD.cell(term_r, 2, "USD")
+    last_colL = _excel_col(3 + n_fore - 1)
+
+    wsD[f"{last_colL}{term_r}"] = f"={last_colL}{r_start+4}*(1+{G})/({WACC}-{G})"
+
+    pv_term_r = term_r + 1
+    wsD.cell(pv_term_r, 1, "PV of Terminal Value")
+    wsD.cell(pv_term_r, 2, "USD")
+    wsD[f"{last_colL}{pv_term_r}"] = f"={last_colL}{term_r}*{last_colL}{r_start+5}"
+
+    ev_r = pv_term_r + 2
+    wsD.cell(ev_r, 1, "Enterprise Value (EV)")
+    wsD.cell(ev_r, 2, "USD")
+    wsD.cell(ev_r, 1).font = Font(bold=True, color="FFFFFF")
+    wsD.cell(ev_r, 2).font = Font(bold=True, color="FFFFFF")
+    wsD.cell(ev_r, 1).fill = PatternFill("solid", fgColor=DARK)
+    wsD.cell(ev_r, 2).fill = PatternFill("solid", fgColor=DARK)
+
+    first_pv = f"C{r_start+6}"
+    last_pv = f"{last_colL}{r_start+6}"
+    wsD[f"C{ev_r}"] = f"=SUM({first_pv}:{last_pv})+{last_colL}{pv_term_r}"
+
+    eq_r = ev_r + 1
+    wsD.cell(eq_r, 1, "Equity Value")
+    wsD.cell(eq_r, 2, "USD")
+    wsD.cell(eq_r, 1).font = Font(bold=True, color="FFFFFF")
+    wsD.cell(eq_r, 2).font = Font(bold=True, color="FFFFFF")
+    wsD.cell(eq_r, 1).fill = PatternFill("solid", fgColor=BLUE)
+    wsD.cell(eq_r, 2).fill = PatternFill("solid", fgColor=BLUE)
+    wsD[f"C{eq_r}"] = f"=C{ev_r}-{NETDEBT}"
+
+    wsD.column_dimensions["A"].width = 28
+    wsD.column_dimensions["B"].width = 10
+    for j in range(n_fore):
+        wsD.column_dimensions[_excel_col(3 + j)].width = 14
+
+    # formats
+    money_cols = list(range(3, end_col + 1))
+    style_body(wsD, r_start, eq_r, 1, end_col, money_cols=money_cols)
+    # DF row format
+    for j in range(n_fore):
+        wsD.cell(r_start + 5, 3 + j).number_format = "0.000"
+
+    wsD.freeze_panes = f"C{r_start}"
+
+    # =========================================================
+    # 5) SUMMARY SHEET (links to formulas)
+    # =========================================================
+    wsS = wb.create_sheet("Summary")
+    style_title(wsS, "DCF Summary", end_col=6)
+
+    wsS["A3"], wsS["B3"], wsS["C3"] = "Metric", "Value", "Unit"
+    style_header_row(wsS, 3, 1, 3)
+
+    rows = [
+        ("Enterprise Value (EV)", f"=DCF!C{ev_r}", "USD"),
+        ("Net Debt", f"={NETDEBT}", "USD"),
+        ("Equity Value", f"=DCF!C{eq_r}", "USD"),
+        ("WACC", f"={WACC}", "%"),
+        ("Terminal growth (g)", f"={G}", "%"),
+        ("Tax rate (DCF)", f"={TAX_DCF}", "%"),
+        ("Tax/PBT ratio (IS)", f"={avg_tax_ratio_cell}", "%"),
+        ("WC % of Sales used", f"={wc_pct_cell}", "%"),
+    ]
+
+    r0 = 4
+    for i, (m, v, u) in enumerate(rows):
+        r = r0 + i
+        wsS.cell(r, 1, m)
+        wsS.cell(r, 2, v)
+        wsS.cell(r, 3, u)
+        for c in range(1, 4):
+            wsS.cell(r, c).border = border_all
+        if u == "USD":
+            wsS.cell(r, 2).number_format = "#,##0"
+        else:
+            wsS.cell(r, 2).number_format = "0.00%"
+
+    wsS.column_dimensions["A"].width = 28
+    wsS.column_dimensions["B"].width = 18
+    wsS.column_dimensions["C"].width = 8
+    style_body(wsS, 4, 4 + len(rows) - 1, 1, 3, money_cols=[2])
+    wsS.freeze_panes = "A4"
+
+    return wb
+
+def workbook_to_bytes(wb: Workbook) -> bytes:
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.read()
+
+st.markdown("---")
+st.subheader("⬇️ Download FULL DCF Excel Model (Full IS + formulas)")
+
+# We need WC inputs that your code already computed:
+# wc_percent_used = wc_percent_avg
+# last_wc_hist_value = last_wc_hist_value
+# cos_ratio exists only if computed; if not, set 0.0
+_wc_percent_used = float(wc_percent_avg) if "wc_percent_avg" in globals() else 0.0
+_last_wc_hist_value = float(last_wc_hist_value) if "last_wc_hist_value" in globals() else 0.0
+_cos_ratio = float(cos_ratio) if "cos_ratio" in globals() else 0.0
+
+if st.button("📥 Generate FULL Excel Model"):
+    wb = build_full_dcf_excel_model(
+        is_df=is_df,
+        forecast_is_df=forecast_is,
+        year_cols_is=year_cols_is,
+        forecast_years_int=forecast_years_int,
+        forecast_cols=forecast_cols,
+        rev_idx=rev_idx, cos_idx=cos_idx, gp_idx=gp_idx, ebitda_idx=ebitda_idx,
+        op_idx=op_idx, pbt_idx=pbt_idx, tax_idx=tax_idx, np_idx=np_idx,
+        growth_mode=growth_mode,
+        yearly_g_dict=yearly_g,
+        avg_g=avg_g,
+        avg_tax_ratio=avg_tax_ratio,
+        avg_gp_margin=avg_gp_margin if "avg_gp_margin" in globals() and avg_gp_margin is not None else None,
+        cos_ratio=_cos_ratio,
+        wc_percent_used=_wc_percent_used,
+        last_wc_hist_value=_last_wc_hist_value,
+        discount_periods_n=discount_periods_n,
+        dep_forecast_vals=dep_forecast_vals,
+        capex_forecast_vals=capex_forecast_vals,
+        wacc=wacc, tax=tax, g=g, net_debt=net_debt,
+    )
+
+    xbytes = workbook_to_bytes(wb)
+
+    st.download_button(
+        "✅ Download FULL_DCF_Model.xlsx",
+        data=xbytes,
+        file_name="FULL_DCF_Model.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
