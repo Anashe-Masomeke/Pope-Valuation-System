@@ -557,11 +557,170 @@ styled_table = df_display.style.apply(highlight_upside, axis=1)
 
 st.dataframe(styled_table, width="stretch", hide_index=True)
 
-# ---- Download button ----
-csv_data = df_valuation_summary.to_csv(index=False).encode("utf-8")
+# ---- Download button (Excel with formulas) ----
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, numbers
+from openpyxl.utils import get_column_letter
+
+def build_summary_excel_with_formulas(
+    selected_models,
+    value_map,
+    weights_new,              # raw weights (not normalized)
+    num_shares,
+    current_price
+) -> bytes:
+    wb = Workbook()
+
+    # -----------------------------
+    # Sheet 1: Model Summary
+    # -----------------------------
+    ws1 = wb.active
+    ws1.title = "Model_Summary"
+
+    headers = ["Model", "Value_USD", "Weight_Input_%", "Weight_Normalized_%", "Weighted_Value_USD"]
+    ws1.append(headers)
+
+    header_fill = PatternFill("solid", fgColor="0A1B33")
+    header_font = Font(bold=True, color="FFFFFF")
+    for col_idx, h in enumerate(headers, start=1):
+        c = ws1.cell(row=1, column=col_idx)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center")
+
+    # write model rows
+    start_row = 2
+    for i, m in enumerate(selected_models):
+        r = start_row + i
+        ws1.cell(r, 1, m)
+
+        # Value
+        v = value_map.get(m)
+        ws1.cell(r, 2, float(v) if v is not None else None)
+
+        # Raw weight input
+        w_in = float(weights_new.get(m, 0.0))
+        ws1.cell(r, 3, w_in)
+
+        # Weight normalized = C / SUM(C range) * 100
+        # We'll compute SUM range based on number of models
+        # Example: =C2/SUM($C$2:$C$6)*100
+        end_row = start_row + len(selected_models) - 1
+        ws1.cell(r, 4, f"=C{r}/SUM($C${start_row}:$C${end_row})*100")
+
+        # Weighted value = Value * WeightNormalized / 100
+        ws1.cell(r, 5, f"=B{r}*D{r}/100")
+
+    # Totals row
+    total_row = start_row + len(selected_models)
+    ws1.cell(total_row, 1, "TOTAL / WEIGHTED EQUITY")
+    ws1.cell(total_row, 1).font = Font(bold=True)
+
+    # Weighted equity = SUM(weighted values)
+    ws1.cell(total_row, 5, f"=SUM($E${start_row}:$E${total_row-1})")
+    ws1.cell(total_row, 5).font = Font(bold=True)
+
+    # formatting
+    for r in range(start_row, total_row + 1):
+        ws1.cell(r, 2).number_format = '#,##0.00'
+        ws1.cell(r, 3).number_format = '0.00'
+        ws1.cell(r, 4).number_format = '0.00'
+        ws1.cell(r, 5).number_format = '#,##0.00'
+
+    # adjust column widths
+    for col in range(1, 6):
+        ws1.column_dimensions[get_column_letter(col)].width = 22
+
+    # -----------------------------
+    # Sheet 2: Valuation Summary
+    # -----------------------------
+    ws2 = wb.create_sheet("Valuation_Summary")
+
+    ws2_headers = ["Metric", "Value", "Unit"]
+    ws2.append(ws2_headers)
+    for col_idx, h in enumerate(ws2_headers, start=1):
+        c = ws2.cell(row=1, column=col_idx)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center")
+
+    # Put inputs and formulas:
+    # Weighted Equity Value comes from Model_Summary!E{total_row}
+    # Shares and current price are typed values
+    # Intrinsic = WeightedEquity / Shares
+    # Upside% = (Intrinsic - CurrentPrice) / CurrentPrice
+
+    r = 2
+    ws2.cell(r, 1, "Weighted Equity Value")
+    ws2.cell(r, 2, f"=Model_Summary!E{total_row}")
+    ws2.cell(r, 3, "USD")
+
+    r += 1
+    ws2.cell(r, 1, "Number of Shares")
+    ws2.cell(r, 2, float(num_shares) if num_shares is not None else 0.0)
+    ws2.cell(r, 3, "Shares")
+
+    r += 1
+    ws2.cell(r, 1, "Intrinsic Value per Share")
+    # =B2 / B3  (weighted equity / shares)
+    ws2.cell(r, 2, f"=IF(B3>0,B2/B3,NA())")
+    ws2.cell(r, 3, "USD")
+
+    r += 1
+    ws2.cell(r, 1, "Current Share Price")
+    ws2.cell(r, 2, float(current_price) if current_price is not None else 0.0)
+    ws2.cell(r, 3, "USD")
+
+    r += 1
+    ws2.cell(r, 1, "Upside / Downside (%)")
+    # =(Intrinsic - Price)/Price
+    ws2.cell(r, 2, f"=IF(B5>0,(B4-B5)/B5,NA())")
+    ws2.cell(r, 3, "%")
+
+    r += 1
+    ws2.cell(r, 1, "Recommendation")
+    # Same thresholds as your Streamlit logic:
+    # BUY if upside >= 0.15
+    # HOLD if -0.10 <= upside <= 0.10
+    # else REDUCE
+    ws2.cell(r, 2, '=IF(ISNA(B6),"N/A",IF(B6>=0.15,"BUY / ACCUMULATE",IF(AND(B6>=-0.10,B6<=0.10),"HOLD / FAIRLY VALUED","REDUCE / AVOID")))')
+    ws2.cell(r, 3, "")
+
+    # format numbers
+    ws2.cell(2, 2).number_format = '#,##0.00'
+    ws2.cell(3, 2).number_format = '#,##0'
+    ws2.cell(4, 2).number_format = '#,##0.0000'
+    ws2.cell(5, 2).number_format = '#,##0.00'
+    ws2.cell(6, 2).number_format = '0.0%'
+
+    # style recommendation
+    ws2.cell(7, 2).font = Font(bold=True)
+
+    # widths
+    ws2.column_dimensions["A"].width = 30
+    ws2.column_dimensions["B"].width = 28
+    ws2.column_dimensions["C"].width = 10
+
+    # Save to bytes
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+# Build the Excel file bytes
+excel_bytes = build_summary_excel_with_formulas(
+    selected_models=selected_models,
+    value_map=value_map,
+    weights_new=weights_new,
+    num_shares=num_shares,
+    current_price=current_price
+)
+
 st.download_button(
-    label="⬇️ Download Valuation Summary (CSV)",
-    data=csv_data,
-    file_name="valuation_summary.csv",
-    mime="text/csv",
+    label="⬇️ Download Valuation Summary (Excel with formulas)",
+    data=excel_bytes,
+    file_name="valuation_summary_with_formulas.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
