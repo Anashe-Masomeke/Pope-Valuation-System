@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 
 # ---------------------------------------------------------
 # PAGE CONFIG
@@ -256,7 +260,6 @@ st.session_state["ddm_g"] = float(g)
 st.session_state["ddm_Re"] = float(Re)
 st.session_state["ddm_P0"] = None if np.isnan(P0) else float(P0)
 
-
 # ---------------------------------------------------------
 # STEP 6 — TOTAL EQUITY VALUE
 # ---------------------------------------------------------
@@ -276,8 +279,242 @@ if num_shares > 0 and not np.isnan(P0):
     equity_value = P0 * num_shares
     st.success(f"Total Equity Value = **{equity_value:,.2f} USD**")
 
-    # Save for use on Summary page and elsewhere
     st.session_state["num_shares"] = float(num_shares)
     st.session_state["equity_value_ddm"] = float(equity_value)
 else:
     st.warning("Enter a valid number of shares to compute total equity value.")
+
+
+# =========================================================
+# ✅ FULL DDM EXCEL EXPORT (ALWAYS VISIBLE)
+# =========================================================
+
+def _excel_col(n: int) -> str:
+    return get_column_letter(n)
+
+
+def build_full_ddm_excel_model(
+    years, dividends,
+    g_start, g_end,
+    rf, mrp, tax_rate,
+    unlevered_beta, de_ratio,
+    num_shares,
+):
+    wb = Workbook()
+
+    BLUE = "003399"
+    DARK = "071426"
+    LIGHT_BG = "F7FAFF"
+    GRID = "D9E2EF"
+
+    thin = Side(style="thin", color=GRID)
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def style_title(ws, title, end_col=6):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
+        c = ws.cell(1, 1, title)
+        c.font = Font(bold=True, color="FFFFFF", size=14)
+        c.fill = PatternFill("solid", fgColor=DARK)
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[1].height = 26
+
+    def style_header(ws, r, c1, c2):
+        for c in range(c1, c2 + 1):
+            cell = ws.cell(r, c)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor=BLUE)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border_all
+        ws.row_dimensions[r].height = 20
+
+    # =========================================================
+    # SHEET 1: Dividend History
+    # =========================================================
+    wsH = wb.active
+    wsH.title = "DividendHistory"
+    style_title(wsH, "DDM - Step 1: Dividend History", end_col=4)
+
+    wsH["A3"], wsH["B3"] = "Year", "Dividend"
+    style_header(wsH, 3, 1, 2)
+
+    r0 = 4
+    for i, (y, d) in enumerate(zip(years, dividends)):
+        r = r0 + i
+        wsH.cell(r, 1, int(y)).border = border_all
+        wsH.cell(r, 2, float(d)).border = border_all
+        wsH.cell(r, 2).number_format = "0.00000"
+
+    wsH.column_dimensions["A"].width = 10
+    wsH.column_dimensions["B"].width = 16
+    wsH.freeze_panes = "A4"
+
+    last_row = r0 + len(years) - 1
+
+    # =========================================================
+    # SHEET 2: Growth
+    # =========================================================
+    wsG = wb.create_sheet("Growth")
+    style_title(wsG, "DDM - Steps 2 & 3: Growth Range & g", end_col=6)
+
+    wsG["A3"], wsG["B3"] = "Input", "Value"
+    style_header(wsG, 3, 1, 2)
+
+    wsG["A4"], wsG["B4"] = "Growth start year", int(g_start)
+    wsG["A5"], wsG["B5"] = "Growth end year", int(g_end)
+
+    wsG["A7"], wsG["B7"] = "D_start", (
+        '=INDEX(DividendHistory!$B$4:$B$%d, MATCH($B$4, DividendHistory!$A$4:$A$%d, 0))'
+        % (last_row, last_row)
+    )
+    wsG["A8"], wsG["B8"] = "D_end", (
+        '=INDEX(DividendHistory!$B$4:$B$%d, MATCH($B$5, DividendHistory!$A$4:$A$%d, 0))'
+        % (last_row, last_row)
+    )
+
+    wsG["A10"], wsG["B10"] = "Growth rate (g)", (
+        '=IF($B$4=$B$5,0,IF($B$7>0,POWER($B$8/$B$7,1/($B$5-$B$4))-1,0.02))'
+    )
+    wsG["B10"].number_format = "0.00%"
+
+    wsG["A11"], wsG["B11"] = "Next dividend (D1)", "=$B$8*(1+$B$10)"
+    wsG["B11"].number_format = "0.00000"
+
+    wsG.column_dimensions["A"].width = 22
+    wsG.column_dimensions["B"].width = 28
+    wsG.freeze_panes = "A4"
+
+    # =========================================================
+    # SHEET 3: Parameters (CAPM)
+    # =========================================================
+    wsP = wb.create_sheet("Parameters")
+    style_title(wsP, "DDM - Step 4: Cost of Equity (CAPM)", end_col=6)
+
+    wsP["A3"], wsP["B3"] = "Parameter", "Value"
+    style_header(wsP, 3, 1, 2)
+
+    wsP["A4"], wsP["B4"] = "Risk-free rate (RF)", float(rf)
+    wsP["A5"], wsP["B5"] = "Equity risk premium (MRP)", float(mrp)
+    wsP["A6"], wsP["B6"] = "Tax rate", float(tax_rate)
+    wsP["A7"], wsP["B7"] = "Unlevered beta (βu)", float(unlevered_beta)
+    wsP["A8"], wsP["B8"] = "Debt/Equity (D/E)", float(de_ratio)
+
+    wsP["B4"].number_format = "0.00%"
+    wsP["B5"].number_format = "0.00%"
+    wsP["B6"].number_format = "0.00%"
+    wsP["B7"].number_format = "0.0000"
+    wsP["B8"].number_format = "0.0000"
+
+    wsP["A10"], wsP["B10"] = "Levered beta (βL)", "=$B$7*(1+(1-$B$6)*$B$8)"
+    wsP["B10"].number_format = "0.0000"
+
+    wsP["A11"], wsP["B11"] = "Cost of Equity (Re)", "=$B$4 + $B$10*$B$5"
+    wsP["B11"].number_format = "0.00%"
+
+    wsP.column_dimensions["A"].width = 26
+    wsP.column_dimensions["B"].width = 18
+    wsP.freeze_panes = "A4"
+
+    # =========================================================
+    # SHEET 4: Valuation
+    # =========================================================
+    wsV = wb.create_sheet("Valuation")
+    style_title(wsV, "DDM - Steps 5 & 6: Valuation", end_col=6)
+
+    wsV["A3"], wsV["B3"] = "Metric", "Value"
+    style_header(wsV, 3, 1, 2)
+
+    wsV["A4"], wsV["B4"] = "g (from Growth sheet)", "=Growth!$B$10"
+    wsV["A5"], wsV["B5"] = "D1 (from Growth sheet)", "=Growth!$B$11"
+    wsV["A6"], wsV["B6"] = "Re (from Parameters)", "=Parameters!$B$11"
+    wsV["B4"].number_format = "0.00%"
+    wsV["B5"].number_format = "0.00000"
+    wsV["B6"].number_format = "0.00%"
+
+    wsV["A8"], wsV["B8"] = "Equity Value / Share (P0)", "=IF($B$6<=$B$4,NA(),$B$5/($B$6-$B$4))"
+    wsV["B8"].number_format = "#,##0.0000"
+
+    wsV["A10"], wsV["B10"] = "Number of shares", float(num_shares)
+    wsV["B10"].number_format = "#,##0"
+
+    wsV["A11"], wsV["B11"] = "Total Equity Value", "=IF(ISNUMBER($B$8),$B$8*$B$10,NA())"
+    wsV["B11"].number_format = "#,##0.00"
+
+    wsV.column_dimensions["A"].width = 28
+    wsV.column_dimensions["B"].width = 22
+    wsV.freeze_panes = "A4"
+
+    # =========================================================
+    # SHEET 5: Summary
+    # =========================================================
+    wsS = wb.create_sheet("Summary")
+    style_title(wsS, "DDM Summary", end_col=6)
+
+    wsS["A3"], wsS["B3"], wsS["C3"] = "Metric", "Value", "Unit"
+    style_header(wsS, 3, 1, 3)
+
+    rows = [
+        ("Growth rate (g)", "=Growth!$B$10", "%"),
+        ("Next dividend (D1)", "=Growth!$B$11", "USD"),
+        ("Cost of Equity (Re)", "=Parameters!$B$11", "%"),
+        ("Value per share (P0)", "=Valuation!$B$8", "USD"),
+        ("Number of shares", "=Valuation!$B$10", "shares"),
+        ("Total equity value", "=Valuation!$B$11", "USD"),
+    ]
+
+    r0 = 4
+    for i, (m, v, u) in enumerate(rows):
+        r = r0 + i
+        wsS.cell(r, 1, m).border = border_all
+        wsS.cell(r, 2, v).border = border_all
+        wsS.cell(r, 3, u).border = border_all
+        if u == "USD":
+            wsS.cell(r, 2).number_format = "#,##0.00"
+        elif u == "%":
+            wsS.cell(r, 2).number_format = "0.00%"
+        elif u == "shares":
+            wsS.cell(r, 2).number_format = "#,##0"
+
+    wsS.column_dimensions["A"].width = 26
+    wsS.column_dimensions["B"].width = 18
+    wsS.column_dimensions["C"].width = 10
+    wsS.freeze_panes = "A4"
+
+    return wb
+
+
+def workbook_to_bytes(wb: Workbook) -> bytes:
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.read()
+
+
+st.markdown("---")
+st.subheader("⬇️ Download FULL DDM Excel Model (All Steps + Formulas)")
+
+if "ddm_excel_bytes" not in st.session_state:
+    st.session_state["ddm_excel_bytes"] = None
+
+if st.button("📥 Generate / Update FULL DDM Excel Model", key="ddm_generate_excel"):
+    wb = build_full_ddm_excel_model(
+        years=years,
+        dividends=dividends,
+        g_start=int(g_start),
+        g_end=int(g_end),
+        rf=float(rf),
+        mrp=float(mrp),
+        tax_rate=float(tax_rate),
+        unlevered_beta=float(unlevered_beta),
+        de_ratio=float(de_ratio),
+        num_shares=float(num_shares),
+    )
+    st.session_state["ddm_excel_bytes"] = workbook_to_bytes(wb)
+
+st.download_button(
+    "⬇️ Download FULL_DDM_Model.xlsx",
+    data=st.session_state["ddm_excel_bytes"] or b"",
+    file_name="FULL_DDM_Model.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    disabled=st.session_state["ddm_excel_bytes"] is None,
+    key="ddm_download_excel",
+)
