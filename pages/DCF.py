@@ -3372,7 +3372,7 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
     return bio.read()
 
 st.markdown("---")
-st.subheader("⬇️ Download FULL DCF Excel Model (Full IS + formulas)")
+st.subheader("⬇️ Download FULL DCF Excel Model")
 
 # We need WC inputs that your code already computed:
 # wc_percent_used = wc_percent_avg
