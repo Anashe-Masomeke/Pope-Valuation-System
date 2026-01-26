@@ -997,3 +997,328 @@ df_res = pd.DataFrame(
     {"Method": ["EV/EBITDA", "P/B", "P/E"], "Equity Value (USD)": [equity_ev, equity_pb, equity_pe]}
 )
 st.dataframe(format_numeric_columns(df_res), width='stretch')
+# =========================================================
+# ✅ DOWNLOAD EXCEL (NEAT + FORMULAS) — COMPARABLES EXPORT
+# =========================================================
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
+def _style_range(ws, cell_range, bold=False, fill=None, align_center=False, border=True, font_color=None):
+    thin = Side(style="thin", color="000000")
+    b = Border(left=thin, right=thin, top=thin, bottom=thin) if border else None
+    for row in ws[cell_range]:
+        for c in row:
+            if bold:
+                c.font = Font(bold=True, color=font_color or c.font.color)
+            if fill is not None:
+                c.fill = fill
+            if align_center:
+                c.alignment = Alignment(horizontal="center", vertical="center")
+            if b is not None:
+                c.border = b
+
+def build_comps_excel_with_formulas(S, df_comps) -> bytes:
+    wb = Workbook()
+
+    # ---------- Styles ----------
+    header_fill = PatternFill("solid", fgColor="0A1B33")
+    header_font = Font(bold=True, color="FFFFFF")
+    title_font = Font(bold=True, size=14)
+    bold_font = Font(bold=True)
+    money_fmt = '#,##0.00'
+    pct_fmt = '0.00%'
+    mult_fmt = '0.00'
+
+    # ============================
+    # Sheet 1: Comps_Input
+    # ============================
+    ws1 = wb.active
+    ws1.title = "Comps_Input"
+
+    ws1["B1"] = "Comparable Company"
+    ws1["B1"].font = title_font
+
+    headers = ["Company", "Country", "EV/EBITDA", "P/B", "P/E", "Include_EV", "Include_PB", "Include_PE"]
+    start_row = 3
+    start_col = 2  # column B
+
+    for j, h in enumerate(headers, start=start_col):
+        c = ws1.cell(row=start_row, column=j, value=h)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Write comps rows
+    r = start_row + 1
+    for _, row in df_comps.iterrows():
+        ws1.cell(r, start_col + 0, row["Company"])
+        ws1.cell(r, start_col + 1, "")  # Country (optional)
+        ws1.cell(r, start_col + 2, float(row["EV/EBITDA"]) if pd.notna(row["EV/EBITDA"]) else None)
+        ws1.cell(r, start_col + 3, float(row["P/B"]) if pd.notna(row["P/B"]) else None)
+        ws1.cell(r, start_col + 4, float(row["P/E"]) if pd.notna(row["P/E"]) else None)
+
+        # TRUE/FALSE flags (Excel friendly)
+        ws1.cell(r, start_col + 5, bool(row["Include_EV"]))
+        ws1.cell(r, start_col + 6, bool(row["Include_PB"]))
+        ws1.cell(r, start_col + 7, bool(row["Include_PE"]))
+
+        # formats
+        ws1.cell(r, start_col + 2).number_format = mult_fmt
+        ws1.cell(r, start_col + 3).number_format = mult_fmt
+        ws1.cell(r, start_col + 4).number_format = mult_fmt
+        r += 1
+
+    end_row = r - 1
+
+    # Borders + widths
+    _style_range(ws1, f"B{start_row}:I{end_row}", border=True)
+    for col, w in zip(["B","C","D","E","F","G","H","I"], [30,16,12,10,10,12,12,12]):
+        ws1.column_dimensions[col].width = w
+
+    # ============================
+    # Sheet 2: Multiples
+    # ============================
+    ws2 = wb.create_sheet("Multiples")
+    ws2["B1"] = "Multiples Summary"
+    ws2["B1"].font = title_font
+
+    # Discount cell (user input from session)
+    ws2["B3"] = "Discount (%)"
+    ws2["C3"] = float(S.get("discount_pct", 25.0)) / 100.0
+    ws2["C3"].number_format = pct_fmt
+    ws2["B3"].font = bold_font
+
+    # Table headers
+    ws2_headers = ["Multiple", "Average", "Implied"]
+    for j, h in enumerate(ws2_headers, start=2):
+        c = ws2.cell(row=5, column=j, value=h)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Formulas using AVERAGEIF on Include flags
+    # Range in Comps_Input:
+    # EV: D, PB: E, PE: F   | flags: G,H,I
+    # Data rows: start_row+1 .. end_row
+    drow1 = start_row + 1
+    drow2 = end_row
+
+    ws2["B6"] = "EV/EBITDA"
+    ws2["C6"] = f'=IFERROR(AVERAGEIF(Comps_Input!$G${drow1}:$G${drow2},TRUE,Comps_Input!$D${drow1}:$D${drow2}),"")'
+    ws2["D6"] = f'=IF(C6="","",C6*(1-$C$3))'
+
+    ws2["B7"] = "P/B"
+    ws2["C7"] = f'=IFERROR(AVERAGEIF(Comps_Input!$H${drow1}:$H${drow2},TRUE,Comps_Input!$E${drow1}:$E${drow2}),"")'
+    ws2["D7"] = f'=IF(C7="","",C7*(1-$C$3))'
+
+    ws2["B8"] = "P/E"
+    ws2["C8"] = f'=IFERROR(AVERAGEIF(Comps_Input!$I${drow1}:$I${drow2},TRUE,Comps_Input!$F${drow1}:$F${drow2}),"")'
+    ws2["D8"] = f'=IF(C8="","",C8*(1-$C$3))'
+
+    for rr in [6,7,8]:
+        ws2[f"C{rr}"].number_format = mult_fmt
+        ws2[f"D{rr}"].number_format = mult_fmt
+
+    _style_range(ws2, "B5:D8", border=True)
+    ws2.column_dimensions["B"].width = 18
+    ws2.column_dimensions["C"].width = 14
+    ws2.column_dimensions["D"].width = 14
+
+    # ============================
+    # Sheet 3: EBITDA_Maintainable
+    # ============================
+    ws3 = wb.create_sheet("EBITDA_Maintainable")
+    ws3["B1"] = "Maintainable EBITDA (with timing + weights)"
+    ws3["B1"].font = title_font
+
+    ws3["B3"] = "Use Timing?"
+    ws3["C3"] = bool(S.get("comp_use_timing_eb", True))
+    ws3["B4"] = "Base Timing"
+    ws3["C4"] = float(S.get("comp_timing_base", 1.0))
+
+    ws3["B3"].font = bold_font
+    ws3["B4"].font = bold_font
+
+    # Pull years + EBITDA from session
+    dcf_eb_all = S.get("dcf_ebitda_all", None) or S.get("dcf_ebitda_forecast", {}) or {}
+    eb_sy = int(S.get("comp_eb_start_year", 0) or 0)
+    eb_ey = int(S.get("comp_eb_end_year", 0) or 0)
+    eb_years = list(range(eb_sy, eb_ey + 1)) if eb_sy and eb_ey and eb_ey >= eb_sy else []
+
+    # Table
+    headers3 = ["Year", "EBITDA", "Timing", "Weight (%)", "Adjusted EBITDA", "Weighted EBITDA"]
+    for j, h in enumerate(headers3, start=2):
+        c = ws3.cell(row=6, column=j, value=h)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    r0 = 7
+    for idx, yr in enumerate(eb_years):
+        ws3.cell(r0+idx, 2, yr)
+        ws3.cell(r0+idx, 3, float(dcf_eb_all.get(str(yr), 0.0)))
+
+        # Timing formula:
+        # =IF($C$3, $C$4 + (ROW()-7), 1)
+        ws3.cell(r0+idx, 4, f'=IF($C$3,$C$4+{idx},1)')
+
+        # Weight from session (store as percent)
+        w = float((S.get("comp_eb_weights", {}) or {}).get(str(yr), 0.0))
+        ws3.cell(r0+idx, 5, w/100.0)
+
+        # Adjusted EBITDA = EBITDA * Timing
+        ws3.cell(r0+idx, 6, f"=C{r0+idx}*D{r0+idx}")
+        # Weighted EBITDA = Adjusted * Weight
+        ws3.cell(r0+idx, 7, f"=F{r0+idx}*E{r0+idx}")
+
+        ws3.cell(r0+idx, 3).number_format = money_fmt
+        ws3.cell(r0+idx, 4).number_format = '0.0000'
+        ws3.cell(r0+idx, 5).number_format = pct_fmt
+        ws3.cell(r0+idx, 6).number_format = money_fmt
+        ws3.cell(r0+idx, 7).number_format = money_fmt
+
+    last = r0 + len(eb_years) - 1 if eb_years else 7
+
+    # Total maintainable EBITDA
+    ws3["B" + str(last+2)] = "Maintainable EBITDA"
+    ws3["B" + str(last+2)].font = bold_font
+    ws3["G" + str(last+2)] = f"=SUM(G{r0}:G{last})"
+    ws3["G" + str(last+2)].font = bold_font
+    ws3["G" + str(last+2)].number_format = money_fmt
+
+    _style_range(ws3, f"B6:G{last}", border=True)
+    ws3.column_dimensions["B"].width = 10
+    ws3.column_dimensions["C"].width = 18
+    ws3.column_dimensions["D"].width = 12
+    ws3.column_dimensions["E"].width = 12
+    ws3.column_dimensions["F"].width = 18
+    ws3.column_dimensions["G"].width = 18
+
+    # ============================
+    # Sheet 4: Earnings_Maintainable
+    # ============================
+    ws4 = wb.create_sheet("Earnings_Maintainable")
+    ws4["B1"] = "Maintainable Earnings (with timing + weights)"
+    ws4["B1"].font = title_font
+
+    ws4["B3"] = "Use Timing?"
+    ws4["C3"] = bool(S.get("comp_use_timing_np", True))
+    ws4["B4"] = "Base Timing"
+    ws4["C4"] = float(S.get("comp_timing_base", 1.0))
+    ws4["B3"].font = bold_font
+    ws4["B4"].font = bold_font
+
+    dcf_np_all = S.get("dcf_profit_all", None) or S.get("dcf_profit_forecast", {}) or {}
+    np_sy = int(S.get("comp_np_start_year", 0) or 0)
+    np_ey = int(S.get("comp_np_end_year", 0) or 0)
+    np_years = list(range(np_sy, np_ey + 1)) if np_sy and np_ey and np_ey >= np_sy else []
+
+    headers4 = ["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]
+    for j, h in enumerate(headers4, start=2):
+        c = ws4.cell(row=6, column=j, value=h)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    r0 = 7
+    for idx, yr in enumerate(np_years):
+        ws4.cell(r0+idx, 2, yr)
+        ws4.cell(r0+idx, 3, float(dcf_np_all.get(str(yr), 0.0)))
+
+        ws4.cell(r0+idx, 4, f'=IF($C$3,$C$4+{idx},1)')
+
+        w = float((S.get("comp_np_weights", {}) or {}).get(str(yr), 0.0))
+        ws4.cell(r0+idx, 5, w/100.0)
+
+        ws4.cell(r0+idx, 6, f"=C{r0+idx}*D{r0+idx}")
+        ws4.cell(r0+idx, 7, f"=F{r0+idx}*E{r0+idx}")
+
+        ws4.cell(r0+idx, 3).number_format = money_fmt
+        ws4.cell(r0+idx, 4).number_format = '0.0000'
+        ws4.cell(r0+idx, 5).number_format = pct_fmt
+        ws4.cell(r0+idx, 6).number_format = money_fmt
+        ws4.cell(r0+idx, 7).number_format = money_fmt
+
+    last = r0 + len(np_years) - 1 if np_years else 7
+
+    ws4["B" + str(last+2)] = "Maintainable Earnings"
+    ws4["B" + str(last+2)].font = bold_font
+    ws4["G" + str(last+2)] = f"=SUM(G{r0}:G{last})"
+    ws4["G" + str(last+2)].font = bold_font
+    ws4["G" + str(last+2)].number_format = money_fmt
+
+    _style_range(ws4, f"B6:G{last}", border=True)
+    for col, w in zip(["B","C","D","E","F","G"], [10,18,12,12,18,18]):
+        ws4.column_dimensions[col].width = w
+
+    # ============================
+    # Sheet 5: Equity_Values
+    # ============================
+    ws5 = wb.create_sheet("Equity_Values")
+    ws5["B1"] = "Computed Equity Values"
+    ws5["B1"].font = title_font
+
+    # Inputs needed (from your Step 5)
+    ws5["B3"] = "Book Equity"
+    ws5["C3"] = float(S.get("book_equity", 0.0))
+    ws5["B4"] = "Net Debt"
+    ws5["C4"] = float(S.get("net_debt", 0.0))
+    ws5["B3"].font = bold_font
+    ws5["B4"].font = bold_font
+    ws5["C3"].number_format = money_fmt
+    ws5["C4"].number_format = money_fmt
+
+    # Link maintainables
+    ws5["B6"] = "Maintainable EBITDA"
+    ws5["C6"] = "=EBITDA_Maintainable!G" + str((ws3.max_row))  # last maintainable cell
+    ws5["B7"] = "Maintainable Earnings"
+    ws5["C7"] = "=Earnings_Maintainable!G" + str((ws4.max_row))  # last maintainable cell
+
+    ws5["C6"].number_format = money_fmt
+    ws5["C7"].number_format = money_fmt
+    ws5["B6"].font = bold_font
+    ws5["B7"].font = bold_font
+
+    # Equity table
+    ws5_headers = ["Method", "Equity Value (USD)"]
+    for j, h in enumerate(ws5_headers, start=2):
+        c = ws5.cell(row=9, column=j, value=h)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Implied multiples link from Multiples sheet:
+    # EV implied at D6, PB implied at D7, PE implied at D8
+    ws5["B10"] = "EV/EBITDA"
+    ws5["C10"] = "=IF(Multiples!D6=\"\",\"\",Multiples!D6*$C$6-$C$4)"
+
+    ws5["B11"] = "P/B"
+    ws5["C11"] = "=IF(Multiples!D7=\"\",\"\",Multiples!D7*$C$3)"
+
+    ws5["B12"] = "P/E"
+    ws5["C12"] = "=IF(Multiples!D8=\"\",\"\",Multiples!D8*$C$7)"
+
+    for rr in [10,11,12]:
+        ws5[f"C{rr}"].number_format = money_fmt
+
+    _style_range(ws5, "B9:C12", border=True)
+    ws5.column_dimensions["B"].width = 18
+    ws5.column_dimensions["C"].width = 22
+
+    # Save
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+excel_bytes = build_comps_excel_with_formulas(S, df_comps)
+
+st.download_button(
+    label="⬇️ Download Comparables (Excel with formulas)",
+    data=excel_bytes,
+    file_name="comparables_with_formulas.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
