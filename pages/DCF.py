@@ -1672,6 +1672,24 @@ def style_hist_vs_forecast(styler, hist_cols, forecast_cols):
 st.subheader(
     f"📘 Forecasted Income Statement ({forecast_horizon} years, USD)"
 )
+def style_forecast_headers(styler, forecast_cols, color="#1d4ed8"):
+    """
+    Color ONLY the column headers for forecast years.
+    Works with pandas Styler in Streamlit.
+    """
+    cols = list(styler.data.columns)
+    forecast_set = set(map(str, forecast_cols))
+
+    styles = []
+    for i, c in enumerate(cols):
+        if str(c) in forecast_set:
+            # header selector for this column
+            styles.append({
+                "selector": f"th.col_heading.level0.col{i}",
+                "props": [("color", color), ("font-weight", "700")]
+            })
+    return styler.set_table_styles(styles, overwrite=False)
+
 # ---------------------------------------------------------
 # DISPLAY: Historical vs Forecast styled table
 # ---------------------------------------------------------
@@ -1680,20 +1698,49 @@ fmt_map = {
     c: "{:,.0f}".format
     for c in forecast_is.select_dtypes(include=[np.number]).columns
 }
-
 styled_is = (
     forecast_is.style
         .format(fmt_map, na_rep="")
 )
 
-# ✅ Apply Historical vs Forecast coloring
 styled_is = style_hist_vs_forecast(
     styled_is,
-    hist_cols=year_cols_is,   # historical years
+    hist_cols=year_cols_is,
     forecast_cols=forecast_cols
 )
+# ✅ NEW: make forecast year headers blue too
+styled_is = style_forecast_headers(
+    styled_is,
+    forecast_cols=forecast_cols,
+    color=FORECAST_COLOR
+)
 
-st.dataframe(styled_is, width='stretch')
+# ----------------------------
+# DOWNLOADS (because HTML table has no Streamlit toolbar)
+# ----------------------------
+c_dl1, c_dl2, _ = st.columns([1, 1, 3])
+
+# Excel download
+buf_xlsx = io.BytesIO()
+forecast_is.to_excel(buf_xlsx, index=False, sheet_name="Forecast_IS")
+buf_xlsx.seek(0)
+
+with c_dl1:
+    st.download_button(
+        "⬇️ Download IS (Excel)",
+        data=buf_xlsx,
+        file_name="Forecasted_Income_Statement.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_forecast_is_xlsx"
+    )
+# ----------------------------
+# DISPLAY (Streamlit-native like other tables)
+# ----------------------------
+st.dataframe(
+    styled_is,
+    use_container_width=True,
+    hide_index=True
+)
 
 # Extract EBITDA row for forecast years
 if isinstance(ebitda_idx, int):
@@ -3306,9 +3353,19 @@ def build_full_dcf_excel_model(
     wsD.cell(eq_r, 2, "USD")
     wsD.cell(eq_r, 1).font = Font(bold=True, color="FFFFFF")
     wsD.cell(eq_r, 2).font = Font(bold=True, color="FFFFFF")
-    wsD.cell(eq_r, 1).fill = PatternFill("solid", fgColor=BLUE)
-    wsD.cell(eq_r, 2).fill = PatternFill("solid", fgColor=BLUE)
+    wsD.cell(eq_r, 1).fill = PatternFill("solid", fgColor=DARK)
+    wsD.cell(eq_r, 2).fill = PatternFill("solid", fgColor=DARK)
     wsD[f"C{eq_r}"] = f"=C{ev_r}-{NETDEBT}"
+    # formats
+    money_cols = list(range(3, end_col + 1))
+    style_body(wsD, r_start, eq_r, 1, end_col, money_cols=money_cols)
+    # ✅ FORCE Equity Value label + unit to stay black (A and B)
+    for c in [1, 2]:
+        cell = wsD.cell(eq_r, c)
+        cell.fill = PatternFill("solid", fgColor=DARK)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.border = border_all
+        cell.alignment = Alignment(horizontal="left", vertical="center")
 
     wsD.column_dimensions["A"].width = 28
     wsD.column_dimensions["B"].width = 10
@@ -3321,6 +3378,13 @@ def build_full_dcf_excel_model(
     # DF row format
     for j in range(n_fore):
         wsD.cell(r_start + 5, 3 + j).number_format = "0.000"
+    # ✅ FORCE Equity Value label + unit to stay black (row eq_r is even, zebra fill overwrites it)
+    for c in [1, 2]:
+        cell = wsD.cell(eq_r, c)
+        cell.fill = PatternFill("solid", fgColor=DARK)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.border = border_all
+        cell.alignment = Alignment(horizontal="left", vertical="center")
 
     wsD.freeze_panes = f"C{r_start}"
 
