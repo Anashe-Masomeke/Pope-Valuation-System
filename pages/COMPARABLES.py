@@ -652,6 +652,22 @@ else:
             key="comp_use_timing_eb_checkbox",
         )
         S["comp_use_timing_eb"] = use_timing_eb
+        # ---------------------------------------------------------
+        # ✅ HARD SYNC: Earnings timing ALWAYS follows EBITDA timing when EBITDA changes
+        # ---------------------------------------------------------
+        prev_eb = S.get("_prev_comp_use_timing_eb", None)
+
+        # if EBITDA timing changed this run, force earnings timing to match
+        if prev_eb is None or bool(prev_eb) != bool(use_timing_eb):
+            S["comp_use_timing_np"] = bool(use_timing_eb)
+            S["comp_use_timing_np_checkbox"] = bool(use_timing_eb)  # this updates the UI checkbox
+
+        S["_prev_comp_use_timing_eb"] = bool(use_timing_eb)
+
+        # If user turned off EBITDA timing, also turn off Earnings timing immediately
+        if not use_timing_eb:
+            S["comp_use_timing_np"] = False
+            S["comp_use_timing_np_checkbox"] = False
 
         c_eb1, c_eb2 = st.columns(2)
         with c_eb1:
@@ -806,13 +822,24 @@ else:
                 S[f"comp_np_weight_{y}"] = float(S["comp_np_weights"].get(str(y), 0.0))
 
             st.info("✅ Earnings years & weights copied from EBITDA automatically.")
+        # ---------------------------------------------------------
+        # ✅ AUTO-SYNC timing toggle: if EBITDA timing is OFF, Earnings timing must also be OFF
+        # ---------------------------------------------------------
+        use_timing_eb = bool(S.get("comp_use_timing_eb", True))  # from Step 3
+
+        # If EBITDA timing is OFF, force Earnings timing OFF (also forces UI key)
+        if not use_timing_eb:
+            S["comp_use_timing_np"] = False
+            S["comp_use_timing_np_checkbox"] = False
 
         use_timing_np = st.checkbox(
             "Apply timing effect from DCF to Earnings?",
             value=bool(S.get("comp_use_timing_np", True)),
             key="comp_use_timing_np_checkbox",
+            disabled=(not use_timing_eb),  # lock it when EBITDA timing is OFF
         )
-        S["comp_use_timing_np"] = use_timing_np
+        S["comp_use_timing_np"] = bool(use_timing_np)
+
         # Show locked years when sync is ON, otherwise allow manual selection
         if sync_np_to_eb:
             np_start_year = int(S["comp_np_start_year"])
