@@ -2084,7 +2084,7 @@ capex_forecast_vals = np.full(len(forecast_years_int), avg_capex, dtype=float)
 # ---------------------------------------------------------
 # COST OF DEBT (Interest / Debt)
 # ---------------------------------------------------------
-int_is_idx_list = find_row_indices(is_df, ["net finance cost", "finance costs", "interest expense", "interest paid"])
+int_is_idx_list = find_row_indices(is_df, ["net finance cost","net finance costs", "finance costs", "interest expense", "interest paid"])
 if int_is_idx_list:
     interest_last = float(is_df.loc[int_is_idx_list, last_hist_label].sum(skipna=True))
 else:
