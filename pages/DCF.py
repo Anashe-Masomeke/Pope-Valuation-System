@@ -1125,11 +1125,14 @@ CORE_LINES = [
     ("cos", "Cost of Sales / Raw Materials (optional)"),
     ("gp", "Gross Profit"),
     ("ebitda", "EBITDA"),
+    # ✅ ADD THIS LINE
+    ("dep", "Depreciation & Amortisation (IS line)"),
     ("op", "Operating Profit / EBIT"),
     ("pbt", "Profit Before Tax"),
     ("tax", "Income Tax (Tax expense)"),
     ("np", "Profit for the Year"),
 ]
+
 
 def _labels_from_items(items):
     return ["N/A (not in statement)"] + [f"{i+1}: {str(name)}" for i, name in enumerate(items)]
@@ -1220,17 +1223,16 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
 
 # ✅ use this instead of your old mapping call
 core_idx = map_core_is_totals_wizard(is_df, year_cols_is)
-
-
-
 rev_idx    = core_idx["rev"]
 cos_idx    = core_idx["cos"]
 gp_idx     = core_idx["gp"]
 ebitda_idx = core_idx["ebitda"]
+dep_idx    = core_idx["dep"]
 op_idx     = core_idx["op"]
 pbt_idx    = core_idx["pbt"]
-tax_idx    = core_idx["tax"]   # ✅ ADD
+tax_idx    = core_idx["tax"]
 np_idx     = core_idx["np"]
+
 # ---------------------------------------------------------
 # VALIDATE MAPPING ORDER (top-to-bottom in statement)
 # ---------------------------------------------------------
@@ -1738,7 +1740,7 @@ with c_dl1:
 # ----------------------------
 st.dataframe(
     styled_is,
-    use_container_width=True,
+    width='stretch',
     hide_index=True
 )
 
@@ -1777,29 +1779,49 @@ st.session_state["dcf_ebitda_forecast"] = dcf_all_ebitda   # <-- backward compat
 
 # Save EVERYTHING to session_state
 st.session_state["dcf_ebitda_all"] = dcf_all_ebitda
+# ---------------------------------------------------------
+# ✅ DEPRECIATION (prefer mapped IS dep line, else fallback)
+# ---------------------------------------------------------
+dep_forecast_vals = None
 
-
-# Depreciation from IS if present
-dep_hist_from_is_idx, _ = find_single_row(forecast_is, ["depreciation"])
-if dep_hist_from_is_idx is not None:
+# 1) Best: mapped Depreciation row from IS wizard
+if isinstance(dep_idx, int):
     dep_forecast_vals = np.array(
-        [forecast_is.iloc[dep_hist_from_is_idx][str(y)] for y in forecast_years_int],
+        [pd.to_numeric(forecast_is.iat[dep_idx, forecast_is.columns.get_loc(str(y))], errors="coerce")
+         for y in forecast_years_int],
         dtype=float
     )
+    dep_forecast_vals = np.nan_to_num(dep_forecast_vals, nan=0.0)
+
 else:
-    # fallback to CF-based ratio (rarely used now)
+    # 2) Fallback: if user mapped Dep in Cash Flow wizard
     if dep_cf_idx_list:
-        common = [c for c in year_cols_cf if c in year_cols_is]
-        dep_ratio = ratio_to_revenue(
-            cf_df.loc[dep_cf_idx_list, common].sum(axis=0).values.astype(float),
-            revenue_row[common].values.flatten().astype(float)
+        dep_forecast_vals = np.array(
+            [float(cf_df.loc[dep_cf_idx_list, str(y)].sum(skipna=True)) if str(y) in cf_df.columns else 0.0
+             for y in forecast_years_int],
+            dtype=float
         )
+        dep_forecast_vals = np.nan_to_num(dep_forecast_vals, nan=0.0)
+
     else:
-        dep_ratio = 0.0
-    dep_forecast_vals = np.array(
-        [rev_forecast[y] * dep_ratio for y in forecast_years_int],
-        dtype=float
-    )
+        # 3) Last fallback: ratio to revenue from historical CF dep (or 0)
+        common = [c for c in year_cols_cf if c in year_cols_is]
+        if common and dep_cf_idx_list:
+            dep_ratio = ratio_to_revenue(
+                cf_df.loc[dep_cf_idx_list, common].sum(axis=0).values.astype(float),
+                revenue_row[common].values.flatten().astype(float)
+            )
+        else:
+            dep_ratio = 0.0
+
+        dep_forecast_vals = np.array(
+            [rev_forecast[y] * dep_ratio for y in forecast_years_int],
+            dtype=float
+        )
+
+# Optional: store for other pages / exports
+st.session_state["dcf_dep_forecast"] = {str(y): float(dep_forecast_vals[i]) for i, y in enumerate(forecast_years_int)}
+
 # After building rev_forecast dict
 st.session_state["dcf_rev_forecast"] = {str(y): float(rev_forecast[y]) for y in forecast_years_int}
 st.session_state["forecast_is_df"] = forecast_is.copy()
