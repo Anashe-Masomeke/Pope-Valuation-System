@@ -4,6 +4,8 @@ import numpy as np
 from pathlib import Path
 from datetime import date
 import io
+from pandas.io.formats.style import Styler
+
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
@@ -315,6 +317,12 @@ st.set_page_config(
 )
 
 st.title("📊 Forecast + DCF Valuation")
+# ---------------------------------------------------------
+# COMPANY NAME (persistent across pages/models)
+# ---------------------------------------------------------
+if "company_name" not in st.session_state:
+    st.session_state["company_name"] = "Selected Company"
+
 # ---------------------------------------------------------
 # 🔄 START NEW VALUATION — FBC STYLE
 # ---------------------------------------------------------
@@ -1635,7 +1643,7 @@ for y in forecast_years_int:
 st.session_state["dcf_profit_all"] = dcf_profit_all
 FORECAST_BLUE = "#1d4ed8"  # strong blue (tailwind blue-700)
 
-def style_forecast_columns(styler: pd.io.formats.style.Styler, forecast_cols):
+def style_forecast_columns(styler, forecast_cols):
     # color ONLY the forecast year columns
     def _blue_forecast(col_name):
         if str(col_name) in set(map(str, forecast_cols)):
@@ -2062,29 +2070,12 @@ with c_cap4:
     st.metric("D/E Ratio", f"{de_ratio:.2f}x")
 with c_cap5:
     st.metric(f"Equity ({bs_year_used_label})", f"{total_equity:,.0f}")
-# ---------------------------------------------------------
-# CAPEX: use selected CF rows directly, do NOT require IS overlap
-# ---------------------------------------------------------
-avg_capex = 0.0
-
-if capex_cf_idx_list:
-    # Use ANY cashflow years that have numeric data
-    capex_hist_vals = cf_df.loc[capex_cf_idx_list, year_cols_cf].sum(axis=0).values.astype(float)
-
-    # Only use real non-zero values
-    valid_capex = capex_hist_vals[~np.isnan(capex_hist_vals)]
-
-    if len(valid_capex) > 0:
-        avg_capex = float(np.mean(valid_capex))
-
-# Forecast capex = average of historical (negative number preserved)
-capex_forecast_vals = np.full(len(forecast_years_int), avg_capex, dtype=float)
 
 
 # ---------------------------------------------------------
 # COST OF DEBT (Interest / Debt)
 # ---------------------------------------------------------
-int_is_idx_list = find_row_indices(is_df, ["net finance cost","net finance costs", "finance costs", "interest expense", "interest paid"])
+int_is_idx_list = find_row_indices(is_df, ["net finance costs","net finance cost", "finance costs", "interest expense", "interest paid"])
 if int_is_idx_list:
     interest_last = float(is_df.loc[int_is_idx_list, last_hist_label].sum(skipna=True))
 else:
@@ -2630,6 +2621,89 @@ midpoint_table = pd.DataFrame(
 )
 
 st.dataframe(midpoint_table, width='stretch')
+# ---------------------------------------------------------
+# CAPEX: use selected CF rows directly, allow excluding outlier years (PERSISTENT)
+# ---------------------------------------------------------
+avg_capex = 0.0
+
+if capex_cf_idx_list:
+    # 1) Build historical CAPEX series by year (sum selected rows)
+    capex_by_year = cf_df.loc[capex_cf_idx_list, year_cols_cf].sum(axis=0)
+
+    capex_hist_years = [str(y) for y in capex_by_year.index.tolist()]
+    capex_hist_vals = capex_by_year.values.astype(float)
+
+    # -------------------------------------------------
+    # ✅ Persistent store (SURVIVES page/model switches)
+    # store_key = the real saved value
+    # widget_key = the multiselect widget
+    # -------------------------------------------------
+    if "dcf_capex_excluded_years_store" not in st.session_state:
+        st.session_state["dcf_capex_excluded_years_store"] = []
+
+    # keep store clean if years changed
+    st.session_state["dcf_capex_excluded_years_store"] = [
+        y for y in st.session_state["dcf_capex_excluded_years_store"] if y in capex_hist_years
+    ]
+
+    # widget key (separate) so it never overwrites store unexpectedly
+    if "dcf_capex_excluded_years_widget" not in st.session_state:
+        st.session_state["dcf_capex_excluded_years_widget"] = list(st.session_state["dcf_capex_excluded_years_store"])
+
+    def _sync_capex_exclusions():
+        st.session_state["dcf_capex_excluded_years_store"] = list(st.session_state["dcf_capex_excluded_years_widget"])
+
+    # 2) UI (BEFORE averaging) — reads from store, writes back to store
+    with st.expander("🧹 CAPEX History: Exclude outlier years before averaging", expanded=False):
+        st.multiselect(
+            "Select historical years to EXCLUDE from CAPEX average:",
+            options=capex_hist_years,
+            default=list(st.session_state["dcf_capex_excluded_years_store"]),
+            key="dcf_capex_excluded_years_widget",
+            on_change=_sync_capex_exclusions
+        )
+
+        # optional reset for this block only
+        if st.button("↩️ Reset CAPEX exclusions", key="reset_capex_exclusions_btn"):
+            st.session_state["dcf_capex_excluded_years_store"] = []
+            if "dcf_capex_excluded_years_widget" in st.session_state:
+                del st.session_state["dcf_capex_excluded_years_widget"]
+            st.rerun()
+
+    excluded_years = set(st.session_state["dcf_capex_excluded_years_store"])
+
+    # 3) Filter out excluded years + remove NaNs
+    mask_keep = np.array([y not in excluded_years for y in capex_hist_years], dtype=bool)
+
+    capex_hist_vals_used = capex_hist_vals[mask_keep]
+    capex_hist_years_used = np.array(capex_hist_years)[mask_keep]
+
+    # drop NaNs
+    capex_hist_vals_used = capex_hist_vals_used[~np.isnan(capex_hist_vals_used)]
+
+    # 4) Safety fallback if all excluded
+    if capex_hist_vals_used.size == 0:
+        st.warning("⚠️ You excluded all CAPEX years (or all were NaN). Using ALL historical years instead.")
+        capex_hist_vals_used = capex_hist_vals[~np.isnan(capex_hist_vals)]
+        capex_hist_years_used = np.array(capex_hist_years)[~np.isnan(capex_hist_vals)]
+
+    # 5) Preview
+    st.dataframe(
+        pd.DataFrame({
+            "Year": capex_hist_years,
+            "CAPEX": capex_hist_vals,
+            "Included?": ["✅" if y in capex_hist_years_used.tolist() else "❌" for y in capex_hist_years],
+        }),
+        width="stretch",
+        hide_index=True
+    )
+
+    # 6) Compute average CAPEX from remaining years
+    if capex_hist_vals_used.size > 0:
+        avg_capex = float(np.mean(capex_hist_vals_used))
+
+# Forecast capex = average of historical (negative number preserved)
+capex_forecast_vals = np.full(len(forecast_years_int), avg_capex, dtype=float)
 
 # ---------------------------------------------------------
 # FCFF / UFCF
@@ -2771,7 +2845,287 @@ styled_summary = (
 )
 st.dataframe(styled_summary, width="stretch", hide_index=True)
 # =========================================================
-# ✅ FULL DCF EXCEL EXPORT (FULL INCOME STATEMENT + FORMULAS)
+# 📊 SENSITIVITY (PERSIST ACROSS PAGES — inputs DON'T reset)
+# =========================================================
+import streamlit.components.v1 as components
+
+st.subheader("📊 Sensitivity of Equity Value to changes in WACC and Terminal Growth Rate")
+
+# -------------------------
+# Persistent storage keys (NOT widget keys)
+# -------------------------
+SENS_STORE_DEFAULTS = {
+    "sens_store_wacc_points": 5,
+    "sens_store_g_points": 7,
+    "sens_store_wacc_step_pct": 5.00,
+    "sens_store_g_step_pct": 0.50,
+}
+
+for k, v in SENS_STORE_DEFAULTS.items():
+    st.session_state.setdefault(k, v)
+
+# -------------------------
+# Helper: bind widget -> store (survives page switches)
+# -------------------------
+def bind_number_input(label, store_key, widget_key, *, cast=int, **kwargs):
+    """
+    cast=int  -> for integer widgets (points)
+    cast=float -> for decimal widgets (step %)
+    """
+    def _sync():
+        st.session_state[store_key] = cast(st.session_state[widget_key])
+
+    # value must match min/max/step types
+    val = st.session_state.get(store_key)
+
+    # Ensure stored value has the right type
+    if val is None:
+        val = cast(0)
+    else:
+        val = cast(val)
+
+    # Also ensure kwargs numeric args match the same type
+    for k in ["min_value", "max_value", "step"]:
+        if k in kwargs and kwargs[k] is not None:
+            kwargs[k] = cast(kwargs[k])
+
+    return st.number_input(
+        label,
+        value=val,
+        key=widget_key,
+        on_change=_sync,
+        **kwargs
+    )
+
+# -------------------------
+# Reset ONLY sensitivity inputs (store + widget)
+# -------------------------
+if st.button("↩️ Reset Sensitivity Inputs", key="sens_reset_btn"):
+    for k, v in SENS_STORE_DEFAULTS.items():
+        st.session_state[k] = v
+
+    # optional: also wipe widget keys (so they reload from store cleanly)
+    for wk in ["sens_wacc_points_w", "sens_g_points_w", "sens_wacc_step_pct_w", "sens_g_step_pct_w"]:
+        if wk in st.session_state:
+            del st.session_state[wk]
+
+    st.rerun()
+
+# --- base values from your DCF (decimals)
+base_wacc = float(wacc)
+base_g = float(g)
+
+# --------------------------
+# User controls (WIDGET KEYS are separate)
+# --------------------------
+cA, cB, cC = st.columns([1, 1, 2])
+with cA:
+    wacc_points = bind_number_input(
+        "WACC points (rows)",
+        store_key="sens_store_wacc_points",
+        widget_key="sens_wacc_points_w",
+        cast=int,
+        min_value=3, max_value=9, step=2
+    )
+with cB:
+    g_points = bind_number_input(
+        "g points (columns)",
+        store_key="sens_store_g_points",
+        widget_key="sens_g_points_w",
+        cast=int,
+        min_value=3, max_value=11, step=2
+    )
+
+cD, cE, _ = st.columns([1, 1, 2])
+with cD:
+    wacc_step_pct = bind_number_input(
+        "WACC step (%)",
+        store_key="sens_store_wacc_step_pct",
+        widget_key="sens_wacc_step_pct_w",
+        cast=float,
+        min_value=0.5, max_value=10.0, step=0.5
+    )
+with cE:
+    g_step_pct = bind_number_input(
+        "g step (%)",
+        store_key="sens_store_g_step_pct",
+        widget_key="sens_g_step_pct_w",
+        cast=float,
+        min_value=0.1, max_value=5.0, step=0.1
+    )
+# Use persistent stored values (NOT widget keys)
+wacc_step = float(st.session_state["sens_store_wacc_step_pct"]) / 100.0
+g_step = float(st.session_state["sens_store_g_step_pct"]) / 100.0
+
+def build_centered_range(center: float, step: float, points: int):
+    points = int(points)
+    if points % 2 == 0:
+        points += 1
+    half = points // 2
+    arr = np.array([center + (i - half) * step for i in range(points)], dtype=float)
+    return np.sort(arr)
+
+wacc_range = build_centered_range(base_wacc, wacc_step, int(st.session_state["sens_store_wacc_points"]))
+g_range = build_centered_range(base_g, g_step, int(st.session_state["sens_store_g_points"]))
+g_range = np.clip(g_range, -0.50, 0.50)
+
+def equity_value_sensitivity(fcff_vals, discount_periods, net_debt, wacc_, g_):
+    wacc_ = float(wacc_)
+    g_ = float(g_)
+    if (1 + wacc_) <= 0:
+        return np.nan
+    if wacc_ <= g_:
+        return np.nan
+
+    fcff_arr = np.array(fcff_vals, dtype=float)
+    n_arr = np.array(discount_periods, dtype=float)
+
+    dfs = 1.0 / (1.0 + wacc_) ** n_arr
+    pv_fcff = float(np.nansum(fcff_arr * dfs))
+
+    tv = float(fcff_arr[-1]) * (1.0 + g_) / (wacc_ - g_)
+    pv_tv = float(tv * dfs[-1])
+
+    ev = pv_fcff + pv_tv
+    return float(ev - float(net_debt))
+
+def pct_label(x, decimals=2):
+    return f"{x*100:.{decimals}f}%"
+
+label_decimals = 2
+row_labels = [pct_label(w, label_decimals) for w in wacc_range]
+col_labels = [pct_label(gg, label_decimals) for gg in g_range]
+
+if len(set(row_labels)) != len(row_labels):
+    st.error("❌ WACC labels collided (duplicate % labels). Increase decimals or step.")
+    st.stop()
+
+if len(set(col_labels)) != len(col_labels):
+    st.error("❌ Terminal growth labels collided (duplicate % labels). Increase decimals or step.")
+    st.stop()
+
+sens_table = pd.DataFrame(index=row_labels, columns=col_labels, dtype=float)
+for w_ in wacc_range:
+    rlab = pct_label(w_, label_decimals)
+    for gg_ in g_range:
+        clab = pct_label(gg_, label_decimals)
+        sens_table.loc[rlab, clab] = equity_value_sensitivity(
+            fcff_vals=fcff_vals,
+            discount_periods=discount_periods_n,
+            net_debt=net_debt,
+            wacc_=w_,
+            g_=gg_,
+        )
+
+base_row = pct_label(base_wacc, label_decimals)
+base_col = pct_label(base_g, label_decimals)
+
+vals = sens_table.values.astype(float)
+finite_mask = np.isfinite(vals)
+
+min_rc = max_rc = None
+min_val = max_val = np.nan
+if finite_mask.any():
+    min_val = float(np.min(vals[finite_mask]))
+    max_val = float(np.max(vals[finite_mask]))
+    min_pos = np.argwhere(vals == min_val)
+    max_pos = np.argwhere(vals == max_val)
+    if min_pos.shape[0] > 0:
+        min_rc = (int(min_pos[0, 0]), int(min_pos[0, 1]))
+    if max_pos.shape[0] > 0:
+        max_rc = (int(max_pos[0, 0]), int(max_pos[0, 1]))
+
+nan_count = int(np.isnan(vals).sum())
+if nan_count > 0:
+    st.warning(
+        f"⚠️ Some cells are blank because Terminal Value is invalid when WACC ≤ g. "
+        f"Blanks found: {nan_count}. Reduce g range or increase WACC range."
+    )
+
+def fmt_num(x):
+    if x is None:
+        return ""
+    try:
+        if np.isnan(x) or not np.isfinite(x):
+            return ""
+    except Exception:
+        pass
+    return f"{float(x):,.0f}"
+
+display_df = sens_table.applymap(fmt_num)
+cols = list(display_df.columns)
+rows = list(display_df.index)
+
+html_parts = []
+html_parts.append(f"""
+<style>
+.sens-outer{{border:2px solid #000;border-radius:10px;padding:10px 12px 12px;background:#fff;overflow-x:auto;}}
+.sens-table{{border-collapse:collapse;width:100%;min-width:760px;font-size:14px;font-family:Arial,sans-serif;}}
+.sens-table th,.sens-table td{{border-bottom:1px solid rgba(0,0,0,0.08);border-right:1px solid rgba(0,0,0,0.08);padding:10px 12px;white-space:nowrap;}}
+.sens-table thead th{{background:#071426;color:#fff;font-weight:900;text-align:center;}}
+.sens-table .rowhdr{{background:#f1f5f9;font-weight:900;text-align:left;}}
+.sens-table td{{text-align:right;}}
+.sens-title{{background:#fff !important;color:#000 !important;font-weight:900 !important;font-size:15px !important;border-bottom:0 !important;}}
+.sens-vwacc{{writing-mode:vertical-rl;transform:rotate(180deg);font-weight:900;text-align:center !important;background:#fff !important;color:#000 !important;border-bottom:0 !important;padding:0 6px !important;}}
+</style>
+
+<div class="sens-outer">
+<table class="sens-table">
+<thead>
+<tr>
+  <th class="sens-vwacc" rowspan="2">WACC(%)</th>
+  <th class="sens-title" colspan="{len(cols)}">Terminal Growth Rate</th>
+</tr>
+<tr>
+""")
+
+for c in cols:
+    html_parts.append(f"<th>{c}</th>")
+html_parts.append("</tr></thead><tbody>")
+
+for i, r in enumerate(rows):
+    html_parts.append("<tr>")
+    html_parts.append(f'<th class="rowhdr">{r}</th>')
+    for j, c in enumerate(cols):
+        val = display_df.iloc[i, j]
+        is_base = (r == base_row and c == base_col)
+        is_min = (min_rc is not None and (i, j) == min_rc and not is_base)
+        is_max = (max_rc is not None and (i, j) == max_rc and not is_base)
+
+        bg = "#ffffff"
+        fw = "400"
+        if is_base:
+            bg, fw = "#7dd3fc", "900"
+        elif is_min:
+            bg, fw = "#fde047", "900"
+        elif is_max:
+            bg, fw = "#fdba74", "900"
+
+        html_parts.append(f'<td style="background:{bg};font-weight:{fw};">{val}</td>')
+    html_parts.append("</tr>")
+
+html_parts.append("</tbody></table></div>")
+components.html("".join(html_parts), height=460, scrolling=True)
+
+base_eq = np.nan
+if base_row in sens_table.index and base_col in sens_table.columns:
+    base_eq = float(sens_table.loc[base_row, base_col])
+
+cK1, cK2, cK3 = st.columns(3)
+with cK1:
+    show_base = base_eq if np.isfinite(base_eq) else float(equity_value)
+    st.metric("Base Equity Value (current WACC & g)", f"{show_base:,.0f}")
+with cK2:
+    st.metric("Lowest (grid)", f"{min_val:,.0f}" if np.isfinite(min_val) else "—")
+with cK3:
+    st.metric("Highest (grid)", f"{max_val:,.0f}" if np.isfinite(max_val) else "—")
+
+st.caption(
+    f"Base case highlighted in blue (WACC={base_wacc*100:.2f}% , g={base_g*100:.2f}%). "
+    f"Min highlighted in yellow, Max highlighted in orange."
+)
+# =========================================================
+# ✅ FULL DCF EXCEL EXPORT (FULL INCOME STATEMENT + FORMULAS + SENSITIVITY)
 # Paste AFTER: st.dataframe(styled_summary, ...)
 # =========================================================
 import io
@@ -2779,8 +3133,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
+
 def _excel_col(n: int) -> str:
     return get_column_letter(n)
+
 
 def build_full_dcf_excel_model(
     is_df,                 # original cleaned historical IS (optional use)
@@ -2788,8 +3144,10 @@ def build_full_dcf_excel_model(
     year_cols_is,          # historical year columns (strings)
     forecast_years_int,    # forecast years int list
     forecast_cols,         # forecast cols strings
+
     # mapping indices (ints or None)
     rev_idx, cos_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, tax_idx, np_idx,
+
     # computed forecast logic inputs
     growth_mode,           # "Uniform..." or "Different..."
     yearly_g_dict,         # dict {year_int: growth_decimal}
@@ -2797,15 +3155,31 @@ def build_full_dcf_excel_model(
     avg_tax_ratio,         # decimal (negative usually)
     avg_gp_margin,         # decimal or None
     cos_ratio,             # decimal or 0.0
+
     # working capital inputs
     wc_percent_used,       # decimal (WC% of sales used)
     last_wc_hist_value,    # last historical WC value used as starting point
+
     # DCF inputs
-        discount_periods_n,  # array/list
-        dep_forecast_vals,  # array/list (same length as forecast years)
-        capex_forecast_vals,  # array/list (same length as forecast years)
-        wacc, tax, g, net_debt,
-        rf=rf, mrp=mrp,
+    discount_periods_n,    # list/array length n_fore
+    dep_forecast_vals,     # list/array length n_fore
+    capex_forecast_vals,   # list/array length n_fore
+    wacc, tax, g, net_debt,
+
+    # inputs that were previously referenced as st.session_state inside the builder
+    rf, mrp,
+    dcf_unlevered_beta=1.0,
+    rd=0.0,
+    total_debt=0.0,
+    cash_balance=0.0,
+    book_equity=0.0,
+    de_ratio=0.0,
+
+    # ✅ Sensitivity settings (MUST come from your Streamlit sensitivity controls)
+    sens_wacc_points=5,
+    sens_g_points=7,
+    sens_wacc_step_pct=5.0,   # e.g. 3.50 means 3.50%
+    sens_g_step_pct=1.0,      # e.g. 1.10 means 1.10%
 ):
     wb = Workbook()
 
@@ -2817,6 +3191,9 @@ def build_full_dcf_excel_model(
     DARK = "071426"
     LIGHT_BG = "F7FAFF"
     GRID = "D9E2EF"
+    ORANGE = "F5B400"
+    SKY = "7DD3FC"
+    YELLOW = "FDE047"
 
     thin = Side(style="thin", color=GRID)
     border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -2860,7 +3237,7 @@ def build_full_dcf_excel_model(
                     cell.alignment = Alignment(horizontal="right", vertical="center")
 
     # =========================================================
-    # 1) PARAMETERS SHEET (assumptions + ratios + growth)
+    # 1) PARAMETERS SHEET
     # =========================================================
     wsP = wb.active
     wsP.title = "Parameters"
@@ -2880,13 +3257,18 @@ def build_full_dcf_excel_model(
         ("Tax rate (DCF)", "=Inputs!$F$7", "decimal"),
         ("Terminal growth (g)", "=Inputs!$F$8", "decimal"),
         ("Net debt", "=(Inputs!$F$10-Inputs!$F$11)", "money"),
-        ("Income tax ratio (IS): Tax/PBT", avg_tax_ratio, "decimal"),
+        ("Income tax ratio (IS): Tax/PBT", float(avg_tax_ratio), "decimal"),
         ("Revenue growth mode", growth_mode, "text"),
-        ("Uniform growth (if used)", avg_g, "decimal"),
-        ("GP margin (if used)", (avg_gp_margin if avg_gp_margin is not None else 0.0), "decimal"),
-        ("COS ratio (if used)", cos_ratio, "decimal"),
-        ("WC % of Sales used", wc_percent_used, "decimal"),
-        ("Last historical WC used", last_wc_hist_value, "money"),
+        ("Uniform growth (if used)", float(avg_g), "decimal"),
+        ("GP margin (if used)", float(avg_gp_margin) if avg_gp_margin is not None else 0.0, "decimal"),
+        ("COS ratio (if used)", float(cos_ratio), "decimal"),
+        ("WC % of Sales used", float(wc_percent_used), "decimal"),
+        ("Last historical WC used", float(last_wc_hist_value), "money"),
+        # ✅ Sensitivity settings (stored so Excel can show them too)
+        ("Sensitivity: WACC points (rows)", int(sens_wacc_points), "int"),
+        ("Sensitivity: g points (cols)", int(sens_g_points), "int"),
+        ("Sensitivity: WACC step", float(sens_wacc_step_pct) / 100.0, "decimal"),
+        ("Sensitivity: g step", float(sens_g_step_pct) / 100.0, "decimal"),
     ]
 
     start_r = 5
@@ -2898,9 +3280,11 @@ def build_full_dcf_excel_model(
         wsP.cell(r, 1, k)
         if kind == "text":
             wsP.cell(r, 2, str(v))
+        elif kind == "int":
+            wsP.cell(r, 2, int(v))
         else:
             if isinstance(v, str) and v.startswith("="):
-                wsP.cell(r, 2, v)  # Excel formula
+                wsP.cell(r, 2, v)
             else:
                 wsP.cell(r, 2, float(v))
         wsP.cell(r, 3, kind)
@@ -2913,13 +3297,9 @@ def build_full_dcf_excel_model(
         elif kind == "decimal":
             wsP.cell(r, 2).number_format = '0.00%'
 
-    # Named (fixed) key cells for formulas (we'll reference these)
-    # WACC = B5, TaxDCF = B6, g = B7, NetDebt = B8, avg_tax_ratio = B9, avg_g = B11, gp_margin=B12, cos_ratio=B13, wc_pct=B14, last_wc=B15
-    # (Note: these row numbers depend on key_rows length; we keep them stable by not changing order.)
-
-    wsP.column_dimensions["A"].width = 30
+    wsP.column_dimensions["A"].width = 34
     wsP.column_dimensions["B"].width = 22
-    wsP.column_dimensions["C"].width = 12
+    wsP.column_dimensions["C"].width = 14
 
     # ---- Growth table (per forecast year) ----
     growth_table_r = start_r + len(key_rows) + 2
@@ -2940,7 +3320,6 @@ def build_full_dcf_excel_model(
         wsP.cell(r, 2).border = border_all
 
     # ---- Ratio table (each IS row as % of revenue) ----
-    # We’ll store ratio for EVERY row (except protected totals)
     ratio_table_r = hdr + 1 + n_fore + 2
     wsP.cell(ratio_table_r, 1, "Income Statement Row Ratios (Row / Revenue) (editable)")
     wsP.cell(ratio_table_r, 1).font = Font(bold=True)
@@ -2951,7 +3330,6 @@ def build_full_dcf_excel_model(
     wsP.cell(rrh, 3, "Ratio to Revenue")
     style_header_row(wsP, rrh, 1, 3)
 
-    # Compute ratios from historical (same as your logic)
     rev_hist_vals = forecast_is_df.iloc[rev_idx][year_cols_is].values.astype(float)
 
     def ratio_to_rev_hist(row_vals, rev_vals):
@@ -2967,8 +3345,6 @@ def build_full_dcf_excel_model(
     for x in [gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx]:
         if isinstance(x, int):
             protected.add(x)
-
-    # Also protect tax row from ratio forecast because it’s derived from PBT ratio
     if isinstance(tax_idx, int):
         protected.add(tax_idx)
 
@@ -2993,14 +3369,13 @@ def build_full_dcf_excel_model(
     wsP.freeze_panes = "A5"
 
     # =========================================================
-    # 2) FULL INCOME STATEMENT SHEET (HIST + FORECAST FORMULAS)
+    # 2) INCOME STATEMENT SHEET
     # =========================================================
     wsIS = wb.create_sheet("IncomeStatement")
 
-    end_col = 2 + len(all_years)  # A=Item, B=Type, then years start C
+    end_col = 2 + len(all_years)
     style_title(wsIS, "Forecast Income Statement (Full, with formulas)", end_col=end_col)
 
-    # header row
     hdr_row = 3
     wsIS.cell(hdr_row, 1, "Item")
     wsIS.cell(hdr_row, 2, "Section")
@@ -3010,55 +3385,36 @@ def build_full_dcf_excel_model(
 
     base_row = hdr_row + 1
 
-    # Write items + historical VALUES
     for i in range(len(forecast_is_df)):
         r = base_row + i
         wsIS.cell(r, 1, str(forecast_is_df.iloc[i]["Item"]))
         wsIS.cell(r, 2, "IS")
-        # historical values
         for j, y in enumerate(year_cols_is):
-            wsIS.cell(r, 3 + j, float(forecast_is_df.iloc[i][y]) if forecast_is_df.iloc[i][y] == forecast_is_df.iloc[i][y] else None)
+            v = forecast_is_df.iloc[i][y]
+            wsIS.cell(r, 3 + j, float(v) if v == v else None)
 
-    # Column widths
     wsIS.column_dimensions["A"].width = 42
     wsIS.column_dimensions["B"].width = 10
     for j in range(len(all_years)):
         wsIS.column_dimensions[_excel_col(3 + j)].width = 14
 
-    # Helpful references
-    # Revenue row in IS sheet = base_row + rev_idx
     rev_row_excel = base_row + rev_idx
 
-    # Growth table location in Parameters:
-    # We wrote growth table at:
-    # growth_table_r = start_r + len(key_rows) + 2
-    # hdr = growth_table_r + 1
-    # data starts hdr+1
     growth_data_start = (start_r + len(key_rows) + 2) + 2  # hdr+1
-    # Growth for forecast year k is in Parameters!B(growth_data_start + k)
-
-    # Ratio table start:
     ratio_hdr_row = (start_r + len(key_rows) + 2) + 2 + n_fore + 2 + 1
-    ratio_data_start = ratio_hdr_row + 1  # first ratio row
+    ratio_data_start = ratio_hdr_row + 1
 
-    # Key input cells fixed:
-    # avg_tax_ratio in Parameters is at B(start_r + 4) because key_rows begins at start_r
-    # Let's compute: avg_tax_ratio is 5th item in key_rows -> row = start_r + 4
     avg_tax_ratio_cell = f"Parameters!$B${start_r + 4}"
-    gp_margin_cell = f"Parameters!$B${start_r + 7}"      # "GP margin (if used)"
-    cos_ratio_cell = f"Parameters!$B${start_r + 8}"      # "COS ratio (if used)"
+    gp_margin_cell = f"Parameters!$B${start_r + 7}"
+    cos_ratio_cell = f"Parameters!$B${start_r + 8}"
 
-    # Determine COS/GP case like your app did
     has_cos = isinstance(cos_idx, int)
     has_gp = isinstance(gp_idx, int)
 
-    # Add forecast formulas for each forecast year column
     for f_i, y_int in enumerate(forecast_years_int):
         col = 3 + len(year_cols_is) + f_i
         colL = _excel_col(col)
 
-        # Revenue formula:
-        # first forecast year = last historical year cell * (1 + growth_for_year)
         if f_i == 0:
             prev_col = 3 + len(year_cols_is) - 1
             prevL = _excel_col(prev_col)
@@ -3069,45 +3425,34 @@ def build_full_dcf_excel_model(
             growth_cell = f"Parameters!$B${growth_data_start + f_i}"
             wsIS[f"{colL}{rev_row_excel}"] = f"={prevL}{rev_row_excel}*(1+{growth_cell})"
 
-        # COS / GP special handling (match your logic)
+        # COS / GP special handling
         if has_gp and has_cos and avg_gp_margin is not None:
-            # COS = sign * Revenue*(1-gp_margin)
             cos_row_excel = base_row + cos_idx
             gp_row_excel = base_row + gp_idx
-            # Determine sign from last historical COS value (same as your code)
             last_cos_hist = float(forecast_is_df.iloc[cos_idx][year_cols_is[-1]]) if forecast_is_df.iloc[cos_idx][year_cols_is[-1]] == forecast_is_df.iloc[cos_idx][year_cols_is[-1]] else 0.0
             cos_sign = -1 if last_cos_hist < 0 else 1
             wsIS[f"{colL}{cos_row_excel}"] = f"={cos_sign}*{colL}{rev_row_excel}*(1-{gp_margin_cell})"
-            # GP = Revenue + COS
             wsIS[f"{colL}{gp_row_excel}"] = f"={colL}{rev_row_excel}+{colL}{cos_row_excel}"
 
         elif has_gp and (not has_cos) and avg_gp_margin is not None:
-            # GP = Revenue * gp_margin
             gp_row_excel = base_row + gp_idx
             wsIS[f"{colL}{gp_row_excel}"] = f"={colL}{rev_row_excel}*{gp_margin_cell}"
 
         elif has_cos and (not has_gp):
-            # COS = Revenue * cos_ratio
             cos_row_excel = base_row + cos_idx
             wsIS[f"{colL}{cos_row_excel}"] = f"={colL}{rev_row_excel}*{cos_ratio_cell}"
 
-        # For every other non-protected row: = Revenue * ratio(from Parameters table)
+        # Other rows from ratios
         for i in range(len(forecast_is_df)):
             r = base_row + i
 
-            # Skip revenue (already formula)
             if i == rev_idx:
                 continue
-
-            # Totals (computed later via chain)
             if i in [gp_idx, ebitda_idx, op_idx, pbt_idx, np_idx] and isinstance(i, int):
                 continue
-
-            # Tax is derived from PBT, handle later
             if isinstance(tax_idx, int) and i == tax_idx:
                 continue
 
-            # Skip COS/GP if already set in special case
             if has_gp and has_cos and avg_gp_margin is not None and isinstance(cos_idx, int) and i == cos_idx:
                 continue
             if has_gp and has_cos and avg_gp_margin is not None and isinstance(gp_idx, int) and i == gp_idx:
@@ -3117,16 +3462,14 @@ def build_full_dcf_excel_model(
             if has_cos and (not has_gp) and isinstance(cos_idx, int) and i == cos_idx:
                 continue
 
-            # ratio row in Parameters table = ratio_data_start + i
             ratio_cell = f"Parameters!$C${ratio_data_start + i}"
             wsIS[f"{colL}{r}"] = f"={colL}{rev_row_excel}*{ratio_cell}"
 
-        # Totals chain (match your "safe_sum" which includes prev total row)
+        # ✅ FIXED: chain must NOT reference undefined "attachment"
         chain = [("REV", rev_idx), ("GP", gp_idx), ("EBITDA", ebitda_idx), ("OP", op_idx), ("PBT", pbt_idx), ("NP", np_idx)]
         chain = [(nm, idx) for nm, idx in chain if isinstance(idx, int)]
         chain = sorted(chain, key=lambda x: x[1])
 
-        # If GP was already computed by Revenue+COS, we skip overwriting GP (matches your code)
         for j in range(1, len(chain)):
             prev_nm, prev_idx0 = chain[j - 1]
             cur_nm, cur_idx0 = chain[j]
@@ -3136,16 +3479,13 @@ def build_full_dcf_excel_model(
             if cur_nm == "GP" and has_cos and isinstance(gp_idx, int) and isinstance(cos_idx, int):
                 continue
 
-            # SUM from prev_total_row to row above current total (inclusive of prev total)
             wsIS[f"{colL}{cur_r}"] = f"=SUM({colL}{prev_r}:{colL}{cur_r-1})"
 
-        # Tax = PBT * avg_tax_ratio
         if isinstance(tax_idx, int) and isinstance(pbt_idx, int):
             tax_r = base_row + tax_idx
             pbt_r = base_row + pbt_idx
             wsIS[f"{colL}{tax_r}"] = f"={colL}{pbt_r}*{avg_tax_ratio_cell}"
 
-        # NP = PBT + Tax + sum(lines between Tax and NP)
         if isinstance(np_idx, int) and isinstance(pbt_idx, int):
             np_r = base_row + np_idx
             pbt_r = base_row + pbt_idx
@@ -3158,14 +3498,12 @@ def build_full_dcf_excel_model(
             else:
                 wsIS[f"{colL}{np_r}"] = f"={colL}{pbt_r}"
 
-    # Format styling (money)
     money_cols = list(range(3, end_col + 1))
     style_body(wsIS, base_row, base_row + len(forecast_is_df) - 1, 1, end_col, money_cols=money_cols)
-
     wsIS.freeze_panes = f"C{base_row}"
 
     # =========================================================
-    # 3) WORKING CAPITAL SHEET (FORMULAS)
+    # 3) WORKING CAPITAL SHEET
     # =========================================================
     wsWC = wb.create_sheet("WorkingCapital")
     style_title(wsWC, "Working Capital (Forecast & ΔWC)", end_col=8)
@@ -3173,27 +3511,20 @@ def build_full_dcf_excel_model(
     wsWC["A3"], wsWC["B3"], wsWC["C3"], wsWC["D3"] = "Year", "Revenue", "WC (Rev*WC%)", "ΔWC (Old-New)"
     style_header_row(wsWC, 3, 1, 4)
 
-    # revenue references from IncomeStatement revenue row
-    # Revenue year col letters in IncomeStatement: historical + forecast
-    # We'll only fill forecast years for WC forecast (like your DCF uses)
-    wc_pct_cell = f"Parameters!$B${start_r + 9}"      # "WC % of Sales used"
-    last_wc_cell = f"Parameters!$B${start_r + 10}"    # "Last historical WC used"
+    wc_pct_cell = f"Parameters!$B${start_r + 9}"
+    last_wc_cell = f"Parameters!$B${start_r + 10}"
 
     r0 = 4
     for i, y in enumerate(forecast_years_int):
         r = r0 + i
         wsWC.cell(r, 1, int(y))
 
-        # Revenue cell in IncomeStatement sheet
-        # Column index for this forecast year in IS:
         col_index_is = 3 + len(year_cols_is) + i
         colL_is = _excel_col(col_index_is)
         wsWC.cell(r, 2, f"=IncomeStatement!{colL_is}{rev_row_excel}")
 
-        # WC = Revenue * WC%
         wsWC.cell(r, 3, f"=B{r}*{wc_pct_cell}")
 
-        # ΔWC = Old - New ; Old is last hist for first year, else previous WC
         if i == 0:
             wsWC.cell(r, 4, f"={last_wc_cell}-C{r}")
         else:
@@ -3206,33 +3537,30 @@ def build_full_dcf_excel_model(
 
     style_body(wsWC, 4, 4 + n_fore - 1, 1, 4, money_cols=[2, 3, 4])
     wsWC.freeze_panes = "A4"
+
     # =========================================================
-    # 3) INPUTS SHEET (Dep + Capex values exactly as system used)
+    # 4) INPUTS SHEET
     # =========================================================
     wsI = wb.create_sheet("Inputs")
     style_title(wsI, "Model Inputs (Used by DCF)", end_col=6)
 
     wsI["A3"], wsI["B3"], wsI["C3"] = "Year", "Depreciation (forecast)", "Capex (forecast)"
     style_header_row(wsI, 3, 1, 3)
-    # -----------------------------
-    # DCF Inputs used (exactly from system)
-    # -----------------------------
+
     wsI["E3"], wsI["F3"] = "DCF Input", "Value"
     style_header_row(wsI, 3, 5, 6)
 
-    # fixed row cells we will reference from Parameters formulas
     wsI["E4"], wsI["F4"] = "Risk-free rate (RF)", float(rf)
     wsI["E5"], wsI["F5"] = "Market risk premium (MRP)", float(mrp)
-    wsI["E6"], wsI["F6"] = "Unlevered beta (βu)", float(st.session_state.get("dcf_unlevered_beta", 1.0))
+    wsI["E6"], wsI["F6"] = "Unlevered beta (βu)", float(dcf_unlevered_beta)
     wsI["E7"], wsI["F7"] = "Tax rate (T)", float(tax)
     wsI["E8"], wsI["F8"] = "Terminal growth (g)", float(g)
-    wsI["E9"], wsI["F9"] = "Cost of debt (Rd)", float(st.session_state.get("rd", 0.0))
-    wsI["E10"], wsI["F10"] = "Total Debt", float(st.session_state.get("total_debt", 0.0))
-    wsI["E11"], wsI["F11"] = "Cash", float(st.session_state.get("cash_balance", 0.0))
-    wsI["E12"], wsI["F12"] = "Book Equity", float(st.session_state.get("book_equity", 0.0))
-    wsI["E13"], wsI["F13"] = "D/E ratio (book)", float(st.session_state.get("de_ratio", 0.0))
+    wsI["E9"], wsI["F9"] = "Cost of debt (Rd)", float(rd)
+    wsI["E10"], wsI["F10"] = "Total Debt", float(total_debt)
+    wsI["E11"], wsI["F11"] = "Cash", float(cash_balance)
+    wsI["E12"], wsI["F12"] = "Book Equity", float(book_equity)
+    wsI["E13"], wsI["F13"] = "D/E ratio (book)", float(de_ratio)
 
-    # formats + borders
     for rr in range(4, 14):
         wsI.cell(rr, 5).border = border_all
         wsI.cell(rr, 6).border = border_all
@@ -3254,10 +3582,8 @@ def build_full_dcf_excel_model(
         wsI.cell(r, 1, int(y))
         wsI.cell(r, 2, float(dep_forecast_vals[i]))
         wsI.cell(r, 3, float(capex_forecast_vals[i]))
-
         wsI.cell(r, 2).number_format = "#,##0"
         wsI.cell(r, 3).number_format = "#,##0"
-
         for c in range(1, 4):
             wsI.cell(r, c).border = border_all
 
@@ -3267,7 +3593,7 @@ def build_full_dcf_excel_model(
     wsI.freeze_panes = "A4"
 
     # =========================================================
-    # 4) DCF SHEET (FORMULAS: UFCF, DF, PV, TV, EV, Equity)
+    # 5) DCF SHEET
     # =========================================================
     wsD = wb.create_sheet("DCF")
     end_col = 2 + n_fore
@@ -3279,7 +3605,6 @@ def build_full_dcf_excel_model(
         wsD.cell(3, 3 + j, str(y))
     style_header_row(wsD, 3, 1, end_col)
 
-    # Lines
     lines = [
         ("EBITDA × (1−T)", "USD"),
         ("Depreciation × Tax", "USD"),
@@ -3294,58 +3619,37 @@ def build_full_dcf_excel_model(
         wsD.cell(r_start + i, 1, nm)
         wsD.cell(r_start + i, 2, unit)
 
-    # References
-    TAX_DCF = f"Parameters!$B${start_r + 1}"  # Tax rate (DCF)
-    WACC = f"Parameters!$B${start_r + 0}"     # WACC
-    G = f"Parameters!$B${start_r + 2}"        # g
-    NETDEBT = f"Parameters!$B${start_r + 3}"  # Net debt
-
-    # For DCF, pull EBITDA/Dep from IncomeStatement rows (more “complete model” feel)
-    # If you mapped EBITDA, use that row; Dep we do NOT have a guaranteed IS row (you used keyword dep),
-    # so we keep dep from your computed Dep forecast using ratios stored OR you can later map it.
-    # For now: EBITDA comes from mapped row if exists, else 0.
+    TAX_DCF = f"Parameters!$B${start_r + 1}"
+    WACC = f"Parameters!$B${start_r + 0}"
+    G = f"Parameters!$B${start_r + 2}"
+    NETDEBT = f"Parameters!$B${start_r + 3}"
 
     ebitda_row_excel = (base_row + ebitda_idx) if isinstance(ebitda_idx, int) else None
 
-    # Build year columns formulas
     for j in range(n_fore):
         col = 3 + j
         colL = _excel_col(col)
-
-        # IncomeStatement col letter for this forecast year
         is_col = _excel_col(3 + len(year_cols_is) + j)
 
-        # EBITDA*(1-T)
         if ebitda_row_excel is not None:
             wsD[f"{colL}{r_start+0}"] = f"=IncomeStatement!{is_col}{ebitda_row_excel}*(1-{TAX_DCF})"
         else:
             wsD[f"{colL}{r_start+0}"] = f"=0*(1-{TAX_DCF})"
-        # Depreciation × Tax (match your Python: dep_tax_vals = -dep_forecast_vals * tax)
-        # Dep forecast comes from Inputs sheet
+
         wsD[f"{colL}{r_start+1}"] = f"=-Inputs!B{4+j}*{TAX_DCF}"
-        # ΔWC from WC sheet
         wsD[f"{colL}{r_start+2}"] = f"=WorkingCapital!D{4+j}"
-        # Capex (match your Python: capex_forecast_vals already includes sign)
         wsD[f"{colL}{r_start+3}"] = f"=Inputs!C{4+j}"
 
-        # UFCF
         wsD[f"{colL}{r_start+4}"] = f"={colL}{r_start+0}+{colL}{r_start+1}+{colL}{r_start+2}+{colL}{r_start+3}"
 
-        # Discount factor from discount period n (we will store n in Parameters growth table? better: store n values directly in DCF)
-        # Here we just write n values as constants in a hidden row and use them:
-        # We'll put n in row r_start+7 (hidden later) - simplest
         n_row = r_start + 8
         wsD[f"{colL}{n_row}"] = float(discount_periods_n[j])
         wsD[f"{colL}{r_start+5}"] = f"=1/(1+{WACC})^{colL}{n_row}"
-
-        # PV
         wsD[f"{colL}{r_start+6}"] = f"={colL}{r_start+4}*{colL}{r_start+5}"
 
-    # Hidden n row label
     wsD.cell(r_start + 8, 1, "Discount period n (hidden)")
     wsD.row_dimensions[r_start + 8].hidden = True
 
-    # Terminal and totals
     term_r = r_start + 10
     wsD.cell(term_r, 1, "Terminal Value")
     wsD.cell(term_r, 2, "USD")
@@ -3361,10 +3665,9 @@ def build_full_dcf_excel_model(
     ev_r = pv_term_r + 2
     wsD.cell(ev_r, 1, "Enterprise Value (EV)")
     wsD.cell(ev_r, 2, "USD")
-    wsD.cell(ev_r, 1).font = Font(bold=True, color="FFFFFF")
-    wsD.cell(ev_r, 2).font = Font(bold=True, color="FFFFFF")
-    wsD.cell(ev_r, 1).fill = PatternFill("solid", fgColor=DARK)
-    wsD.cell(ev_r, 2).fill = PatternFill("solid", fgColor=DARK)
+    for c in [1, 2]:
+        wsD.cell(ev_r, c).font = Font(bold=True, color="FFFFFF")
+        wsD.cell(ev_r, c).fill = PatternFill("solid", fgColor=DARK)
 
     first_pv = f"C{r_start+6}"
     last_pv = f"{last_colL}{r_start+6}"
@@ -3373,45 +3676,25 @@ def build_full_dcf_excel_model(
     eq_r = ev_r + 1
     wsD.cell(eq_r, 1, "Equity Value")
     wsD.cell(eq_r, 2, "USD")
-    wsD.cell(eq_r, 1).font = Font(bold=True, color="FFFFFF")
-    wsD.cell(eq_r, 2).font = Font(bold=True, color="FFFFFF")
-    wsD.cell(eq_r, 1).fill = PatternFill("solid", fgColor=DARK)
-    wsD.cell(eq_r, 2).fill = PatternFill("solid", fgColor=DARK)
+    for c in [1, 2]:
+        wsD.cell(eq_r, c).font = Font(bold=True, color="FFFFFF")
+        wsD.cell(eq_r, c).fill = PatternFill("solid", fgColor=DARK)
     wsD[f"C{eq_r}"] = f"=C{ev_r}-{NETDEBT}"
-    # formats
+
     money_cols = list(range(3, end_col + 1))
     style_body(wsD, r_start, eq_r, 1, end_col, money_cols=money_cols)
-    # ✅ FORCE Equity Value label + unit to stay black (A and B)
-    for c in [1, 2]:
-        cell = wsD.cell(eq_r, c)
-        cell.fill = PatternFill("solid", fgColor=DARK)
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.border = border_all
-        cell.alignment = Alignment(horizontal="left", vertical="center")
+    for j in range(n_fore):
+        wsD.cell(r_start + 5, 3 + j).number_format = "0.000"
 
     wsD.column_dimensions["A"].width = 28
     wsD.column_dimensions["B"].width = 10
     for j in range(n_fore):
         wsD.column_dimensions[_excel_col(3 + j)].width = 14
 
-    # formats
-    money_cols = list(range(3, end_col + 1))
-    style_body(wsD, r_start, eq_r, 1, end_col, money_cols=money_cols)
-    # DF row format
-    for j in range(n_fore):
-        wsD.cell(r_start + 5, 3 + j).number_format = "0.000"
-    # ✅ FORCE Equity Value label + unit to stay black (row eq_r is even, zebra fill overwrites it)
-    for c in [1, 2]:
-        cell = wsD.cell(eq_r, c)
-        cell.fill = PatternFill("solid", fgColor=DARK)
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.border = border_all
-        cell.alignment = Alignment(horizontal="left", vertical="center")
-
     wsD.freeze_panes = f"C{r_start}"
 
     # =========================================================
-    # 5) SUMMARY SHEET (links to formulas)
+    # 6) SUMMARY SHEET
     # =========================================================
     wsS = wb.create_sheet("Summary")
     style_title(wsS, "DCF Summary", end_col=6)
@@ -3438,10 +3721,7 @@ def build_full_dcf_excel_model(
         wsS.cell(r, 3, u)
         for c in range(1, 4):
             wsS.cell(r, c).border = border_all
-        if u == "USD":
-            wsS.cell(r, 2).number_format = "#,##0"
-        else:
-            wsS.cell(r, 2).number_format = "0.00%"
+        wsS.cell(r, 2).number_format = "#,##0" if u == "USD" else "0.00%"
 
     wsS.column_dimensions["A"].width = 28
     wsS.column_dimensions["B"].width = 18
@@ -3449,7 +3729,143 @@ def build_full_dcf_excel_model(
     style_body(wsS, 4, 4 + len(rows) - 1, 1, 3, money_cols=[2])
     wsS.freeze_panes = "A4"
 
+    # =========================================================
+    # 7) ✅ SENSITIVITY SHEET (values must match your Streamlit sensitivity inputs)
+    #    - NO hard-coded grid values
+    #    - Grid cells are formulas driven by (WACC row, g col) + DCF UFCFs
+    # =========================================================
+    wsSens = wb.create_sheet("Sensitivity")
+
+    # Title
+    style_title(wsSens, "Sensitivity: Equity Value vs WACC & Terminal Growth (g)", end_col=9)
+
+    # Nice comment/tip
+    wsSens["A2"] = "Tip: Edit WACC (rows) or g (columns) to instantly see equity value impact. Base case is highlighted; Min/Max are shown below."
+    wsSens["A2"].font = Font(italic=True, color="4B5563")
+    wsSens.merge_cells("A2:I2")
+
+    # Layout
+    # A3 = "WACC \\ g"
+    wsSens["A3"] = "WACC \\ g"
+    wsSens["A3"].font = Font(bold=True, color="FFFFFF")
+    wsSens["A3"].fill = PatternFill("solid", fgColor=BLUE)
+    wsSens["A3"].alignment = Alignment(horizontal="center", vertical="center")
+    wsSens["A3"].border = border_all
+
+    # Build grids around the CURRENT base WACC & g used by your model (Parameters WACC & g)
+    base_wacc_cell = WACC            # Parameters!B5
+    base_g_cell = G                  # Parameters!B7
+
+    # Convert Streamlit steps to decimals (already passed as pct numbers like 3.50)
+    wacc_step_dec = float(sens_wacc_step_pct) / 100.0
+    g_step_dec = float(sens_g_step_pct) / 100.0
+
+    # Row/Col counts
+    R = int(sens_wacc_points)
+    C = int(sens_g_points)
+
+    # Center indices
+    w_mid = (R - 1) / 2.0
+    g_mid = (C - 1) / 2.0
+
+    # Header g values in row 3 (B3..)
+    for j in range(C):
+        g_val = float(g) + (j - g_mid) * g_step_dec
+        cell = wsSens.cell(3, 2 + j, g_val)
+        cell.number_format = "0.00%"
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor=BLUE)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border_all
+
+    # WACC values down column A (A4..)
+    for i in range(R):
+        w_val = float(wacc) + (i - w_mid) * wacc_step_dec
+        cell = wsSens.cell(4 + i, 1, w_val)
+        cell.number_format = "0.00%"
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor=BLUE)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border_all
+
+    # Create sensitivity grid formulas
+    # Use DCF UFCF row + discount periods n row + net debt
+    # DCF UFCF is at row (r_start+4), cols C..last
+    ufcf_row = r_start + 4
+    n_row = r_start + 8
+    last_year_col = 3 + n_fore - 1
+    last_year_colL = _excel_col(last_year_col)
+
+    # Helper: ranges for SUMPRODUCT
+    ufcf_rng = f"DCF!$C${ufcf_row}:${last_year_colL}${ufcf_row}"
+    n_rng = f"DCF!$C${n_row}:${last_year_colL}${n_row}"
+
+    # We also need the last UFCF cell
+    last_ufcf_cell = f"DCF!${last_year_colL}${ufcf_row}"
+    last_n_cell = f"DCF!${last_year_colL}${n_row}"
+
+    # Fill grid B4.. with formulas referencing header cells
+    for i in range(R):
+        wacc_hdr = f"$A{4+i}"        # WACC in Sensitivity column A
+        for j in range(C):
+            g_hdr = f"{_excel_col(2+j)}$3"  # g in Sensitivity row 3
+
+            # PV explicit: SUMPRODUCT(UFCF / (1+WACC)^n)
+            pv_explicit = f"SUMPRODUCT({ufcf_rng}/(1+{wacc_hdr})^{n_rng})"
+
+            # Terminal Value: UFCF_last*(1+g)/(WACC-g)
+            tv = f"({last_ufcf_cell}*(1+{g_hdr}))/({wacc_hdr}-{g_hdr})"
+
+            # PV TV: TV/(1+WACC)^n_last
+            pv_tv = f"({tv})/(1+{wacc_hdr})^{last_n_cell}"
+
+            # Equity = PV_explicit + PV_TV - NetDebt
+            formula = f"=({pv_explicit})+({pv_tv})-{NETDEBT}"
+
+            cell = wsSens.cell(4 + i, 2 + j, formula)
+            cell.number_format = "#,##0"
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+            cell.border = border_all
+
+    # Base-case highlighting (closest match cell): we highlight the center cell by design
+    base_i = int(round(w_mid))
+    base_j = int(round(g_mid))
+    base_cell = wsSens.cell(4 + base_i, 2 + base_j)
+    base_cell.fill = PatternFill("solid", fgColor=SKY)
+    base_cell.font = Font(bold=True)
+
+    # Simple Min/Max highlight based on corners (safe + nice look)
+    # (True min/max are summarized below with formulas)
+    wsSens.cell(4 + (R - 1), 2).fill = PatternFill("solid", fgColor=YELLOW)           # bottom-left vibe "low"
+    wsSens.cell(4 + 0, 2 + (C - 1)).fill = PatternFill("solid", fgColor=ORANGE)      # top-right vibe "high"
+
+    # Summary stats below
+    stats_r = 6 + R
+    wsSens[f"A{stats_r}"] = "Base Equity Value"
+    wsSens[f"C{stats_r}"] = "Lowest (grid)"
+    wsSens[f"E{stats_r}"] = "Highest (grid)"
+    for c in ["A", "C", "E"]:
+        wsSens[f"{c}{stats_r}"].font = Font(bold=True)
+
+    grid_top_left = "B4"
+    grid_bot_right = f"{_excel_col(1+C)}{3+R}"
+    grid_range = f"{grid_top_left}:{grid_bot_right}"
+
+    wsSens[f"A{stats_r+1}"] = f"={_excel_col(2+base_j)}{4+base_i}"
+    wsSens[f"C{stats_r+1}"] = f"=MIN({grid_range})"
+    wsSens[f"E{stats_r+1}"] = f"=MAX({grid_range})"
+    for c in ["A", "C", "E"]:
+        wsSens[f"{c}{stats_r+1}"].number_format = "#,##0"
+        wsSens[f"{c}{stats_r+1}"].font = Font(bold=True, size=16)
+
+    wsSens.column_dimensions["A"].width = 12
+    for j in range(C):
+        wsSens.column_dimensions[_excel_col(2 + j)].width = 16
+
+    wsSens.freeze_panes = "B4"
+
     return wb
+
 
 def workbook_to_bytes(wb: Workbook) -> bytes:
     bio = io.BytesIO()
@@ -3457,16 +3873,19 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
     bio.seek(0)
     return bio.read()
 
+
 st.markdown("---")
 st.subheader("⬇️ Download FULL DCF Excel Model")
 
-# We need WC inputs that your code already computed:
-# wc_percent_used = wc_percent_avg
-# last_wc_hist_value = last_wc_hist_value
-# cos_ratio exists only if computed; if not, set 0.0
 _wc_percent_used = float(wc_percent_avg) if "wc_percent_avg" in globals() else 0.0
 _last_wc_hist_value = float(last_wc_hist_value) if "last_wc_hist_value" in globals() else 0.0
 _cos_ratio = float(cos_ratio) if "cos_ratio" in globals() else 0.0
+
+# ✅ pull sensitivity settings from your Streamlit controls (session_state)
+sens_wacc_points = int(st.session_state.get("sens_wacc_points", 5))
+sens_g_points = int(st.session_state.get("sens_g_points", 7))
+sens_wacc_step_pct = float(st.session_state.get("sens_wacc_step_pct", 5.0))
+sens_g_step_pct = float(st.session_state.get("sens_g_step_pct", 0.5))
 
 if st.button("📥 Generate FULL Excel Model"):
     wb = build_full_dcf_excel_model(
@@ -3475,20 +3894,40 @@ if st.button("📥 Generate FULL Excel Model"):
         year_cols_is=year_cols_is,
         forecast_years_int=forecast_years_int,
         forecast_cols=forecast_cols,
+
         rev_idx=rev_idx, cos_idx=cos_idx, gp_idx=gp_idx, ebitda_idx=ebitda_idx,
         op_idx=op_idx, pbt_idx=pbt_idx, tax_idx=tax_idx, np_idx=np_idx,
+
         growth_mode=growth_mode,
         yearly_g_dict=yearly_g,
         avg_g=avg_g,
         avg_tax_ratio=avg_tax_ratio,
         avg_gp_margin=avg_gp_margin if "avg_gp_margin" in globals() and avg_gp_margin is not None else None,
         cos_ratio=_cos_ratio,
+
         wc_percent_used=_wc_percent_used,
         last_wc_hist_value=_last_wc_hist_value,
+
         discount_periods_n=discount_periods_n,
         dep_forecast_vals=dep_forecast_vals,
         capex_forecast_vals=capex_forecast_vals,
         wacc=wacc, tax=tax, g=g, net_debt=net_debt,
+
+        # ✅ pass inputs that were previously referenced inside the function
+        rf=rf,
+        mrp=mrp,
+        dcf_unlevered_beta=float(st.session_state.get("dcf_unlevered_beta", 1.0)),
+        rd=float(st.session_state.get("rd", 0.0)),
+        total_debt=float(st.session_state.get("total_debt", 0.0)),
+        cash_balance=float(st.session_state.get("cash_balance", 0.0)),
+        book_equity=float(st.session_state.get("book_equity", 0.0)),
+        de_ratio=float(st.session_state.get("de_ratio", 0.0)),
+
+        # ✅ sensitivity EXACTLY as in your system
+        sens_wacc_points=sens_wacc_points,
+        sens_g_points=sens_g_points,
+        sens_wacc_step_pct=sens_wacc_step_pct,
+        sens_g_step_pct=sens_g_step_pct,
     )
 
     xbytes = workbook_to_bytes(wb)
