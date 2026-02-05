@@ -2093,10 +2093,6 @@ rd = cost_of_debt       # <-- ⭐⭐ VERY IMPORTANT ⭐⭐
 
 # ---------------------------------------------------------
 # DCF PARAMETERS — AUTO + OVERRIDE (WITH 2 OPTIONAL UPLOADS)
-# ✅ FIXED: when you upload Country ERP + Default Spread,
-#          RF + MRP textboxes IMMEDIATELY take those values
-#          (RF = AvgCoD - Spread, MRP = ERP)
-#          and the formulas use the textbox values.
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("💰 DCF Parameters (Auto + Override)")
@@ -2897,20 +2893,6 @@ def bind_number_input(label, store_key, widget_key, *, cast=int, **kwargs):
         **kwargs
     )
 
-# -------------------------
-# Reset ONLY sensitivity inputs (store + widget)
-# -------------------------
-if st.button("↩️ Reset Sensitivity Inputs", key="sens_reset_btn"):
-    for k, v in SENS_STORE_DEFAULTS.items():
-        st.session_state[k] = v
-
-    # optional: also wipe widget keys (so they reload from store cleanly)
-    for wk in ["sens_wacc_points_w", "sens_g_points_w", "sens_wacc_step_pct_w", "sens_g_step_pct_w"]:
-        if wk in st.session_state:
-            del st.session_state[wk]
-
-    st.rerun()
-
 # --- base values from your DCF (decimals)
 base_wacc = float(wacc)
 base_g = float(g)
@@ -3052,7 +3034,7 @@ def fmt_num(x):
         pass
     return f"{float(x):,.0f}"
 
-display_df = sens_table.applymap(fmt_num)
+display_df = sens_table.map(fmt_num)
 cols = list(display_df.columns)
 rows = list(display_df.index)
 
@@ -3124,9 +3106,10 @@ st.caption(
     f"Base case highlighted in blue (WACC={base_wacc*100:.2f}% , g={base_g*100:.2f}%). "
     f"Min highlighted in yellow, Max highlighted in orange."
 )
+
 # =========================================================
 # ✅ FULL DCF EXCEL EXPORT (FULL INCOME STATEMENT + FORMULAS + SENSITIVITY)
-# Paste AFTER: st.dataframe(styled_summary, ...)
+# Put this RIGHT AFTER the forecast IS display above
 # =========================================================
 import io
 from openpyxl import Workbook
@@ -3139,34 +3122,29 @@ def _excel_col(n: int) -> str:
 
 
 def build_full_dcf_excel_model(
-    is_df,                 # original cleaned historical IS (optional use)
-    forecast_is_df,        # your forecast_is dataframe (has Item + hist + forecast cols)
-    year_cols_is,          # historical year columns (strings)
-    forecast_years_int,    # forecast years int list
-    forecast_cols,         # forecast cols strings
+    is_df,
+    forecast_is_df,
+    year_cols_is,
+    forecast_years_int,
+    forecast_cols,
 
-    # mapping indices (ints or None)
     rev_idx, cos_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, tax_idx, np_idx,
 
-    # computed forecast logic inputs
-    growth_mode,           # "Uniform..." or "Different..."
-    yearly_g_dict,         # dict {year_int: growth_decimal}
-    avg_g,                 # decimal
-    avg_tax_ratio,         # decimal (negative usually)
-    avg_gp_margin,         # decimal or None
-    cos_ratio,             # decimal or 0.0
+    growth_mode,
+    yearly_g_dict,
+    avg_g,
+    avg_tax_ratio,
+    avg_gp_margin,
+    cos_ratio,
 
-    # working capital inputs
-    wc_percent_used,       # decimal (WC% of sales used)
-    last_wc_hist_value,    # last historical WC value used as starting point
+    wc_percent_used,
+    last_wc_hist_value,
 
-    # DCF inputs
-    discount_periods_n,    # list/array length n_fore
-    dep_forecast_vals,     # list/array length n_fore
-    capex_forecast_vals,   # list/array length n_fore
+    discount_periods_n,
+    dep_forecast_vals,
+    capex_forecast_vals,
     wacc, tax, g, net_debt,
 
-    # inputs that were previously referenced as st.session_state inside the builder
     rf, mrp,
     dcf_unlevered_beta=1.0,
     rd=0.0,
@@ -3175,11 +3153,11 @@ def build_full_dcf_excel_model(
     book_equity=0.0,
     de_ratio=0.0,
 
-    # ✅ Sensitivity settings (MUST come from your Streamlit sensitivity controls)
+    # ✅ IMPORTANT: these MUST match your *persistent* sensitivity store keys
     sens_wacc_points=5,
     sens_g_points=7,
-    sens_wacc_step_pct=5.0,   # e.g. 3.50 means 3.50%
-    sens_g_step_pct=1.0,      # e.g. 1.10 means 1.10%
+    sens_wacc_step_pct=5.0,
+    sens_g_step_pct=0.5,
 ):
     wb = Workbook()
 
@@ -3187,7 +3165,6 @@ def build_full_dcf_excel_model(
     # Theme (FBC-ish)
     # -----------------------------
     BLUE = "003399"
-    GOLD = "F5B400"
     DARK = "071426"
     LIGHT_BG = "F7FAFF"
     GRID = "D9E2EF"
@@ -3250,6 +3227,7 @@ def build_full_dcf_excel_model(
     wsP["A3"] = "Key Inputs"
     wsP["A3"].font = Font(bold=True)
 
+    # NOTE: Inputs sheet is created later; formulas still work fine
     key_rows = [
         ("WACC",
          "=((1/(1+Inputs!$F$13))*(Inputs!$F$4 + (Inputs!$F$6*(1+(1-Inputs!$F$7)*Inputs!$F$13))*Inputs!$F$5)) + ((Inputs!$F$13/(1+Inputs!$F$13))*Inputs!$F$9*(1-Inputs!$F$7))",
@@ -3264,7 +3242,8 @@ def build_full_dcf_excel_model(
         ("COS ratio (if used)", float(cos_ratio), "decimal"),
         ("WC % of Sales used", float(wc_percent_used), "decimal"),
         ("Last historical WC used", float(last_wc_hist_value), "money"),
-        # ✅ Sensitivity settings (stored so Excel can show them too)
+
+        # ✅ Sensitivity settings recorded here too
         ("Sensitivity: WACC points (rows)", int(sens_wacc_points), "int"),
         ("Sensitivity: g points (cols)", int(sens_g_points), "int"),
         ("Sensitivity: WACC step", float(sens_wacc_step_pct) / 100.0, "decimal"),
@@ -3465,7 +3444,7 @@ def build_full_dcf_excel_model(
             ratio_cell = f"Parameters!$C${ratio_data_start + i}"
             wsIS[f"{colL}{r}"] = f"={colL}{rev_row_excel}*{ratio_cell}"
 
-        # ✅ FIXED: chain must NOT reference undefined "attachment"
+        # totals chain
         chain = [("REV", rev_idx), ("GP", gp_idx), ("EBITDA", ebitda_idx), ("OP", op_idx), ("PBT", pbt_idx), ("NP", np_idx)]
         chain = [(nm, idx) for nm, idx in chain if isinstance(idx, int)]
         chain = sorted(chain, key=lambda x: x[1])
@@ -3673,6 +3652,8 @@ def build_full_dcf_excel_model(
     last_pv = f"{last_colL}{r_start+6}"
     wsD[f"C{ev_r}"] = f"=SUM({first_pv}:{last_pv})+{last_colL}{pv_term_r}"
 
+    BLACK = "000000"
+
     eq_r = ev_r + 1
     wsD.cell(eq_r, 1, "Equity Value")
     wsD.cell(eq_r, 2, "USD")
@@ -3682,7 +3663,7 @@ def build_full_dcf_excel_model(
     wsD[f"C{eq_r}"] = f"=C{ev_r}-{NETDEBT}"
 
     money_cols = list(range(3, end_col + 1))
-    style_body(wsD, r_start, eq_r, 1, end_col, money_cols=money_cols)
+    style_body(wsD, r_start, ev_r - 1, 1, end_col, money_cols=money_cols)
     for j in range(n_fore):
         wsD.cell(r_start + 5, 3 + j).number_format = "0.000"
 
@@ -3709,8 +3690,8 @@ def build_full_dcf_excel_model(
         ("WACC", f"={WACC}", "%"),
         ("Terminal growth (g)", f"={G}", "%"),
         ("Tax rate (DCF)", f"={TAX_DCF}", "%"),
-        ("Tax/PBT ratio (IS)", f"={avg_tax_ratio_cell}", "%"),
-        ("WC % of Sales used", f"={wc_pct_cell}", "%"),
+        ("Tax/PBT ratio (IS)", f"=Parameters!$B${start_r + 4}", "%"),
+        ("WC % of Sales used", f"=Parameters!$B${start_r + 9}", "%"),
     ]
 
     r0 = 4
@@ -3730,45 +3711,32 @@ def build_full_dcf_excel_model(
     wsS.freeze_panes = "A4"
 
     # =========================================================
-    # 7) ✅ SENSITIVITY SHEET (values must match your Streamlit sensitivity inputs)
-    #    - NO hard-coded grid values
-    #    - Grid cells are formulas driven by (WACC row, g col) + DCF UFCFs
+    # 7) ✅ SENSITIVITY SHEET (kept + formula-driven)
     # =========================================================
     wsSens = wb.create_sheet("Sensitivity")
-
-    # Title
     style_title(wsSens, "Sensitivity: Equity Value vs WACC & Terminal Growth (g)", end_col=9)
 
-    # Nice comment/tip
-    wsSens["A2"] = "Tip: Edit WACC (rows) or g (columns) to instantly see equity value impact. Base case is highlighted; Min/Max are shown below."
+    wsSens["A2"] = "Tip: Edit WACC (rows) or g (columns) to instantly see equity value impact."
     wsSens["A2"].font = Font(italic=True, color="4B5563")
     wsSens.merge_cells("A2:I2")
 
-    # Layout
-    # A3 = "WACC \\ g"
     wsSens["A3"] = "WACC \\ g"
     wsSens["A3"].font = Font(bold=True, color="FFFFFF")
     wsSens["A3"].fill = PatternFill("solid", fgColor=BLUE)
     wsSens["A3"].alignment = Alignment(horizontal="center", vertical="center")
     wsSens["A3"].border = border_all
 
-    # Build grids around the CURRENT base WACC & g used by your model (Parameters WACC & g)
-    base_wacc_cell = WACC            # Parameters!B5
-    base_g_cell = G                  # Parameters!B7
-
-    # Convert Streamlit steps to decimals (already passed as pct numbers like 3.50)
+    # Steps in decimals
     wacc_step_dec = float(sens_wacc_step_pct) / 100.0
     g_step_dec = float(sens_g_step_pct) / 100.0
 
-    # Row/Col counts
     R = int(sens_wacc_points)
     C = int(sens_g_points)
 
-    # Center indices
     w_mid = (R - 1) / 2.0
     g_mid = (C - 1) / 2.0
 
-    # Header g values in row 3 (B3..)
+    # Header g values (row 3)
     for j in range(C):
         g_val = float(g) + (j - g_mid) * g_step_dec
         cell = wsSens.cell(3, 2 + j, g_val)
@@ -3778,7 +3746,7 @@ def build_full_dcf_excel_model(
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = border_all
 
-    # WACC values down column A (A4..)
+    # WACC values (col A)
     for i in range(R):
         w_val = float(wacc) + (i - w_mid) * wacc_step_dec
         cell = wsSens.cell(4 + i, 1, w_val)
@@ -3788,38 +3756,25 @@ def build_full_dcf_excel_model(
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = border_all
 
-    # Create sensitivity grid formulas
-    # Use DCF UFCF row + discount periods n row + net debt
-    # DCF UFCF is at row (r_start+4), cols C..last
+    # Grid formulas based on UFCF + discount periods in DCF sheet
     ufcf_row = r_start + 4
     n_row = r_start + 8
     last_year_col = 3 + n_fore - 1
     last_year_colL = _excel_col(last_year_col)
 
-    # Helper: ranges for SUMPRODUCT
     ufcf_rng = f"DCF!$C${ufcf_row}:${last_year_colL}${ufcf_row}"
     n_rng = f"DCF!$C${n_row}:${last_year_colL}${n_row}"
-
-    # We also need the last UFCF cell
     last_ufcf_cell = f"DCF!${last_year_colL}${ufcf_row}"
     last_n_cell = f"DCF!${last_year_colL}${n_row}"
 
-    # Fill grid B4.. with formulas referencing header cells
     for i in range(R):
-        wacc_hdr = f"$A{4+i}"        # WACC in Sensitivity column A
+        wacc_hdr = f"$A{4+i}"
         for j in range(C):
-            g_hdr = f"{_excel_col(2+j)}$3"  # g in Sensitivity row 3
+            g_hdr = f"{_excel_col(2+j)}$3"
 
-            # PV explicit: SUMPRODUCT(UFCF / (1+WACC)^n)
             pv_explicit = f"SUMPRODUCT({ufcf_rng}/(1+{wacc_hdr})^{n_rng})"
-
-            # Terminal Value: UFCF_last*(1+g)/(WACC-g)
             tv = f"({last_ufcf_cell}*(1+{g_hdr}))/({wacc_hdr}-{g_hdr})"
-
-            # PV TV: TV/(1+WACC)^n_last
             pv_tv = f"({tv})/(1+{wacc_hdr})^{last_n_cell}"
-
-            # Equity = PV_explicit + PV_TV - NetDebt
             formula = f"=({pv_explicit})+({pv_tv})-{NETDEBT}"
 
             cell = wsSens.cell(4 + i, 2 + j, formula)
@@ -3827,19 +3782,14 @@ def build_full_dcf_excel_model(
             cell.alignment = Alignment(horizontal="right", vertical="center")
             cell.border = border_all
 
-    # Base-case highlighting (closest match cell): we highlight the center cell by design
+    # Base highlight (center)
     base_i = int(round(w_mid))
     base_j = int(round(g_mid))
     base_cell = wsSens.cell(4 + base_i, 2 + base_j)
     base_cell.fill = PatternFill("solid", fgColor=SKY)
     base_cell.font = Font(bold=True)
 
-    # Simple Min/Max highlight based on corners (safe + nice look)
-    # (True min/max are summarized below with formulas)
-    wsSens.cell(4 + (R - 1), 2).fill = PatternFill("solid", fgColor=YELLOW)           # bottom-left vibe "low"
-    wsSens.cell(4 + 0, 2 + (C - 1)).fill = PatternFill("solid", fgColor=ORANGE)      # top-right vibe "high"
-
-    # Summary stats below
+    # Min/Max summary
     stats_r = 6 + R
     wsSens[f"A{stats_r}"] = "Base Equity Value"
     wsSens[f"C{stats_r}"] = "Lowest (grid)"
@@ -3861,7 +3811,6 @@ def build_full_dcf_excel_model(
     wsSens.column_dimensions["A"].width = 12
     for j in range(C):
         wsSens.column_dimensions[_excel_col(2 + j)].width = 16
-
     wsSens.freeze_panes = "B4"
 
     return wb
@@ -3873,21 +3822,21 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
     bio.seek(0)
     return bio.read()
 
-
 st.markdown("---")
-st.subheader("⬇️ Download FULL DCF Excel Model")
+st.subheader("⬇️ Download FULL DCF Excel Model (Formulas + Sensitivity)")
 
+# ✅ pull sensitivity settings from your NEW persistent store keys
+sens_wacc_points = int(st.session_state.get("sens_store_wacc_points", 5))
+sens_g_points = int(st.session_state.get("sens_store_g_points", 7))
+sens_wacc_step_pct = float(st.session_state.get("sens_store_wacc_step_pct", 5.0))
+sens_g_step_pct = float(st.session_state.get("sens_store_g_step_pct", 0.5))
+
+# safe locals
 _wc_percent_used = float(wc_percent_avg) if "wc_percent_avg" in globals() else 0.0
 _last_wc_hist_value = float(last_wc_hist_value) if "last_wc_hist_value" in globals() else 0.0
 _cos_ratio = float(cos_ratio) if "cos_ratio" in globals() else 0.0
 
-# ✅ pull sensitivity settings from your Streamlit controls (session_state)
-sens_wacc_points = int(st.session_state.get("sens_wacc_points", 5))
-sens_g_points = int(st.session_state.get("sens_g_points", 7))
-sens_wacc_step_pct = float(st.session_state.get("sens_wacc_step_pct", 5.0))
-sens_g_step_pct = float(st.session_state.get("sens_g_step_pct", 0.5))
-
-if st.button("📥 Generate FULL Excel Model"):
+if st.button("📥 Generate FULL Excel Model", key="gen_full_dcf_excel_btn"):
     wb = build_full_dcf_excel_model(
         is_df=is_df,
         forecast_is_df=forecast_is,
@@ -3902,7 +3851,7 @@ if st.button("📥 Generate FULL Excel Model"):
         yearly_g_dict=yearly_g,
         avg_g=avg_g,
         avg_tax_ratio=avg_tax_ratio,
-        avg_gp_margin=avg_gp_margin if "avg_gp_margin" in globals() and avg_gp_margin is not None else None,
+        avg_gp_margin=avg_gp_margin if ("avg_gp_margin" in globals() and avg_gp_margin is not None) else None,
         cos_ratio=_cos_ratio,
 
         wc_percent_used=_wc_percent_used,
@@ -3913,7 +3862,6 @@ if st.button("📥 Generate FULL Excel Model"):
         capex_forecast_vals=capex_forecast_vals,
         wacc=wacc, tax=tax, g=g, net_debt=net_debt,
 
-        # ✅ pass inputs that were previously referenced inside the function
         rf=rf,
         mrp=mrp,
         dcf_unlevered_beta=float(st.session_state.get("dcf_unlevered_beta", 1.0)),
@@ -3923,7 +3871,7 @@ if st.button("📥 Generate FULL Excel Model"):
         book_equity=float(st.session_state.get("book_equity", 0.0)),
         de_ratio=float(st.session_state.get("de_ratio", 0.0)),
 
-        # ✅ sensitivity EXACTLY as in your system
+        # ✅ EXACT sensitivity inputs (won’t reset)
         sens_wacc_points=sens_wacc_points,
         sens_g_points=sens_g_points,
         sens_wacc_step_pct=sens_wacc_step_pct,
@@ -3937,4 +3885,5 @@ if st.button("📥 Generate FULL Excel Model"):
         data=xbytes,
         file_name="FULL_DCF_Model.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_full_dcf_model_btn",
     )
