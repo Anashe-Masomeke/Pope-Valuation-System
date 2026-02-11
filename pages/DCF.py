@@ -1952,8 +1952,6 @@ if ca_idx_list and cl_idx_list:
 
     # ---------------------------------------------------------
     # 3️⃣ WC% OF SALES — USER CHOICE (Average vs Most Recent) [PERSISTENT]
-    #     ✅ Average uses ONLY included years
-    #     ✅ Most recent uses MOST RECENT INCLUDED year
     # ---------------------------------------------------------
     include_mask = edited_wc["Include"].astype(bool).values
     wc_percent_array = edited_wc["WC % of Sales"].astype(float).values
@@ -2089,7 +2087,7 @@ if total_debt != 0:
 else:
     cost_of_debt = 0.0
 
-rd = cost_of_debt       # <-- ⭐⭐ VERY IMPORTANT ⭐⭐
+rd = cost_of_debt
 
 # ---------------------------------------------------------
 # DCF PARAMETERS — AUTO + OVERRIDE (WITH 2 OPTIONAL UPLOADS)
@@ -2510,7 +2508,6 @@ st.session_state["wacc"] = float(wacc)
 st.markdown('<div class="dcf-card">', unsafe_allow_html=True)
 st.markdown("### 📌 DCF Output")
 
-
 k1, k2, k3, k4 = st.columns(4)
 
 with k1:
@@ -2579,12 +2576,10 @@ use_midyear_input = st.checkbox(
     key="dcf_use_midyear_input"
 )
 
-
 # 3️⃣ UPDATE session_state values explicitly
 st.session_state["dcf_valuation_date"] = valuation_date_input
 st.session_state["dcf_first_fs_date"] = first_fs_date_input
 st.session_state["dcf_use_midyear"] = use_midyear_input
-
 
 # 4️⃣ CALCULATE DISCOUNT PERIODS USING STORED VALUES
 valuation_date = st.session_state["dcf_valuation_date"]
@@ -2603,7 +2598,6 @@ discount_periods_n = np.array([n0 + i for i in range(len(forecast_years_int))], 
 
 # DF0
 midpoint_df0 = (1 / (1 + wacc) ** n0) if wacc > 0 else 1.0
-
 
 # 5️⃣ DISPLAY SUMMARY TABLE
 midpoint_table = pd.DataFrame(
@@ -2631,8 +2625,6 @@ if capex_cf_idx_list:
 
     # -------------------------------------------------
     # ✅ Persistent store (SURVIVES page/model switches)
-    # store_key = the real saved value
-    # widget_key = the multiselect widget
     # -------------------------------------------------
     if "dcf_capex_excluded_years_store" not in st.session_state:
         st.session_state["dcf_capex_excluded_years_store"] = []
@@ -3109,17 +3101,14 @@ st.caption(
 
 # =========================================================
 # ✅ FULL DCF EXCEL EXPORT (FULL INCOME STATEMENT + FORMULAS + SENSITIVITY)
-# Put this RIGHT AFTER the forecast IS display above
 # =========================================================
 import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-
 def _excel_col(n: int) -> str:
     return get_column_letter(n)
-
 
 def build_full_dcf_excel_model(
     is_df,
