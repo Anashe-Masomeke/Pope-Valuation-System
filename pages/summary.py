@@ -37,12 +37,12 @@ st.markdown(
         padding-bottom: 3rem;
         max-width: 1300px;
     }}
+h1, h2, h3, h4, h5 {{
+    color: #000000 !important;
+    font-family: "Baguet Script", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-weight: 600 !important;
+}}
 
-    h1, h2, h3, h4, h5 {{
-        color: {PRIMARY_TEXT} !important;
-        font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-        font-weight: 600 !important;
-    }}
 
     /* ------------------------------------------------------ */
     /* TITLE BANNER                                           */
@@ -114,15 +114,15 @@ st.markdown(
     }}
 
     .stDataFrame tbody td {{
-        color: #e8f2ff !important;  /* brighter cell text */
+        color: #1f2937 !important;  /* brighter cell text */
         font-size: 0.95rem !important;
     }}
 
     .stDataFrame thead th {{
-        color: #a6c7ff !important; /* brighter headers */
-        font-weight: 600 !important;
-        font-size: 0.9rem !important;
+    color: #0f172a !important;   
+    font-weight: 700 !important;
     }}
+
 
     .stDataFrame tbody tr:hover {{
         background-color: rgba(255,255,255,0.08) !important;
@@ -131,21 +131,22 @@ st.markdown(
     /* ------------------------------------------------------ */
     /* TABS – HIGH VISIBILITY                                 */
     /* ------------------------------------------------------ */
-    button[data-baseweb="tab"] {{
-        font-size: 0.9rem;
-        color: #c6d8ef !important;
-        background-color: rgba(255,255,255,0.05);
-        border-radius: 10px;
-        padding: 0.4rem 1rem;
-        border: 1px solid rgba(255,255,255,0.15);
-    }}
+button[data-baseweb="tab"] {{
+    font-size: 0.9rem;
+    color: #1e293b !important;   
+    background-color: rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 0.4rem 1rem;
+    border: 1px solid rgba(255,255,255,0.15);
+}}
 
-    button[data-baseweb="tab"][aria-selected="true"] {{
-        color: #ffffff !important;
-        background: rgba(0,162,255,0.28) !important;
-        border: 1px solid {ACCENT_CYAN};
-        box-shadow: 0 0 8px rgba(0,162,255,0.55);
-    }}
+button[data-baseweb="tab"][aria-selected="true"] {{
+    color: #ffffff !important;
+    background: #1e3a8a !important;   
+    border: 1px solid #1e40af;
+    box-shadow: 0 0 8px rgba(30,58,138,0.6);
+}}
+
 
     /* ------------------------------------------------------ */
     /* INPUTS / SELECTS                                       */
@@ -480,7 +481,7 @@ if (not np.isnan(intrinsic_value)) and (current_price > 0) and (not np.isnan(ups
             f"({current_price:,.2f}), implying limited upside/downside ({upside_pct:+.1f}%)."
         )
     else:
-        rec_label = "🔴 REDUCE / AVOID"
+        rec_label = "🔴 REDUCE / SELL"
         rec_color = "#f97373"
         rec_reason = (
             f"Intrinsic value ({intrinsic_value:,.4f}) is below market price "
