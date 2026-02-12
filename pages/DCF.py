@@ -2087,7 +2087,7 @@ if total_debt != 0:
 else:
     cost_of_debt = 0.0
 
-rd = cost_of_debt
+rd_auto = cost_of_debt
 
 # ---------------------------------------------------------
 # DCF PARAMETERS — AUTO + OVERRIDE (WITH 2 OPTIONAL UPLOADS)
@@ -2485,6 +2485,70 @@ rf = st.session_state["dcf_rf_pct"] / 100
 mrp = st.session_state["dcf_mrp_pct"] / 100
 tax = st.session_state["dcf_tax_pct"] / 100
 g = st.session_state["dcf_terminal_g_pct"] / 100
+# =========================================================
+# Cost of Debt (Rd): Auto vs Manual override (with signature)
+#   - Auto % comes from rd_auto (computed earlier)
+#   - Manual persists across reruns and model/tab switches
+# =========================================================
+
+# 0) Ensure we have an auto rd as decimal
+auto_rd_dec = float(rd_auto if 'rd_auto' in locals() else (cost_of_debt if 'cost_of_debt' in locals() else 0.0))
+auto_rd_pct = float(auto_rd_dec * 100.0)
+
+# 1) Init state (do not overwrite if already set)
+st.session_state.setdefault("dcf_rd_manual_mode", False)   # False = Auto by default
+if "dcf_rd_pct" not in st.session_state:
+    st.session_state["dcf_rd_pct"] = float(auto_rd_pct)
+st.session_state.setdefault("dcf_rd_auto_signature", None) # tracks when to snap to auto
+init_widget_key("dcf_rd_pct_input", "dcf_rd_pct", auto_rd_pct)
+
+# ---------------------------------------------------------
+# Cost of Debt (Rd): Auto vs Manual override (FINAL STABLE)
+# ---------------------------------------------------------
+
+auto_rd_dec = float(cost_of_debt)
+auto_rd_pct = auto_rd_dec * 100.0
+
+# Initialize once only
+if "dcf_rd_manual_mode" not in st.session_state:
+    st.session_state["dcf_rd_manual_mode"] = False
+
+if "dcf_rd_manual_value" not in st.session_state:
+    st.session_state["dcf_rd_manual_value"] = auto_rd_pct
+
+st.markdown("#### 🧮 Cost of Debt (Rd) — Auto + Override")
+
+rd_mode = st.radio(
+    "Cost of Debt (Rd) mode:",
+    ["Use Auto (Interest / Debt)", "Manual override (%)"],
+    index=1 if st.session_state["dcf_rd_manual_mode"] else 0,
+    key="dcf_rd_mode_radio",
+    horizontal=True
+)
+
+st.session_state["dcf_rd_manual_mode"] = rd_mode.startswith("Manual")
+
+# ----- MANUAL MODE -----
+if st.session_state["dcf_rd_manual_mode"]:
+
+    rd_manual_pct = st.number_input(
+        "Cost of Debt (Rd) — manual (%)",
+        min_value=0.0,
+        max_value=100.0,
+        step=0.1,
+        value=float(st.session_state["dcf_rd_manual_value"]),
+        key="dcf_rd_manual_input"
+    )
+
+    st.session_state["dcf_rd_manual_value"] = float(rd_manual_pct)
+    rd = float(rd_manual_pct) / 100.0
+
+    st.caption(f"Auto reference (Interest ÷ Debt): {auto_rd_pct:.2f}%")
+
+# ----- AUTO MODE -----
+else:
+    rd = auto_rd_dec
+    st.caption(f"Auto Rd (from statements): {auto_rd_pct:.2f}%")
 
 # CAPM & WACC
 beta_levered = st.session_state["dcf_unlevered_beta"] * (1 + (1 - tax) * de_ratio)
