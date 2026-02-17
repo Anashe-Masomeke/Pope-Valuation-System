@@ -462,7 +462,7 @@ rec_reason = "Enter shares (>0) and current price (>0) to get a recommendation."
 if (not np.isnan(intrinsic_value)) and (current_price > 0) and (not np.isnan(upside_pct)):
 
     # thresholds you can adjust
-    BUY_TH = 15.0      # >= +15% upside => Buy/Accumulate
+    BUY_TH = 10.0      # >= +15% upside => Buy/Accumulate
     HOLD_LOW = -10.0   # between -10% and +10% => Hold
     HOLD_HIGH = 10.0
 
