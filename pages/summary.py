@@ -567,7 +567,7 @@ from openpyxl.utils import get_column_letter
 def build_summary_excel_with_formulas(
     selected_models,
     value_map,
-    weights_new,              # raw weights (not normalized)
+    weights_new,
     num_shares,
     current_price
 ) -> bytes:
