@@ -39,7 +39,7 @@ st.markdown(
     }}
 h1, h2, h3, h4, h5 {{
     color: #000000 !important;
-    font-family: "Baguet Script", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: Georgia, "Times New Roman", serif !important;
     font-weight: 600 !important;
 }}
 
@@ -52,7 +52,7 @@ h1, h2, h3, h4, h5 {{
         border-radius: 16px;
         padding: 1.2rem 1.5rem;
         border: 1px solid rgba(255,255,255,0.12);
-        box-shadow: 0 12px 28px rgba(0,0,0,0.6);
+        box-shadow: 0 12px 50px rgba(0,0,0,0.6);
     }}
     .title-main {{
         font-size: 1.85rem;
