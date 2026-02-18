@@ -1,68 +1,100 @@
 import streamlit as st
 
-# ---------------------------------------------------------
-# PAGE CONFIG
-# ---------------------------------------------------------
 st.set_page_config(page_title="Help & Guide", layout="wide")
 
 # ---------------------------------------------------------
-# STYLES (CLEAN UI)
+# STYLES (GEORGIA FONT + BLUISH THEME)
 # ---------------------------------------------------------
 st.markdown(
     """
     <style>
+
+      /* ===== GLOBAL FONT + COLOR ===== */
+      html, body, [class*="css"]  {
+        font-family: Georgia, "Times New Roman", serif !important;
+        color: #1e3a8a;  /* deep bluish text */
+      }
+
+      h1, h2, h3, h4, h5, h6 {
+        font-family: Georgia, "Times New Roman", serif !important;
+        color: #1e40af;  /* slightly stronger blue for headings */
+      }
+
+      /* ===== TITLE ===== */
       .main-title {
         font-size: 2.0rem;
         font-weight: 800;
         margin-bottom: 0.2rem;
+        color: #1e3a8a;
       }
+
       .subtle {
-        color: #6b7280;
+        color: #3b82f6;   /* lighter blue subtitle */
         margin-top: 0;
       }
+
+      /* ===== CARD STYLE ===== */
       .card {
-        border: 1px solid #e5e7eb;
+        border: 1px solid #dbeafe;
         border-radius: 14px;
         padding: 16px 18px;
-        background: white;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        background: #f8fbff;
+        box-shadow: 0 4px 18px rgba(30, 58, 138, 0.15);
         margin-bottom: 14px;
       }
+
       .card h3 {
         margin: 0 0 8px 0;
         font-size: 1.1rem;
+        color: #1e40af;
       }
+
+      /* ===== PILL LABEL ===== */
       .pill {
         display: inline-block;
         padding: 4px 10px;
         border-radius: 999px;
         font-size: 0.85rem;
-        background: #eef2ff;
-        border: 1px solid #e0e7ff;
+        background: #e0ecff;
+        border: 1px solid #bfdbfe;
         margin-right: 8px;
+        color: #1e3a8a;
       }
+
+      /* ===== CALLOUTS ===== */
       .callout {
         border-left: 5px solid #2563eb;
         background: #eff6ff;
         padding: 12px 14px;
         border-radius: 10px;
         margin: 10px 0;
+        color: #1e3a8a;
       }
+
       .warn {
         border-left: 5px solid #f59e0b;
         background: #fffbeb;
+        color: #92400e;
       }
+
       .danger {
         border-left: 5px solid #ef4444;
         background: #fef2f2;
+        color: #991b1b;
       }
+
+      /* ===== MONO TEXT (still Georgia as requested) ===== */
       .mono {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-family: Georgia, "Times New Roman", serif !important;
         font-size: 0.95rem;
+        color: #1e3a8a;
       }
+
       hr {
         margin: 1rem 0;
+        border: 1px solid #dbeafe;
       }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -137,7 +169,7 @@ st.markdown("---")
 # ---------------------------------------------------------
 # TABS PER MODULE
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📉 DCF", "💰 DDM", "📈 COMPARABLES","🏦 BANKING","🧾 SUMMARY", "🛠 Troubleshooting"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📉 DCF", "💰 DDM", "📈 COMPARABLES","🏦 BANKING","🧾 SUMMARY", "🛠 Troubleshooting","⚡ Quick Summary"])
 
 # -------------------------
 # DCF TAB
@@ -1958,5 +1990,146 @@ This is almost always **units or FX**.
 Compare one known line item (e.g., Total Equity) to an annual report figure to confirm scale.
 """
         )
+# -------------------------
+# TAB7 ⚡ QUICK SUMMARY (FAST HOW-TO)
+# -------------------------
+with tab7:
+    st.markdown(
+        """
+        <div class="card">
+          <h3><span class="pill">FAST</span> ⚡ Quick Summary — How to Value Using Each Model</h3>
+          <p class="subtle">
+            A 60-second guide. Follow these steps to get a valuation quickly (then use the other tabs for deeper detail).
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(
+            """
+            <div class="card">
+              <h3>📉 DCF (UFCF / FCFF)</h3>
+              <div class="callout">
+                <b>Quick steps</b><br>
+                1) Upload IS + BS + CF (one Excel, 3 sheets).<br>
+                2) Select currency (USD or ZWG + FX file).<br>
+                3) Map: Revenue, Debt, Cash, CA, CL, Equity, Capex, Depreciation (if available).<br>
+                4) Choose forecast years + revenue growth method.<br>
+                5) Confirm WC% method + CAPEX averaging (exclude outliers).<br>
+                6) Set WACC inputs (RF, MRP, beta, tax, Rd) + terminal g.<br>
+                7) On cost of debt you can manually override or use the auto cost of debt.<br>
+                8) Select Valuation timing by first selecting today's date and then the Financial statement year-end date.<br>
+                9) Review EV → Equity and the WACC vs g sensitivity grid.<br>
+                10) Export Excel for audit trail.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div class="card">
+              <h3>💰 DDM (Gordon Growth)</h3>
+              <div class="callout">
+                <b>Quick steps</b><br>
+                1) Enter dividend history (prefer DPS if you want value per share).<br>
+                2) Pick stable years for growth range (avoid special/irregular dividends).<br>
+                3) Confirm computed g and D1.<br>
+                4) Set CAPM inputs (RF, MRP, beta, D/E, tax) or override manually.<br>
+                5) Check: <span class="mono">Ke &gt; g</span> then compute P0.<br>
+                6) Enter shares to get total equity value.<br>
+                7) Export Excel model.
+              </div>
+              <div class="callout warn">
+                <b>Key rule:</b> If <span class="mono">Ke ≤ g</span>, the model is invalid.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        st.markdown(
+            """
+            <div class="card">
+              <h3>📈 Comparables (EV/EBITDA · P/B · P/E)</h3>
+
+              <div class="callout">
+                <b>Quick Setup</b><br>
+                1) (Optional) Turn ON Peer Universe auto-fill and choose target.<br>
+                2) Confirm peers and enter multiples (EV/EBITDA, P/B, P/E).<br>
+                3) Use Include flags to remove outliers (do not delete).<br>
+                4) Enter Discount % → system computes implied multiples.
+              </div>
+
+              <div style="margin-top:12px; padding:12px; border-radius:10px; background:#eef6ff; border-left:4px solid #2563eb;">
+                <b>🔹 Maintainable EBITDA</b><br>
+                • Select EBITDA year range<br>
+                • Enter weights (%) for each year<br>
+                • Choose whether to apply timing (from DCF) or not
+              </div>
+
+              <div style="margin-top:10px; padding:12px; border-radius:10px; background:#f0f9ff; border-left:4px solid #1d4ed8;">
+                <b>🔹 Maintainable Earnings</b><br>
+                • <b>Auto-applied from Maintainable EBITDA ONLY</b><br>
+                • Uses the <b>same years</b>, <b>same weights (%)</b>, and <b>same timing choice</b><br>
+                • Your job here is to <b>review</b> and confirm the earnings output
+              </div>
+
+              <div class="callout warn" style="margin-top:12px;">
+                <b>Important:</b><br>
+                EBITDA logic can automatically flow into Earnings.<br>
+                Always run DCF first if you want EBITDA/Earnings auto-filled.
+              </div>
+
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div class="card">
+              <h3>🏦 Banking (Residual Income)</h3>
+              <div class="callout">
+                <b>Quick steps</b><br>
+                1) Upload IS + BS + SoCE and select correct sheets.<br>
+                2) If ZWG: upload FX and confirm average vs closing conversion logic.<br>
+                3) Map Total Equity rows on BS (and SoCE closing total if needed).<br>
+                4) Choose the best earnings line (Normalized profit / PAT / Net profit).<br>
+                5) Choose base year (Year 0) → confirm BV0 and Earnings0.<br>
+                6) Set Ke via CAPM (auto or manual) + forecast years.<br>
+                7) Enter growth assumptions (BV growth, earnings growth, terminal g).<br>
+                8) Check: <span class="mono">Ke &gt; g</span> then compute equity value + export.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        """
+        <div class="card">
+          <h3>🧾 Summary (Blended / Weighted Valuation)</h3>
+          <div class="callout">
+            <b>Quick steps</b><br>
+            1) Run the valuation tabs you want (DCF/DDM/Comps/Banking) first.<br>
+            2) In Summary, select models to include.<br>
+            3) Input weights (the app normalizes them to 100%).<br>
+            4) Enter shares and current share price.<br>
+            5) Review intrinsic value, upside/downside, and recommendation.<br>
+            6) Export Summary Excel.
+          </div>
+          <div class="callout warn">
+            <b>Common issue:</b> If a model shows blank, it wasn’t run yet.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
