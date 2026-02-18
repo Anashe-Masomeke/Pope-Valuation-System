@@ -58,28 +58,32 @@ with st.sidebar:
     - 📈 Comparables  
     - 🏦 Banking (RIM)  
     - 🧾 Summary  
+    - 🧭 USER GUIDE
     """)
 
 st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 st.markdown("<p class='fbc-title'>Welcome to the FBC Investment Valuation System</p>", unsafe_allow_html=True)
 st.write("Explore valuation models using the sidebar or the quick-access buttons below.")
 
-colA, colB, colC, colD, colE = st.columns(5)
+colA, colB, colC, colD, colE, colF = st.columns(6)
 
-if colA.button("📊 DCF Model", use_container_width=True):
-    st.switch_page("pages/DCF.py")
+if colA.button("📊 DCF Model", width='stretch'):
+    st.switch_page("pages/1_DCF.py")
 
-if colB.button("💰 DDM Model", use_container_width=True):
-    st.switch_page("pages/DDM.py")
+if colB.button("💰 DDM Model",width='stretch'):
+    st.switch_page("pages/3_DDM.py")
 
-if colC.button("📈 Comparables", use_container_width=True):
-    st.switch_page("pages/COMPARABLES.py")
+if colC.button("📈 Comparables", width='stretch'):
+    st.switch_page("pages/2_COMPARABLES.py")
 
-if colD.button("🏦 Banking (RIM)", use_container_width=True):
-    st.switch_page("pages/BANKING.py")
+if colD.button("🏦 Banking (RIM)", width='stretch'):
+    st.switch_page("pages/4_BANKING.py")
 
-if colE.button("🧾 Summary", use_container_width=True):
-    st.switch_page("pages/summary.py")
+if colE.button("🧾 Summary",width='stretch'):
+    st.switch_page("pages/5_summary.py")
+
+if colF.button("🧭 USER GUIDE", width='stretch'):
+    st.switch_page("pages/6_user guide.py")
 
 col1, col2 = st.columns(2)
 with col1:
