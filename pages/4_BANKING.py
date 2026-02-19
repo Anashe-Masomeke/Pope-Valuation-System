@@ -29,7 +29,7 @@ def add_watermark():
             background-repeat: no-repeat;
             background-position: center;
             background-size: 1500px;
-            opacity: 0.09;   /* 🔥 control watermark visibility here */
+            opacity: 0.07;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
         }}
@@ -43,24 +43,92 @@ def add_watermark():
         st.markdown(watermark_css, unsafe_allow_html=True)
 
 add_watermark()
-
 st.set_page_config(page_title="Banking Valuation (Residual Income)", layout="wide")
+# ---------------------------------------------------------
+# ✅ FIX SIDEBAR COLLAPSE ARROW (Material Icons)
+# ---------------------------------------------------------
 st.markdown("""
 <style>
+/* ✅ Load Material Icons so Streamlit's sidebar collapse icon renders correctly */
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-/* Apply Georgia to everything */
-html, body, [class*="css"]  {
-    font-family: Georgia, "Times New Roman", serif !important;
+/* ✅ Make sure ONLY icons use the Material Icons font (prevents 'keyboard_double_arrow_right' text) */
+.material-icons, 
+span.material-icons,
+i.material-icons,
+[data-testid="stSidebarCollapseButton"] span,
+[data-testid="stSidebarCollapseButton"] i {
+    font-family: 'Material Icons' !important;
+    font-weight: normal !important;
+    font-style: normal !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+    display: inline-block !important;
+    white-space: nowrap !important;
+    word-wrap: normal !important;
+    direction: ltr !important;
+    -webkit-font-feature-settings: 'liga' !important;
+    -webkit-font-smoothing: antialiased !important;
 }
 
-/* Titles */
-h1, h2, h3, h4, h5, h6 {
-    font-family: Georgia, "Times New Roman", serif !important;
+/* ✅ Style the collapse/expand button nicely */
+[data-testid="stSidebarCollapseButton"] button {
+    background: #003399 !important;
+    border: 1px solid rgba(255,255,255,0.25) !important;
+    border-radius: 999px !important;
+    width: 44px !important;
+    height: 44px !important;
+    box-shadow: 0 6px 18px rgba(0, 51, 153, 0.35) !important;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease !important;
 }
 
-/* Streamlit widgets */
-div, p, span, label {
-    font-family: Georgia, "Times New Roman", serif !important;
+[data-testid="stSidebarCollapseButton"] button:hover {
+    transform: translateY(-1px) !important;
+    background: #0047d6 !important;
+    box-shadow: 0 10px 22px rgba(0, 71, 214, 0.35) !important;
+}
+
+[data-testid="stSidebarCollapseButton"] svg {
+    width: 22px !important;
+    height: 22px !important;
+    fill: white !important;
+}
+/* ===== SIDEBAR GLASS STYLE ===== */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #003399 0%, #001a4d 100%) !important;
+    color: white !important;
+    border-right: 1px solid rgba(255,255,255,0.15);
+    backdrop-filter: blur(8px);
+}
+
+/* Sidebar text */
+section[data-testid="stSidebar"] * {
+    color: white !important;
+}
+
+/* Sidebar headings */
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+    color: #ffffff !important;
+}
+
+/* Remove default sidebar padding spacing */
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 1rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+html, body, .stApp, .block-container,
+p, div, label,
+h1, h2, h3, h4, h5, h6,
+li, ul, ol, a, small {
+  font-family: Georgia, "Times New Roman", serif !important;
 }
 
 /* Dataframes */
