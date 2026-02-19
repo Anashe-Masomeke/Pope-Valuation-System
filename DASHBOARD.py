@@ -72,7 +72,7 @@ CUSTOM_STYLE = """
 
 st.markdown(CUSTOM_STYLE, unsafe_allow_html=True)
 
-LOGO_PATH = Path("assets") / "fbc_logo.png"
+LOGO_PATH = Path("assets") / "fbc log.png"
 st.markdown("<div class='top-nav'>", unsafe_allow_html=True)
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=45)
@@ -179,5 +179,6 @@ st.markdown("""
     Powered by <b>FBC Securities</b> • Investment Research & Valuation Dashboard
 </div>
 """, unsafe_allow_html=True)
+
 
 
