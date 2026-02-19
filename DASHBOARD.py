@@ -70,7 +70,7 @@ colA, colB, colC, colD, colE, colF = st.columns(6)
 if colA.button("📊 DCF Model", width='stretch'):
     st.switch_page("pages/1_DCF.py")
 
-if colB.button("💰 DDM Model",width='stretch'):
+if colB.button("💰 Dividend Discount Model",width='stretch'):
     st.switch_page("pages/3_DDM.py")
 
 if colC.button("📈 Comparables", width='stretch'):
@@ -82,7 +82,7 @@ if colD.button("🏦 Banking (RIM)", width='stretch'):
 if colE.button("🧾 Summary",width='stretch'):
     st.switch_page("pages/5_summary.py")
 
-if colF.button("🧭 USER GUIDE", width='stretch'):
+if colF.button("🧭 User Guide", width='stretch'):
     st.switch_page("pages/6_user guide.py")
 
 col1, col2 = st.columns(2)
