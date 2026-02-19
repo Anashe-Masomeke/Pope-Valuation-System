@@ -5,21 +5,52 @@ from pathlib import Path
 from datetime import date
 import io
 from pandas.io.formats.style import Styler
-
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+import base64
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
 
+        watermark_css = f"""
+        <style>
 
-from pathlib import Path
+        /* Make watermark very light */
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """
+        st.markdown(watermark_css, unsafe_allow_html=True)
+
+add_watermark()
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]   # <-- go up from /pages to project root
 DATA_DIR = PROJECT_ROOT / "data"
 
 DCF_PARAMS_PATH = DATA_DIR / "dcf_parameters.xlsx"
 UNLEVERED_BETAS_PATH = DATA_DIR / "unlevered_betas.xlsx"
-
-
 
 # ---------------------------------------------------------
 # HELPERS
@@ -315,7 +346,6 @@ st.set_page_config(
     page_title="Forecast + DCF (IS + BS + CF)",
     layout="wide"
 )
-
 st.title("📊 Forecast + DCF Valuation")
 # ---------------------------------------------------------
 # COMPANY NAME (persistent across pages/models)
@@ -416,9 +446,7 @@ if "dcf_cf_base" not in st.session_state:
 year_cols_is = get_year_cols(is_df)
 year_cols_bs = get_year_cols(bs_df)
 year_cols_cf = get_year_cols(cf_df)
-# ---------------------------------------------------------
-# FX SECTION — EXCEL-BASED (ZWG → USD) [FIXED VERSION]
-# ---------------------------------------------------------
+
 # FX SECTION — EXCEL-BASED (ZWG → USD) — FINAL & CORRECT
 # ---------------------------------------------------------
 st.markdown("### 💱 Currency & Exchange Rates")
@@ -3098,7 +3126,7 @@ html_parts = []
 html_parts.append(f"""
 <style>
 .sens-outer{{border:2px solid #000;border-radius:10px;padding:10px 12px 12px;background:#fff;overflow-x:auto;}}
-.sens-table{{border-collapse:collapse;width:100%;min-width:760px;font-size:14px;font-family:Arial,sans-serif;}}
+.sens-table{{border-collapse:collapse;width:100%;min-width:760px;font-size:14px;font-family:Georgia,Georgia;}}
 .sens-table th,.sens-table td{{border-bottom:1px solid rgba(0,0,0,0.08);border-right:1px solid rgba(0,0,0,0.08);padding:10px 12px;white-space:nowrap;}}
 .sens-table thead th{{background:#071426;color:#fff;font-weight:900;text-align:center;}}
 .sens-table .rowhdr{{background:#f1f5f9;font-weight:900;text-align:left;}}
