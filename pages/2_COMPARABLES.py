@@ -4,6 +4,42 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from io import BytesIO
+import base64
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
+
+        watermark_css = f"""
+        <style>
+
+        /* Make watermark very light */
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """
+        st.markdown(watermark_css, unsafe_allow_html=True)
+
+add_watermark()
 
 # =========================================================
 # Styling helpers
@@ -916,12 +952,9 @@ else:
                     format="%.2f",
                     key=f"comp_np_weight_{yr}",
                 )
-
             S["comp_np_weights"][str(yr)] = float(weight_val)
-
             adj_np = np_val * timing_val
             weighted_np = adj_np * weight_val / 100.0
-
             rows_np.append(
                 {
                     "Year": int(yr),
@@ -932,31 +965,24 @@ else:
                     "Weighted Earnings": weighted_np,
                 }
             )
-
         df_np = pd.DataFrame(rows_np)
-
         if use_timing_np:
             df_np_display = df_np[["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]]
         else:
             df_np_display = df_np[["Year", "Earnings", "Weight (%)", "Weighted Earnings"]]
-
         df_np_display = df_np_display.copy()
         df_np_display.index = df_np_display.index + 1
         st.dataframe(format_numeric_columns(df_np_display), width='stretch')
-
         maintainable_earnings = float(df_np["Weighted Earnings"].sum())
         st.success(f"Maintainable Earnings = {maintainable_earnings:,.2f}")
         S["maintainable_earnings"] = maintainable_earnings
-
 # =========================================================
 # STEP 5 — BOOK VALUE & NET DEBT
 # =========================================================
 st.header("Step 5 — Book Value & Net Debt")
-
 # ✅ Pull Beginning Book Value from Banking page (Totals / BV)
 bank_outputs = (S.get("bank", {}) or {}).get("outputs", {}) or {}
 bank_book_equity = bank_outputs.get("book_equity_0", None)  # Beginning Book Value (Total Equity)
-
 # If user hasn't typed anything yet, auto-fill book equity from banking
 if bank_book_equity is not None:
     # only auto-set if user hasn't created/edited the input widget yet
