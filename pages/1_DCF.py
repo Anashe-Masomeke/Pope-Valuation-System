@@ -9,6 +9,38 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import base64
+# ---------------------------------------------------------
+# STREAMLIT APP
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Forecast + DCF (IS + BS + CF)",
+    layout="wide"
+)
+# ---------------------------------------------------------
+# ✅ FIX SIDEBAR COLLAPSE ARROW (Material Icons)
+# ---------------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+
+/* Force ONLY the collapse icon area to render with the Material Icons font */
+[data-testid="stSidebarCollapseButton"] span,
+[data-testid="stSidebarCollapseButton"] i,
+[data-testid="stSidebarCollapseButton"] svg,
+.material-icons,
+span.material-icons,
+i.material-icons {
+    font-family: "Material Icons" !important;
+    font-weight: normal !important;
+    font-style: normal !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+    -webkit-font-feature-settings: 'liga' !important;
+    -webkit-font-smoothing: antialiased !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -30,7 +62,7 @@ def add_watermark():
             background-repeat: no-repeat;
             background-position: center;
             background-size: 1500px;
-            opacity: 0.09;   /* 🔥 control watermark visibility here */
+            opacity: 0.07;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
         }}
@@ -55,6 +87,7 @@ UNLEVERED_BETAS_PATH = DATA_DIR / "unlevered_betas.xlsx"
 # ---------------------------------------------------------
 st.markdown("""
 <style>
+
 .fbc-reset-card {
     background: linear-gradient(135deg, #003399 0%, #0055cc 100%);
     padding: 20px 24px;
@@ -74,6 +107,75 @@ st.markdown("""
     font-size: 14px;
     opacity: 0.9;
     margin-bottom: 14px;
+}
+
+/* ✅ Load Material Icons so Streamlit's sidebar collapse icon renders correctly */
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+
+/* ✅ Make sure ONLY icons use the Material Icons font (prevents 'keyboard_double_arrow_right' text) */
+.material-icons, 
+span.material-icons,
+i.material-icons,
+[data-testid="stSidebarCollapseButton"] span,
+[data-testid="stSidebarCollapseButton"] i {
+    font-family: 'Material Icons' !important;
+    font-weight: normal !important;
+    font-style: normal !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+    display: inline-block !important;
+    white-space: nowrap !important;
+    word-wrap: normal !important;
+    direction: ltr !important;
+    -webkit-font-feature-settings: 'liga' !important;
+    -webkit-font-smoothing: antialiased !important;
+}
+
+/* ✅ Style the collapse/expand button nicely */
+[data-testid="stSidebarCollapseButton"] button {
+    background: #003399 !important;
+    border: 1px solid rgba(255,255,255,0.25) !important;
+    border-radius: 999px !important;
+    width: 44px !important;
+    height: 44px !important;
+    box-shadow: 0 6px 18px rgba(0, 51, 153, 0.35) !important;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease !important;
+}
+
+[data-testid="stSidebarCollapseButton"] button:hover {
+    transform: translateY(-1px) !important;
+    background: #0047d6 !important;
+    box-shadow: 0 10px 22px rgba(0, 71, 214, 0.35) !important;
+}
+
+[data-testid="stSidebarCollapseButton"] svg {
+    width: 22px !important;
+    height: 22px !important;
+    fill: white !important;
+}
+/* ===== SIDEBAR GLASS STYLE ===== */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #003399 0%, #001a4d 100%) !important;
+    color: white !important;
+    border-right: 1px solid rgba(255,255,255,0.15);
+    backdrop-filter: blur(8px);
+}
+
+/* Sidebar text */
+section[data-testid="stSidebar"] * {
+    color: white !important;
+}
+
+/* Sidebar headings */
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+    color: #ffffff !important;
+}
+
+/* Remove default sidebar padding spacing */
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 1rem !important;
 }
 
 .fbc-reset-btn button {
@@ -336,39 +438,81 @@ def _load_unlevered_betas_any(file_or_path, file_mtime: float = 0.0) -> pd.DataF
     out = out.dropna(subset=["Industry", "UnleveredBeta"]).sort_values("Industry").reset_index(drop=True)
     return out
 
-
-# ---------------------------------------------------------
-# STREAMLIT APP
-# ---------------------------------------------------------
-st.set_page_config(
-    page_title="Forecast + DCF (IS + BS + CF)",
-    layout="wide"
-)
 st.markdown("""
 <style>
 
-/* Apply Georgia to everything */
-html, body, [class*="css"]  {
-    font-family: Georgia, "Times New Roman", serif !important;
+/* ===============================
+   FBC NAVIGATION ARROW BUTTONS
+   =============================== */
+
+.fbc-nav-btn button {
+    background: linear-gradient(135deg, #003399, #001a4d) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    border-radius: 10px !important;
+    padding: 8px 18px !important;
+    border: none !important;
+    transition: all 0.25s ease-in-out;
 }
 
-/* Titles */
-h1, h2, h3, h4, h5, h6 {
-    font-family: Georgia, "Times New Roman", serif !important;
+.fbc-nav-btn button:hover {
+    background: linear-gradient(135deg, #0055cc, #003399) !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.25);
 }
 
-/* Streamlit widgets */
-div, p, span, label {
-    font-family: Georgia, "Times New Roman", serif !important;
-}
-
-/* Dataframes */
-.stDataFrame, .stTable {
-    font-family: Georgia, "Times New Roman", serif !important;
+.fbc-nav-btn button:disabled {
+    background: #6b7280 !important;
+    color: #e5e7eb !important;
+    cursor: not-allowed;
 }
 
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+html, body, .stApp, .block-container,
+p, div, label,
+h1, h2, h3, h4, h5, h6,
+li, ul, ol, a, small {
+  font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* ✅ Keep the sidebar collapse arrow as an icon */
+[data-testid="stSidebarCollapseButton"] * {
+  font-family: "Material Icons" !important;
+}
+
+
+/* ---------------------------
+   PROTECT ALL ICON FONTS
+   (Fixes keyboard_double_arrow_right issue)
+---------------------------- */
+
+/* Material Icons */
+.material-icons,
+.material-symbols-outlined,
+.material-symbols-rounded,
+.material-symbols-sharp,
+[class*="material-icons"],
+[class*="material-symbols"] {
+  font-family: "Material Icons" !important;
+}
+
+/* Bootstrap Icons */
+.bi,
+[class^="bi-"], [class*=" bi-"] {
+  font-family: "bootstrap-icons" !important;
+}
+
+/* Font Awesome */
+.fa, .fas, .far, .fal, .fab,
+[class^="fa-"], [class*=" fa-"] {
+  font-family: "Font Awesome 6 Free" !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 st.title("📊 Forecast + DCF Valuation")
 # ---------------------------------------------------------
@@ -991,11 +1135,15 @@ def map_bs_wizard(bs_df, year_cols_bs):
         st.rerun()
 
     c1, c2, _ = st.columns([1, 1, 2])
+
     with c1:
+        st.markdown('<div class="fbc-nav-btn">', unsafe_allow_html=True)
         if st.button("⬅️ Back (BS)", disabled=st.session_state["bs_map_step"] == 0):
             _set_step(st.session_state["bs_map_step"] - 1)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with c2:
+        st.markdown('<div class="fbc-nav-btn">', unsafe_allow_html=True)
         if st.button("➡️ Next unmapped (BS)"):
             target = None
             for i, (k, _) in enumerate(BS_LINES):
@@ -1005,6 +1153,7 @@ def map_bs_wizard(bs_df, year_cols_bs):
             if target is None:
                 target = len(BS_LINES) - 1
             _set_step(target)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ✅ radio drives step too
     chosen_step = st.radio(
@@ -1104,11 +1253,15 @@ def map_cf_wizard(cf_df, year_cols_cf):
         st.rerun()
 
     c1, c2, _ = st.columns([1, 1, 2])
+
     with c1:
+        st.markdown('<div class="fbc-nav-btn">', unsafe_allow_html=True)
         if st.button("⬅️ Back (CF)", disabled=st.session_state["cf_map_step"] == 0):
             _set_step(st.session_state["cf_map_step"] - 1)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with c2:
+        st.markdown('<div class="fbc-nav-btn">', unsafe_allow_html=True)
         if st.button("➡️ Next unmapped (CF)"):
             target = None
             for i, (k, _) in enumerate(CF_LINES):
@@ -1118,6 +1271,7 @@ def map_cf_wizard(cf_df, year_cols_cf):
             if target is None:
                 target = len(CF_LINES) - 1
             _set_step(target)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     chosen_step = st.radio(
         "Jump to CF line:",
@@ -1214,23 +1368,25 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
     st.progress(mapped / len(CORE_LINES))
     st.caption(f"Mapped: {mapped}/{len(CORE_LINES)}")
 
-    # quick navigation buttons
     c1, c2, c3 = st.columns([1, 1, 2])
+
     with c1:
+        st.markdown('<div class="fbc-nav-btn">', unsafe_allow_html=True)
         if st.button("⬅️ Back", disabled=st.session_state["is_map_step"] == 0):
             st.session_state["is_map_step"] -= 1
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with c2:
-        # jump to next unmapped
+        st.markdown('<div class="fbc-nav-btn">', unsafe_allow_html=True)
         if st.button("➡️ Next unmapped"):
             for i, (k, _) in enumerate(CORE_LINES):
                 if not st.session_state["is_core_mapping"].get(k):
                     st.session_state["is_map_step"] = i
                     st.rerun()
-            # if all mapped, stay at end
             st.session_state["is_map_step"] = len(CORE_LINES) - 1
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # step selector (feels interactive + reduces page length)
     step_names = [name for _, name in CORE_LINES]
