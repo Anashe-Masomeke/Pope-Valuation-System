@@ -465,7 +465,7 @@ with tab1:
     - Cost of Sales / Raw Materials
     - Gross Profit
     - EBITDA
-    - Depreciation & Amortisation (IS line)  ✅ (your code supports this)
+    - Depreciation & Amortisation (IS line) 
     - Operating Profit / EBIT
     - Profit Before Tax (PBT)
     - Income Tax (tax expense)
