@@ -29,7 +29,7 @@ def add_watermark():
             background-repeat: no-repeat;
             background-position: center;
             background-size: 1500px;
-            opacity: 0.07;   /* 🔥 control watermark visibility here */
+            opacity: 0.09;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
         }}
