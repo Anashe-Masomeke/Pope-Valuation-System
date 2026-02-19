@@ -2,9 +2,46 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+import base64
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
+
+        watermark_css = f"""
+        <style>
+
+        /* Make watermark very light */
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """
+        st.markdown(watermark_css, unsafe_allow_html=True)
+
+add_watermark()
 
 # ---------------------------------------------------------
 # PAGE CONFIG
@@ -25,7 +62,6 @@ Where:
 """
 )
 
-
 # ---------------------------------------------------------
 # SMALL HELPERS
 # ---------------------------------------------------------
@@ -33,7 +69,6 @@ def init(key, value):
     """Initialize a session_state key once."""
     if key not in st.session_state:
         st.session_state[key] = value
-
 
 # ---------------------------------------------------------
 # STEP 1 — DIVIDEND HISTORY
@@ -101,7 +136,6 @@ st.session_state["ddm_dividends"] = {
 df_history = pd.DataFrame({"Year": years, "Dividend": dividends})
 st.dataframe(df_history, width='stretch')
 
-
 # ---------------------------------------------------------
 # STEP 2 — GROWTH CALCULATION RANGE
 # ---------------------------------------------------------
@@ -123,7 +157,6 @@ if g_start > g_end:
 D_start = dividends[years.index(g_start)]
 D_end = dividends[years.index(g_end)]
 
-
 # ---------------------------------------------------------
 # STEP 3 — DIVIDEND GROWTH RATE (g)
 # ---------------------------------------------------------
@@ -142,7 +175,6 @@ st.success(f"Growth rate (g): **{g:.2%}**")
 
 D1 = D_end * (1 + g)
 st.metric("Next year's dividend (D₁)", f"{D1:,.5f}")
-
 
 # ---------------------------------------------------------
 # STEP 4 — COST OF EQUITY (Re)
@@ -242,7 +274,6 @@ Re = rf + levered_beta * mrp
 st.metric("Levered Beta", f"{levered_beta:.4f}")
 st.metric("Cost of Equity (Re)", f"{Re * 100:.2f}%")
 
-
 # ---------------------------------------------------------
 # STEP 5 — VALUE PER SHARE
 # ---------------------------------------------------------
@@ -284,14 +315,12 @@ if num_shares > 0 and not np.isnan(P0):
 else:
     st.warning("Enter a valid number of shares to compute total equity value.")
 
-
 # =========================================================
 # ✅ FULL DDM EXCEL EXPORT (ALWAYS VISIBLE)
 # =========================================================
 
 def _excel_col(n: int) -> str:
     return get_column_letter(n)
-
 
 def build_full_ddm_excel_model(
     years, dividends,
@@ -481,13 +510,11 @@ def build_full_ddm_excel_model(
 
     return wb
 
-
 def workbook_to_bytes(wb: Workbook) -> bytes:
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
     return bio.read()
-
 
 st.markdown("---")
 st.subheader("⬇️ Download FULL DDM Excel Model (All Steps + Formulas)")
