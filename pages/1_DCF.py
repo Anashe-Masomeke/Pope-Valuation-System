@@ -29,7 +29,7 @@ def add_watermark():
             background-image: url("data:image/png;base64,{logo_base64}");
             background-repeat: no-repeat;
             background-position: center;
-            background-size: 1000px;
+            background-size: 1500px;
             opacity: 0.1;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
@@ -346,6 +346,32 @@ st.set_page_config(
     page_title="Forecast + DCF (IS + BS + CF)",
     layout="wide"
 )
+st.markdown("""
+<style>
+
+/* Apply Georgia to everything */
+html, body, [class*="css"]  {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* Titles */
+h1, h2, h3, h4, h5, h6 {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* Streamlit widgets */
+div, p, span, label {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* Dataframes */
+.stDataFrame, .stTable {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📊 Forecast + DCF Valuation")
 # ---------------------------------------------------------
 # COMPANY NAME (persistent across pages/models)
