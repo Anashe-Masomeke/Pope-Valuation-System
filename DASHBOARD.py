@@ -15,30 +15,29 @@ st.set_page_config(
 # ------------------------------------------------------------
 CUSTOM_STYLE = """
 <style>
+/* ✅ IMPORTANT: @import MUST be at the very top */
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined');
+
 html, body, .stApp, .block-container,
 p, div, label,
 h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small {
   font-family: Georgia, "Times New Roman", serif !important;
 }
-/* ✅ Load Material Icons so Streamlit's sidebar collapse icon renders correctly */
-@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-/* ✅ Make sure ONLY icons use the Material Icons font (prevents 'keyboard_double_arrow_right' text) */
-.material-icons, 
+/* ✅ Force collapse icon area to always use Material icon font(s) */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapseButton"] *,
+.material-icons,
 span.material-icons,
 i.material-icons,
-[data-testid="stSidebarCollapseButton"] span,
-[data-testid="stSidebarCollapseButton"] i {
-    font-family: 'Material Icons' !important;
+.material-symbols-outlined {
+    font-family: "Material Icons", "Material Symbols Outlined" !important;
     font-weight: normal !important;
     font-style: normal !important;
     letter-spacing: normal !important;
     text-transform: none !important;
-    display: inline-block !important;
-    white-space: nowrap !important;
-    word-wrap: normal !important;
-    direction: ltr !important;
     -webkit-font-feature-settings: 'liga' !important;
     -webkit-font-smoothing: antialiased !important;
 }
@@ -65,6 +64,7 @@ i.material-icons,
     height: 22px !important;
     fill: white !important;
 }
+
 /* ===== SIDEBAR GLASS STYLE ===== */
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #003399 0%, #001a4d 100%) !important;
@@ -165,7 +165,6 @@ section[data-testid="stSidebar"] .block-container {
     color: #003399;
     font-weight: 600;
 }
-
 </style>
 """
 
