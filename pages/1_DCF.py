@@ -22,15 +22,15 @@ def add_watermark():
         .stApp::before {{
             content: "";
             position: fixed;
-            top: 0;
-            left: 0;
+            top: 40;
+            left: 50;
             width: 100%;
             height: 100%;
             background-image: url("data:image/png;base64,{logo_base64}");
             background-repeat: no-repeat;
             background-position: center;
-            background-size: 1000px;
-            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            background-size: 1500px;
+            opacity: 0.7;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
         }}
@@ -44,8 +44,6 @@ def add_watermark():
         st.markdown(watermark_css, unsafe_allow_html=True)
 
 add_watermark()
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]   # <-- go up from /pages to project root
 DATA_DIR = PROJECT_ROOT / "data"
 
