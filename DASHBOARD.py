@@ -21,7 +21,7 @@ def add_watermark():
             background-image: url("data:image/png;base64,{logo_base64}");
             background-repeat: no-repeat;
             background-position: center;
-            background-size: 1500px;
+            background-size: 1000px;
             opacity: 0.1;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
@@ -152,3 +152,4 @@ st.markdown("""
     Powered by <b>FBC Securities</b> • Investment Research & Valuation Dashboard
 </div>
 """, unsafe_allow_html=True)
+
