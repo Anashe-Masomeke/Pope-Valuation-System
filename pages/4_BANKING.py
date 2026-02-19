@@ -7,12 +7,48 @@ import io
 import re
 from pathlib import Path
 import hashlib
+import base64
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
+
+        watermark_css = f"""
+        <style>
+
+        /* Make watermark very light */
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """
+        st.markdown(watermark_css, unsafe_allow_html=True)
+
+add_watermark()
 
 st.set_page_config(page_title="Banking Valuation (Residual Income)", layout="wide")
 st.title("🏦 Banking Valuation — Residual Income Method (Actual Years)")
 
 # ---------------------------------------------------------
-# FX SESSION STATE (DCF-style)  ✅ (same approach as DCF.py)
+# FX SESSION STATE (DCF-style)  ✅ (same approach as 1_DCF.py)
 # ---------------------------------------------------------
 st.session_state.setdefault("bank_conversion_method", "NO_FX")  # "NO_FX" or "FX_EXCEL"
 st.session_state.setdefault("bank_currency", "USD (already converted)")
@@ -651,13 +687,13 @@ else:
     soce_years, soce_colmap = normalize_year_cols(soce_df)
 
 with st.expander("🔎 View cleaned Income Statement (USD)", expanded=False):
-    st.dataframe(is_df, use_container_width=True)
+    st.dataframe(is_df, width='stretch')
 
 with st.expander("🔎 View cleaned Balance Sheet (USD)", expanded=False):
-    st.dataframe(bs_df, use_container_width=True)
+    st.dataframe(bs_df, width='stretch')
 
 with st.expander("🔎 View cleaned SoCE (USD)", expanded=False):
-    st.dataframe(soce_df, use_container_width=True)
+    st.dataframe(soce_df, width='stretch')
 
 # =========================================================
 # STEP 2 — SoCE Mapping (USER SELECTS CLOSING BALANCE + TOTAL COLUMN)
@@ -718,7 +754,7 @@ st.dataframe(
         "Year": list(soce_year_equity.keys()),
         "Total Equity": list(soce_year_equity.values())
     }),
-    use_container_width=True
+    width='stretch'
 )
 
 # =========================================================
@@ -1580,7 +1616,7 @@ for i in df_row_idxs:
 styled = styled.format({c: fmt_money for c in df_final.columns if c != "Item"}, subset=pd.IndexSlice[len(rows), :])
 styled = styled.format({c: fmt_money for c in df_final.columns if c != "Item"}, subset=pd.IndexSlice[len(rows)+1, :])
 
-st.dataframe(styled, use_container_width=True)
+st.dataframe(styled, width='stretch')
 
 st.markdown("### ✅ Implied Equity Value — Residual Income Method (Totals)")
 
