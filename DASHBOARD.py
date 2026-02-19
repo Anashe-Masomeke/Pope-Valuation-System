@@ -75,6 +75,32 @@ LOGO_PATH = Path("assets") / "fbc_logo.png"
 st.markdown("<div class='top-nav'>", unsafe_allow_html=True)
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=45)
+    st.markdown("""
+    <style>
+
+    /* Apply Georgia to everything */
+    html, body, [class*="css"]  {
+        font-family: Georgia, "Times New Roman", serif !important;
+    }
+
+    /* Titles */
+    h1, h2, h3, h4, h5, h6 {
+        font-family: Georgia, "Times New Roman", serif !important;
+    }
+
+    /* Streamlit widgets */
+    div, p, span, label {
+        font-family: Georgia, "Times New Roman", serif !important;
+    }
+
+    /* Dataframes */
+    .stDataFrame, .stTable {
+        font-family: Georgia, "Times New Roman", serif !important;
+    }
+
+    </style>
+    """, unsafe_allow_html=True)
+
 st.markdown("<span class='top-title'>FBC Valuation Dashboard</span>", unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -152,4 +178,3 @@ st.markdown("""
     Powered by <b>FBC Securities</b> • Investment Research & Valuation Dashboard
 </div>
 """, unsafe_allow_html=True)
-
