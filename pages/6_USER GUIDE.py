@@ -1,5 +1,9 @@
 import streamlit as st
 from pathlib import Path
+import io
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from docx import Document
 import base64
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
@@ -465,7 +469,7 @@ with tab1:
     - Cost of Sales / Raw Materials
     - Gross Profit
     - EBITDA
-    - Depreciation & Amortisation (IS line) 
+    - Depreciation & Amortisation (IS line)  ✅ (your code supports this)
     - Operating Profit / EBIT
     - Profit Before Tax (PBT)
     - Income Tax (tax expense)
@@ -2264,5 +2268,141 @@ with tab7:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+# ✅ ADD THIS inside:  with tab7:
+st.markdown("### 📥 Download Quick Summary Only")
+
+# 1) Put the Quick Summary text you want exported here (edit freely)
+quick_summary_text = """
+QUICK SUMMARY — Valuation App
+
+DCF (UFCF / FCFF)
+1) Upload IS + BS + CF (one Excel, 3 sheets).
+2) Select currency (USD or ZWG + FX file).
+3) Map: Revenue, Debt, Cash, CA, CL, Equity, Capex, Depreciation (if available).
+4) Choose forecast years + revenue growth method.
+5) Confirm WC% method:
+   - Review historical WC% of Sales.
+   - Untick “Include” to exclude outlier years from the average.
+   - Choose average of included years OR most recent WC% for forecasting.
+6) Enter Average Cost of Debt Zimbabwe (US$) (%).
+7) Tick “Use Auto (from Excel) for RF & MRP” (or untick to override manually).
+8) Select Industry / Industries (for blended βu) from the auto list or override βu manually.
+9) Enter Tax rate and Terminal growth rate (g).
+10) Select Valuation timing (valuation date + financial year-end date).
+11) Review CAPEX History — exclude outlier years before averaging.
+12) Review EV → Equity and the WACC vs g sensitivity grid.
+13) Export Excel for audit trail.
+
+DDM (Gordon Growth)
+1) Enter dividend history.
+2) Pick stable years for growth.
+3) Confirm g and D1.
+4) Set CAPM inputs (or override).
+5) Check Ke > g then compute P0.
+6) Enter shares for total equity value.
+7) Export Excel.
+
+Comparables (EV/EBITDA · P/B · P/E)
+1) (Optional) Turn ON Peer Universe auto-fill and choose target.
+2) Confirm peers and enter multiples.
+3) Use Include flags to remove outliers (do not delete).
+4) Enter Discount % to compute implied multiples.
+Maintainable EBITDA/Earnings:
+- Choose year range, weights, timing (from DCF).
+Book Equity & Net Debt:
+- Auto-pulled from DCF/BANKING where available; can override manually.
+
+Banking (Residual Income)
+1) Upload IS + BS + SoCE.
+2) If ZWG: upload FX and confirm conversion.
+3) Map Total Equity rows on BS.
+4) Choose earnings line.
+5) Choose base year.
+6) Set Ke via CAPM + forecast years.
+7) Enter growth assumptions + terminal g.
+8) Check Ke > g then compute and export.
+
+Summary (Blended / Weighted)
+1) Run your chosen models first.
+2) Select models to include.
+3) Input weights (auto-normalized to 100%).
+4) Enter shares and current share price.
+5) Review intrinsic value + upside/downside.
+6) Export Summary Excel.
+""".strip()
+
+
+# 2) PDF generator (quick + clean)
+def build_quick_summary_pdf(text: str) -> bytes:
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    left = 40
+    top = height - 50
+    line_height = 14
+
+    y = top
+    c.setFont("Times-Roman", 11)
+
+    for line in text.split("\n"):
+        if y < 60:  # new page
+            c.showPage()
+            c.setFont("Times-Roman", 11)
+            y = top
+        c.drawString(left, y, line[:120])  # keep lines safe width-wise
+        y -= line_height
+
+    c.save()
+    buffer.seek(0)
+    return buffer.read()
+
+
+# 3) Word generator
+def build_quick_summary_docx(text: str) -> bytes:
+    doc = Document()
+    doc.add_heading("Quick Summary — Valuation App", level=1)
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            doc.add_paragraph("")
+            continue
+
+        # simple heading detection
+        if line.isupper() or line.endswith(")"):
+            doc.add_heading(line, level=2)
+        else:
+            doc.add_paragraph(line)
+
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.read()
+
+
+# 4) Download buttons
+pdf_bytes = build_quick_summary_pdf(quick_summary_text)
+docx_bytes = build_quick_summary_docx(quick_summary_text)
+
+c1, c2 = st.columns(2)
+with c1:
+    st.download_button(
+        "⬇️ Download Quick Summary (PDF)",
+        data=pdf_bytes,
+        file_name="quick_summary.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
+
+with c2:
+    st.download_button(
+        "⬇️ Download Quick Summary (Word)",
+        data=docx_bytes,
+        file_name="quick_summary.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
     )
 
