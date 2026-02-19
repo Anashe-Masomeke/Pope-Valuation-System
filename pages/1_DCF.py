@@ -30,7 +30,7 @@ def add_watermark():
             background-repeat: no-repeat;
             background-position: center;
             background-size: 1000px;
-            opacity: 0.01;   /* 🔥 control watermark visibility here */
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
             pointer-events: none;
             z-index: 0;
         }}
