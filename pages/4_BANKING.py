@@ -45,6 +45,32 @@ def add_watermark():
 add_watermark()
 
 st.set_page_config(page_title="Banking Valuation (Residual Income)", layout="wide")
+st.markdown("""
+<style>
+
+/* Apply Georgia to everything */
+html, body, [class*="css"]  {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* Titles */
+h1, h2, h3, h4, h5, h6 {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* Streamlit widgets */
+div, p, span, label {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+/* Dataframes */
+.stDataFrame, .stTable {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🏦 Banking Valuation — Residual Income Method (Actual Years)")
 
 # ---------------------------------------------------------
