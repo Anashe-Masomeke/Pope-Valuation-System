@@ -1,7 +1,44 @@
 import streamlit as st
+from pathlib import Path
+import base64
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
+
+        watermark_css = f"""
+        <style>
+
+        /* Make watermark very light */
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """
+        st.markdown(watermark_css, unsafe_allow_html=True)
+
+add_watermark()
+
 
 st.set_page_config(page_title="Help & Guide", layout="wide")
-
 # ---------------------------------------------------------
 # STYLES (GEORGIA FONT + BLUISH THEME)
 # ---------------------------------------------------------
