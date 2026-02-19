@@ -2,12 +2,49 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
+from pathlib import Path
+import base64
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
+
+        watermark_css = f"""
+        <style>
+
+        /* Make watermark very light */
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.1;   /* 🔥 control watermark visibility here */
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """
+        st.markdown(watermark_css, unsafe_allow_html=True)
+
+add_watermark()
+
 
 # ------------------------------------------------------------------------------
 # PAGE CONFIG
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Summary Valuation", layout="wide")
-
 # ------------------------------------------------------------------------------
 # POWERBI DARK THEME (FBC TUNED)
 # ------------------------------------------------------------------------------
@@ -685,7 +722,7 @@ def build_summary_excel_with_formulas(
     # BUY if upside >= 0.15
     # HOLD if -0.10 <= upside <= 0.10
     # else REDUCE
-    ws2.cell(r, 2, '=IF(ISNA(B6),"N/A",IF(B6>=0.15,"BUY / ACCUMULATE",IF(AND(B6>=-0.10,B6<=0.10),"HOLD / FAIRLY VALUED","REDUCE / AVOID")))')
+    ws2.cell(r, 2, '=IF(ISNA(B6),"N/A",IF(B6>=0.10,"BUY / ACCUMULATE",IF(AND(B6>=-0.10,B6<=0.10),"HOLD / FAIRLY VALUED","REDUCE / AVOID")))')
     ws2.cell(r, 3, "")
 
     # format numbers
