@@ -220,7 +220,7 @@ if colD.button("🏦 Banking (RIM)", use_container_width=True):
     st.switch_page("pages/4_BANKING.py")
 
 if colE.button("🧾 Summary", use_container_width=True):
-    st.switch_page("pages/5_summary.py")
+    st.switch_page("pages/5_SUMMARY.py")
 
 if colF.button("🧭 User Guide", use_container_width=True):
     st.switch_page("pages/6_USER GUIDE.py")
