@@ -15,7 +15,12 @@ st.set_page_config(
 # ------------------------------------------------------------
 CUSTOM_STYLE = """
 <style>
-
+html, body, .stApp, .block-container,
+p, div, label,
+h1, h2, h3, h4, h5, h6,
+li, ul, ol, a, small {
+  font-family: Georgia, "Times New Roman", serif !important;
+}
 /* ✅ Load Material Icons so Streamlit's sidebar collapse icon renders correctly */
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
