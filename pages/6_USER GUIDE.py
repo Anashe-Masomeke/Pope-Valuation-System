@@ -956,7 +956,7 @@ This page does 6 main things:
 """
         )
 
-    with st.expander("2) Step 0 — Auto-Fill Comparables (Peer Universe)", expanded=True):
+    with st.expander("2) Auto-Fill Comparables (Peer Universe)", expanded=True):
         st.markdown(
             r"""
 ### Purpose
@@ -2118,7 +2118,6 @@ with tab7:
     )
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.markdown(
             """
@@ -2130,12 +2129,26 @@ with tab7:
                 2) Select currency (USD or ZWG + FX file).<br>
                 3) Map: Revenue, Debt, Cash, CA, CL, Equity, Capex, Depreciation (if available).<br>
                 4) Choose forecast years + revenue growth method.<br>
-                5) Confirm WC% method + CAPEX averaging (exclude outliers).<br>
-                6) Set WACC inputs (RF, MRP, beta, tax, Rd) + terminal g.<br>
-                7) On cost of debt you can manually override or use the auto cost of debt.<br>
-                8) Select Valuation timing by first selecting today's date and then the Financial statement year-end date.<br>
-                9) Review EV → Equity and the WACC vs g sensitivity grid.<br>
-                10) Export Excel for audit trail.
+               5) Confirm WC% method.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• Review the historical <b>Working Capital % of Sales</b> table.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• If any year looks abnormal, untick the <b>“Include”</b> box to exclude that year from the average calculation.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• Then choose whether to use:<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;– The average of the included years, or<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;– The most recent WC% for forecasting.<br>
+                6) Enter <b>Average Cost of Debt Zimbabwe (US$) (%)</b>.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• Used to derive Risk-Free Rate (RF) when Auto mode is enabled.<br>
+                7) Tick <b>“Use Auto (from Excel) for RF & MRP”</b> if using Country ERP + Default Spread file.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• RF and MRP populate automatically from Excel.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• You may untick to manually override RF and MRP.<br>
+                8) Under <b>Select Industry / Industries (for blended βu)</b>:<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• Choose industries from the auto beta list,<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• OR manually override βu.<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;• Select simple or weighted average if multiple industries are chosen.<br>
+                9) Enter Tax rate and <b>Terminal growth rate (g)</b>.<br>
+                10) Select Valuation timing (valuation date and financial statement year-end date).<br>
+                11) Review <b>CAPEX History — Exclude outlier years before averaging</b> if needed.<br>
+                12) Review EV → Equity and the WACC vs g sensitivity grid.<br>
+                13) Export Excel for audit trail.
               </div>
             </div>
             """,
@@ -2192,10 +2205,19 @@ with tab7:
                 • Your job here is to <b>review</b> and confirm the earnings output
               </div>
 
+              <div style="margin-top:10px; padding:12px; border-radius:10px; background:#f8fafc; border-left:4px solid #475569;">
+                <b>🔹 Book Equity & Net Debt</b><br>
+                • <b>Book Equity</b> is automatically pulled from the <b>DCF Model</b> (if available).<br>
+                • If DCF is not used, it can be taken from <b>BANKING</b> where applicable.<br>
+                • <b>Net Debt</b> is automatically pulled from the <b>DCF model</b>.<br>
+                • You may manually override these values if needed.
+              </div>
+
               <div class="callout warn" style="margin-top:12px;">
                 <b>Important:</b><br>
                 EBITDA logic can automatically flow into Earnings.<br>
-                Always run DCF first if you want EBITDA/Earnings auto-filled.
+                Run DCF (and Banking if applicable) first so Book Equity, Net Debt, 
+                EBITDA, and Earnings populate automatically.
               </div>
 
             </div>
