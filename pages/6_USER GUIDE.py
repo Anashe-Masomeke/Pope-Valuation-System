@@ -2355,7 +2355,6 @@ Summary (Blended / Weighted)
 6) Export Summary Excel.
 """.strip()
 
-
 # 2) PDF generator (quick + clean)
 def build_quick_summary_pdf(text: str) -> bytes:
     buffer = io.BytesIO()
