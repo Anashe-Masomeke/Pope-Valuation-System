@@ -2130,32 +2130,50 @@ with tab7:
               <div class="callout">
                 <b>Quick steps</b><br>
                 1) Upload IS + BS + CF (one Excel, 3 sheets).<br>
-                2) Select currency (USD or ZWG + FX file).<br>
-                3) Map: Revenue, Debt, Cash, CA, CL, Equity, Capex, Depreciation (if available).<br>
-                4) Choose forecast years + revenue growth method.<br>
-               5) Confirm WC% method.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• Review the historical <b>Working Capital % of Sales</b> table.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• If any year looks abnormal, untick the <b>“Include”</b> box to exclude that year from the average calculation.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• Then choose whether to use:<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;– The average of the included years, or<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;– The most recent WC% for forecasting.<br>
-                6) Enter <b>Average Cost of Debt Zimbabwe (US$) (%)</b>.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• Used to derive Risk-Free Rate (RF) when Auto mode is enabled.<br>
-                7) Tick <b>“Use Auto (from Excel) for RF & MRP”</b> if using Country ERP + Default Spread file.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• RF and MRP populate automatically from Excel.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• You may untick to manually override RF and MRP.<br>
-                8) Under <b>Select Industry / Industries (for blended βu)</b>:<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• Choose industries from the auto beta list,<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• OR manually override βu.<br>
-                &nbsp;&nbsp;&nbsp;&nbsp;• Select simple or weighted average if multiple industries are chosen.<br>
-                9) Enter Tax rate and <b>Terminal growth rate (g)</b>.<br>
-                10) Select Valuation timing (valuation date and financial statement year-end date).<br>
-                11) Review <b>CAPEX History — Exclude outlier years before averaging</b> if needed.<br>
-                12) Review EV → Equity and the WACC vs g sensitivity grid.<br>
-                13) Export Excel for audit trail.
-              </div>
-            </div>
-            """,
+                2) Select currency (USD or ZWG + FX file).<br></div>
+                 <div style="margin-top:12px; padding:12px; border-radius:10px; background:#eef6ff; border-left:4px solid #2563eb;">
+             <b>🔹 Required sheet order</b><br>
+             • <b>Sheet 1:</b> Income Statement<br>
+             • <b>Sheet 2:</b> Balance Sheet<br>
+             • <b>Sheet 3:</b> Cash Flows
+           </div>
+
+           <div style="margin-top:10px; padding:12px; border-radius:10px; background:#f0f9ff; border-left:4px solid #1d4ed8;">
+             <b>🔹 Required sheet layout</b><br>
+             • <b>Column A</b> = line items (start on <b>Row 2</b>)<br>
+             • <b>Row 1</b> (from <b>Column B</b> onward) = years (e.g., 2022, 2023, 2024)
+           </div>
+
+           <div style="margin-top:10px; padding:12px; border-radius:10px; background:#f8fafc; border-left:4px solid #475569;">
+             <b>🔹 FX file (only if ZWG)</b><br>
+             • Upload an FX Excel with <b>Date</b> + <b>Bank</b> and/or <b>Interbank</b> rate columns
+           </div>
+            </div>  <div class="callout">
+             3) Map: Revenue, Debt, Cash, CA, CL, Equity, Capex, Depreciation (if available).<br>
+             4) Choose forecast years + revenue growth method.<br>
+             5) Confirm WC% method.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• Review the historical <b>Working Capital % of Sales</b> table.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• If any year looks abnormal, untick the <b>“Include”</b> box to exclude that year from the average calculation.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• Then choose whether to use:<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;– The average of the included years, or<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;– The most recent WC% for forecasting.<br>
+             6) Enter <b>Average Cost of Debt Zimbabwe (US$) (%)</b>.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• Used to derive Risk-Free Rate (RF) when Auto mode is enabled.<br>
+             7) Tick <b>“Use Auto (from Excel) for RF & MRP”</b> if using Country ERP + Default Spread file.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• RF and MRP populate automatically from Excel.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• You may untick to manually override RF and MRP.<br>
+             8) Under <b>Select Industry / Industries (for blended βu)</b>:<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• Choose industries from the auto beta list,<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• OR manually override βu.<br>
+             &nbsp;&nbsp;&nbsp;&nbsp;• Select simple or weighted average if multiple industries are chosen.<br>
+             9) Enter Tax rate and <b>Terminal growth rate (g)</b>.<br>
+             10) Select Valuation timing (valuation date and financial statement year-end date).<br>
+             11) Review <b>CAPEX History — Exclude outlier years before averaging</b> if needed.<br>
+             12) Review EV → Equity and the WACC vs g sensitivity grid.<br>
+             13) Export Excel for audit trail. </div>
+          
+         </div>
+         """,
             unsafe_allow_html=True,
         )
 
@@ -2270,6 +2288,7 @@ with tab7:
         unsafe_allow_html=True,
     )
 
+
 # ✅ ADD THIS inside:  with tab7:
 st.markdown("### 📥 Download Quick Summary Only")
 
@@ -2279,7 +2298,10 @@ QUICK SUMMARY — Valuation App
 
 DCF (UFCF / FCFF)
 1) Upload IS + BS + CF (one Excel, 3 sheets).
+   - Required sheet order: Sheet 1 = Income Statement, Sheet 2 = Balance Sheet, Sheet 3 = Cash Flows.
+   - Required layout: Column A = line items (start Row 2); Row 1 (from Column B onward) = years (e.g., 2022, 2023, 2024).
 2) Select currency (USD or ZWG + FX file).
+   - If ZWG: upload an FX Excel with Date + Bank and/or Interbank rate columns.
 3) Map: Revenue, Debt, Cash, CA, CL, Equity, Capex, Depreciation (if available).
 4) Choose forecast years + revenue growth method.
 5) Confirm WC% method:
