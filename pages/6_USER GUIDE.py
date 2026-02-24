@@ -2207,8 +2207,9 @@ with tab7:
 
               <div class="callout">
                 <b>Quick Setup</b><br>
-                1) (Optional) Turn ON Peer Universe auto-fill and choose target.<br>
-                2) Confirm peers and enter multiples (EV/EBITDA, P/B, P/E).<br>
+                1) Gather all the necessary data on comparable companies and Ratios (EV/EBITDA, P/E, P/B).<br>
+                3) Choose how many comparables you want to use.<br>
+                2) Enter the peers and also multiples (EV/EBITDA, P/B, P/E).<br>
                 3) Use Include flags to remove outliers (do not delete).<br>
                 4) Enter Discount % → system computes implied multiples.
               </div>
@@ -2327,8 +2328,9 @@ DDM (Gordon Growth)
 7) Export Excel.
 
 Comparables (EV/EBITDA · P/B · P/E)
-1) (Optional) Turn ON Peer Universe auto-fill and choose target.
-2) Confirm peers and enter multiples.
+1) Gather all the necessary data on comparable companies and Ratios (EV/EBITDA, P/E, P/B).
+3) Choose how many comparables you want to use.
+2) Enter peers and also multiples.
 3) Use Include flags to remove outliers (do not delete).
 4) Enter Discount % to compute implied multiples.
 Maintainable EBITDA/Earnings:
