@@ -1,10 +1,19 @@
-
 import streamlit as st
+# =========================================================
+# Streamlit Page
+# =========================================================
+st.set_page_config(page_title="Comparables Valuation (Excel Style)", layout="wide")
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from io import BytesIO
 import base64
+import re
+import requests
+from bs4 import BeautifulSoup
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -51,10 +60,7 @@ def format_numeric_columns(df: pd.DataFrame):
     return df.style.format(fmt)
 
 
-# =========================================================
-# Streamlit Page
-# =========================================================
-st.set_page_config(page_title="Comparables Valuation (Excel Style)", layout="wide")
+
 # ---------------------------------------------------------
 # ✅ FIX SIDEBAR COLLAPSE ARROW (Material Icons)
 # ---------------------------------------------------------
@@ -147,22 +153,571 @@ li, ul, ol, a, small {
 
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 st.caption("All values & inputs are saved in session_state (won’t reset when switching tabs).")
-
+# =========================================================
+# WIKIDATA + JSE(WIKIPEDIA) CONFIG + HELPERS (PUT ABOVE STEP 1)
+# ✅ UPDATED: Global peers now use Yahoo Finance (NOT Wikidata)
+# =========================================================
 S = st.session_state
 
+# Use ONE headers dict (avoid overriding twice)
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+def _safe_get(url, params=None, timeout=25):
+    r = requests.get(url, params=params, timeout=timeout, headers=HEADERS)
+    r.raise_for_status()
+    return r
+
+# =========================================================
+# JSE (Wikipedia) peers - stays the same
+# =========================================================
+JSE_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_companies_traded_on_the_JSE"
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
+def load_jse_wikipedia_catalog() -> pd.DataFrame:
+    """
+    Returns a single cleaned DataFrame with columns:
+      Symbol | Company | Notes | Link
+    (We IGNORE table headings like A/B/C/W because those are not sectors.)
+    """
+    try:
+        html = _safe_get(JSE_WIKI_URL, timeout=30).text
+    except Exception:
+        return pd.DataFrame(columns=["Symbol", "Company", "Notes", "Link"])
+
+    soup = BeautifulSoup(html, "html.parser")
+    tables = soup.find_all("table", class_="wikitable")
+    if not tables:
+        return pd.DataFrame(columns=["Symbol", "Company", "Notes", "Link"])
+
+    rows = []
+    for tbl in tables:
+        try:
+            df_list = pd.read_html(str(tbl))
+        except Exception:
+            continue
+        if not df_list:
+            continue
+
+        t = df_list[0].copy()
+        t.columns = [str(c).strip() for c in t.columns]
+        lower_map = {str(c).strip().lower(): str(c).strip() for c in t.columns}
+
+        sym_col = lower_map.get("symbol") or lower_map.get("ticker") or lower_map.get("code")
+        comp_col = lower_map.get("company") or lower_map.get("name")
+        notes_col = lower_map.get("notes") or lower_map.get("sector") or lower_map.get("industry")
+
+        if not sym_col or not comp_col:
+            continue
+
+        # capture wikipedia company link per row where possible
+        link_map = {}
+        for tr in tbl.find_all("tr"):
+            tds = tr.find_all(["td", "th"])
+            if len(tds) < 2:
+                continue
+            sym_txt = tds[0].get_text(" ", strip=True)
+            comp_td = tds[1]
+            a = comp_td.find("a", href=True)
+            if sym_txt and a and a["href"].startswith("/wiki/"):
+                link_map[sym_txt.strip()] = "https://en.wikipedia.org" + a["href"]
+
+        for _, r in t.iterrows():
+            sym = str(r.get(sym_col, "")).strip()
+            comp = str(r.get(comp_col, "")).strip()
+            notes = str(r.get(notes_col, "")).strip() if notes_col else ""
+            link = link_map.get(sym, "")
+
+            if not sym or not comp:
+                continue
+            if sym.lower() == "nan" or comp.lower() == "nan":
+                continue
+
+            rows.append({
+                "Symbol": sym,
+                "Company": comp,
+                "Notes": "" if str(notes).lower() == "nan" else notes,
+                "Link": link,
+            })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=["Symbol", "Company", "Notes", "Link"])
+
+    for c in ["Symbol", "Company", "Notes"]:
+        df[c] = df[c].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+
+    df = df.drop_duplicates(subset=["Symbol", "Company"], keep="first").reset_index(drop=True)
+    return df
+
+def extract_note_tags(notes: str) -> list[str]:
+    """
+    Turn Notes into tags, e.g.
+    "breweries, beverages, soft drinks" -> ["breweries","beverages","soft drinks"]
+    """
+    n = (notes or "").strip().lower()
+    if not n or n == "nan":
+        return []
+
+    parts = re.split(r"[;,/|]| and |\(|\)|—|-", n)
+    tags = []
+    for p in parts:
+        p = p.strip()
+        if len(p) < 3:
+            continue
+        if p.isdigit():
+            continue
+        tags.append(p)
+
+    seen = set()
+    out = []
+    for t in tags:
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
+def build_notes_tag_index() -> dict:
+    """
+    Build tag -> count using ALL Notes on JSE list.
+    """
+    df = load_jse_wikipedia_catalog()
+    tag_counts = {}
+    for n in df["Notes"].fillna("").astype(str).tolist():
+        for tag in extract_note_tags(n):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    return tag_counts
+
+def suggest_matching_tags(keyword: str, top_n: int = 25) -> list[str]:
+    """
+    Show only tags that relate to what user typed.
+    """
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return []
+
+    tag_counts = build_notes_tag_index()
+    hits = []
+    for tag, cnt in tag_counts.items():
+        if kw in tag:
+            hits.append((tag, cnt))
+
+    hits.sort(key=lambda x: (-x[1], x[0]))
+    return [h[0] for h in hits[:top_n]]
+
+def peers_from_notes_tag(tag_or_keyword: str, k: int = 8) -> list[dict]:
+    """
+    Pull JSE peers where Notes contains tag/keyword OR tag appears in extracted tags.
+    """
+    df = load_jse_wikipedia_catalog()
+    if df.empty:
+        return []
+
+    q = (tag_or_keyword or "").strip().lower()
+    if not q:
+        return []
+
+    mask = df["Notes"].fillna("").astype(str).str.lower().str.contains(q, na=False)
+
+    if not mask.any():
+        tags_list = df["Notes"].fillna("").astype(str).apply(extract_note_tags)
+        mask = tags_list.apply(lambda tags: any(q == t for t in tags))
+
+    filt = df[mask].copy()
+    if filt.empty:
+        return []
+
+    filt = filt.sort_values(["Symbol", "Company"]).head(int(k))
+    return filt.to_dict("records")
+
+def format_peer_lines(peer_rows: list[dict]) -> str:
+    lines = []
+    for r in peer_rows:
+        sym = (r.get("Symbol", "") or "").strip()
+        nm = (r.get("Company", "") or "").strip()
+        notes = (r.get("Notes", "") or "").strip()
+        lines.append(f"- **{sym}** — {nm}" + (f" *(Notes: {notes})*" if notes else ""))
+    return "\n".join(lines)
+# =========================================================
+# Yahoo Finance Search (MUST be above yahoo_africa_peers)
+# =========================================================
+YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+
+def yahoo_search(query: str, quotes_count: int = 50) -> pd.DataFrame:
+    params = {"q": query, "quotesCount": int(quotes_count), "newsCount": 0}
+    r = requests.get(YAHOO_SEARCH_URL, params=params, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+
+    rows = []
+    for q in data.get("quotes", []) or []:
+        rows.append({
+            "Company": q.get("shortname") or q.get("longname") or "",
+            "Ticker": q.get("symbol") or "",
+            "Exchange": q.get("exchange") or "",
+            "Type": q.get("quoteType") or "",
+        })
+
+    return pd.DataFrame(rows)
+# =========================
+# Yahoo Africa filter (STRICT)  ✅ UPDATED (Africa-only + bigger peer pool)
+# =========================
+
+# ✅ Africa exchanges (tight list; avoid India/US/etc)
+AFRICA_EXCHANGES = {
+    # South Africa
+    "JNB", "JSE", "JOH",
+
+    # Morocco (Casablanca)
+    "CAS",
+
+    # Egypt (Yahoo varies)
+    "EGX", "CAI",
+
+    # Kenya (Yahoo often uses NBO)
+    "NBO",
+
+    # Ghana
+    "GSE",
+
+    # Nigeria (Yahoo varies; keep if you see it working for you)
+    "NGM", "NSI",
+
+    # East/Southern Africa (Yahoo varies; keep if you see it working)
+    "USE", "DSE", "LUSE", "ZSE", "MSE",
+}
+
+# ✅ Africa ticker suffixes (most reliable on Yahoo)
+AFRICA_SUFFIXES = (
+    ".JO",  # South Africa
+    ".NG",  # Nigeria (some listings)
+    ".KE",  # Kenya (some listings)
+    ".GH",  # Ghana (rare)
+    ".MU",  # Mauritius
+    ".ZM",  # Zambia (rare)
+    ".ZW",  # Zimbabwe (rare)
+    ".TZ",  # Tanzania (rare)
+    ".UG",  # Uganda (rare)
+    ".BW",  # Botswana (rare)
+)
+
+# 🚫 Block NON-Africa exchanges that were leaking in (India/US/UK etc)
+BLOCK_EXCHANGES = {
+    "NSE", "BSE",        # India
+    "NYQ", "NMS", "NAS", # USA
+    "LSE",               # UK
+    "HKG",               # Hong Kong
+    "JPX",               # Japan
+    "TSX", "TOR",        # Canada
+}
+
+# 🚫 Block NON-Africa ticker suffixes that were leaking in (India/UK/US etc)
+BLOCK_SUFFIXES = (
+    ".NS", ".BO",  # India (BIG problem)
+    ".L",          # UK
+    ".TO", ".V",   # Canada
+    ".HK",         # Hong Kong
+    ".T",          # Japan
+)
+
+BAD_QUOTETYPES = {"FUTURE", "INDEX", "CURRENCY", "CRYPTOCURRENCY", "ETF", "MUTUALFUND", "OPTION"}
+
+def is_africa_quote(row: dict) -> bool:
+    # row may be either raw yahoo json-like or our normalized DF row
+    tkr = (row.get("symbol") or row.get("Ticker") or "").strip()
+    exch = (row.get("exchange") or row.get("Exchange") or "").strip().upper()
+    qtype = (row.get("quoteType") or row.get("Type") or "").strip().upper()
+
+    if not tkr:
+        return False
+
+    # remove futures/indices etc
+    if qtype in BAD_QUOTETYPES:
+        return False
+
+    # 🚫 hard block known non-africa tickers
+    if tkr.endswith(BLOCK_SUFFIXES):
+        return False
+
+    # 🚫 hard block known non-africa exchanges
+    if exch in BLOCK_EXCHANGES:
+        return False
+
+    # ✅ accept Africa by exchange OR by suffix
+    if exch in AFRICA_EXCHANGES:
+        return True
+
+    if tkr.endswith(AFRICA_SUFFIXES):
+        return True
+
+    return False
+
+
+def filter_africa(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    # normalize expected column names from yahoo_search()
+    if "symbol" in df.columns and "Ticker" not in df.columns:
+        df = df.rename(columns={"symbol": "Ticker"})
+    if "shortname" in df.columns and "Company" not in df.columns:
+        df = df.rename(columns={"shortname": "Company"})
+    if "exchange" in df.columns and "Exchange" not in df.columns:
+        df = df.rename(columns={"exchange": "Exchange"})
+    if "quoteType" in df.columns and "Type" not in df.columns:
+        df = df.rename(columns={"quoteType": "Type"})
+
+    rows = []
+    for _, r in df.iterrows():
+        d = {
+            "Company": str(r.get("Company", "") or "").strip(),
+            "Ticker": str(r.get("Ticker", "") or "").strip(),
+            "Exchange": str(r.get("Exchange", "") or "").strip(),
+            "Type": str(r.get("Type", "") or "").strip(),
+        }
+        # mirror keys for is_africa_quote
+        d["symbol"] = d["Ticker"]
+        d["exchange"] = d["Exchange"]
+        d["quoteType"] = d["Type"]
+
+        if is_africa_quote(d):
+            rows.append(d)
+
+    out = pd.DataFrame(rows).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def yahoo_africa_peers(sector_keyword: str, limit: int = 200) -> pd.DataFrame:
+    """
+    Africa peers driven by SECTOR keyword.
+    ✅ Build a BIG Africa pool (don’t stop early), then return head(limit).
+    """
+    sk = (sector_keyword or "").strip()
+    if not sk:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    # More Africa-focused queries (broader coverage)
+    queries = [
+        sk,
+        f"{sk} company",
+        f"{sk} listed",
+        f"{sk} Africa",
+        f"{sk} South Africa",
+        f"{sk} Nigeria",
+        f"{sk} Kenya",
+        f"{sk} Egypt",
+        f"{sk} Morocco",
+        f"{sk} Ghana",
+        f"{sk} Uganda",
+        f"{sk} Tanzania",
+        f"{sk} Zambia",
+        f"{sk} Botswana",
+        f"{sk} Namibia",
+        f"{sk} Mauritius",
+    ]
+
+    combined = pd.DataFrame()
+
+    for q in queries:
+        try:
+            # get more candidates per query
+            dfq = yahoo_search(q, quotes_count=400)
+            combined = pd.concat([combined, filter_africa(dfq)], ignore_index=True)
+        except Exception:
+            pass
+
+        combined = combined.drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+
+    if combined.empty:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    # double-safe: equities only
+    combined["Type"] = combined["Type"].fillna("").astype(str).str.upper()
+    combined = combined[~combined["Type"].isin(list(BAD_QUOTETYPES))]
+
+    combined = combined.sort_values(["Exchange", "Company"], ascending=[True, True])
+    return combined.head(int(limit)).reset_index(drop=True)
+
+
+def format_global_peer_lines_yahoo(df: pd.DataFrame, max_rows: int = 25) -> str:
+    if df is None or df.empty:
+        return ""
+    out = []
+    show = df.head(int(max_rows))
+    for _, r in show.iterrows():
+        nm = str(r.get("Company", "")).strip()
+        tk = str(r.get("Ticker", "")).strip()
+        ex = str(r.get("Exchange", "")).strip()
+        tp = str(r.get("Type", "")).strip()
+        meta = " | ".join([x for x in [tk, ex, tp] if x])
+        out.append(f"- **{nm}**" + (f" *({meta})*" if meta else ""))
+    return "\n".join(out)
 
 # =========================================================
 # STEP 1 — INPUT COMPARABLE COMPANIES & MULTIPLES
 # =========================================================
-st.header("Step 1 — Input Comparable Companies & Multiples")
 
+st.header("Step 1 — Input Comparable Companies & Multiples")
+st.subheader("Auto Peer Suggestions (JSE Wikipedia Notes-based + Yahoo Africa)")
+
+S.setdefault("target_company", "")
+S.setdefault("auto_peer_count", 8)
+
+cA, cB, cC = st.columns([2.2, 1, 1.2])
+with cA:
+    target_company = st.text_input(
+        "Company you are valuing (ANY market: Zimbabwe/JSE/etc)",
+        value=S["target_company"],
+        key="target_company_input",
+        placeholder="e.g., Innscor, Delta, FBC, Econet, MTN, Vodacom, Safaricom ...",
+    )
+with cB:
+    peer_count = st.number_input(
+        "Peers to suggest (JSE list / shortlist size)",
+        min_value=3,
+        max_value=15,
+        value=int(S["auto_peer_count"]),
+        step=1,
+        key="auto_peer_count_input",
+    )
+with cC:
+    st.caption(" ")
+    auto_apply = st.checkbox("Auto-fill Step 1 names", value=True, key="auto_apply_peers")
+
+S["target_company"] = target_company
+S["auto_peer_count"] = int(peer_count)
+
+S.setdefault("sector_keyword", "")
+sector_keyword = st.text_input(
+    "Sector keyword (from Notes / industry idea) — drives peers",
+    value=S.get("sector_keyword", ""),
+    key="sector_keyword_input",
+    placeholder="e.g., beverages, banking, insurance, mining, retail, telecoms ...",
+)
+S["sector_keyword"] = sector_keyword
+
+tag_options = suggest_matching_tags(sector_keyword, top_n=30) if sector_keyword.strip() else []
+chosen_tag = None
+if tag_options:
+    chosen_tag = st.selectbox(
+        "Matching Notes tags found on JSE (pick one to be precise)",
+        options=["(use my typed keyword)"] + tag_options,
+        index=0,
+        key="chosen_notes_tag",
+    )
+
+sector_used = sector_keyword.strip().lower()
+if chosen_tag and chosen_tag != "(use my typed keyword)":
+    sector_used = chosen_tag.strip().lower()
+
+if not sector_used and not target_company.strip():
+    st.warning("Type a sector keyword (e.g., 'banking') or a target company name first.")
+else:
+    if sector_used:
+        st.info(f"✅ JSE peers will be pulled by Notes tag: **{sector_used}**")
+    else:
+        st.info("✅ No sector keyword chosen — JSE peers may be empty.")
+
+    jse_peer_rows = peers_from_notes_tag(sector_used, k=int(peer_count)) if sector_used else []
+
+    # ✅ BIG pool slider
+    africa_limit = st.slider("How many Africa peers to fetch (Yahoo Finance)", 20, 300, 120, 20)
+    africa_df = yahoo_africa_peers(
+        sector_keyword=sector_used if sector_used else sector_keyword,
+        limit=int(africa_limit),
+    )
+
+    peer_universe = st.radio(
+        "Which peers do you want to use?",
+        ["JSE only", "Africa only (Yahoo Finance)", "Both (JSE + Africa Yahoo)"],
+        index=2,
+        key="peer_universe_choice",
+    )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("🇿🇦 JSE peers (Wikipedia Notes-based)")
+        if jse_peer_rows:
+            st.success(f"Suggested JSE peers (Notes match: {sector_used})")
+            st.markdown(format_peer_lines(jse_peer_rows))
+
+            jse_names = [r["Company"].strip() for r in jse_peer_rows if r.get("Company")]
+            chosen_jse = st.multiselect(
+                "Select JSE peers to use",
+                options=jse_names,
+                default=jse_names,
+                key="chosen_jse_peers_names",
+            )
+        else:
+            st.warning("No JSE peers found for that Notes keyword (try 'bank', 'insurance', 'telecom').")
+            chosen_jse = []
+
+    with c2:
+        st.subheader("🌍 Africa peers (Yahoo Finance)")
+        st.caption("Africa-only filter (blocks India/US/UK tickers and exchanges).")
+
+        if africa_df is not None and not africa_df.empty:
+            st.success(f"Suggested Africa peers (Yahoo Finance) — pool size: {len(africa_df)}")
+            st.markdown(format_global_peer_lines_yahoo(africa_df, max_rows=25))
+
+            global_options = []
+            for _, r in africa_df.iterrows():
+                nm = str(r.get("Company", "")).strip()
+                tk = str(r.get("Ticker", "")).strip()
+                ex = str(r.get("Exchange", "")).strip()
+                tp = str(r.get("Type", "")).strip()
+                meta = " | ".join([x for x in [tk, ex, tp] if x])
+                label = f"{nm} — {meta}" if meta else nm
+                global_options.append(label)
+
+            chosen_global_labels = st.multiselect(
+                "Select Africa peers to use",
+                options=global_options,
+                default=global_options[: min(len(global_options), int(peer_count))],
+                key="chosen_africa_peers_labels",
+            )
+            chosen_global = [x.split(" — ")[0].strip() for x in chosen_global_labels]
+        else:
+            st.warning("No Africa peers returned. Try a broader keyword (e.g., 'financial', 'insurance', 'bank').")
+            chosen_global = []
+
+    if peer_universe == "JSE only":
+        selected = chosen_jse
+    elif peer_universe == "Africa only (Yahoo Finance)":
+        selected = chosen_global
+    else:
+        selected = chosen_jse + chosen_global
+
+    seen = set()
+    selected_final = []
+    for nm in selected:
+        k = (nm or "").strip().lower()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        selected_final.append(nm.strip())
+
+    st.info(f"✅ Selected peers to apply: **{len(selected_final)}**")
+
+    if auto_apply and selected_final:
+        if "num_comps" not in S or int(S.get("num_comps", 3)) < len(selected_final):
+            S["num_comps"] = len(selected_final)
+            S["num_comps_input"] = len(selected_final)
+
+        for i, name in enumerate(selected_final):
+            S[f"comp_name_{i}"] = name
+
+# ---- your existing Step 1 comparables inputs (unchanged)
 S.setdefault("num_comps", 3)
 S.setdefault("comps", {})
 
 num_comps = st.number_input(
     "How many comparables?",
     min_value=1,
-    max_value=20,
+    max_value=15,
     value=int(S.get("num_comps", 3)),
     key="num_comps_input",
 )
@@ -175,16 +730,12 @@ for i in range(int(num_comps)):
         "inc_ev": True, "inc_pb": True, "inc_pe": True
     })
 
-
 rows_comps = []
 
 for i in range(int(num_comps)):
     st.subheader(f"Comparable {i + 1}")
-
-    # 4 inputs + 1 include/exclude column
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1.3])
 
-    # ---------- Name ----------
     with c1:
         default_name = S.get(f"comp_name_{i}", S["comps"][i]["name"])
         name_val = st.text_input(
@@ -194,7 +745,6 @@ for i in range(int(num_comps)):
         )
         S["comps"][i]["name"] = name_val
 
-    # ---------- Multiples ----------
     with c2:
         default_ev = float(S.get(f"comp_ev_{i}", S["comps"][i]["ev"]))
         ev_val = st.number_input(
@@ -228,20 +778,14 @@ for i in range(int(num_comps)):
         )
         S["comps"][i]["pe"] = pe_val
 
-    # ---------- Analyst relevance toggles (persisted) ----------
-    # Defaults to True (include) unless user switches off
-    # ---------- Analyst relevance toggles (persisted) ----------
-    # ---------- Analyst relevance toggles (persisted + stored in comps) ----------
     ev_key = f"inc_ev_{i}"
     pb_key = f"inc_pb_{i}"
     pe_key = f"inc_pe_{i}"
 
-    # make sure comps has flags
     S["comps"][i].setdefault("inc_ev", True)
     S["comps"][i].setdefault("inc_pb", True)
     S["comps"][i].setdefault("inc_pe", True)
 
-    # set widget defaults BEFORE widgets exist (only if keys not already created)
     if ev_key not in S: S[ev_key] = bool(S["comps"][i]["inc_ev"])
     if pb_key not in S: S[pb_key] = bool(S["comps"][i]["inc_pb"])
     if pe_key not in S: S[pe_key] = bool(S["comps"][i]["inc_pe"])
@@ -252,12 +796,10 @@ for i in range(int(num_comps)):
         st.checkbox("Include P/B", key=pb_key)
         st.checkbox("Include P/E", key=pe_key)
 
-    # read values AFTER widgets
     inc_ev = bool(S[ev_key])
     inc_pb = bool(S[pb_key])
     inc_pe = bool(S[pe_key])
 
-    # store back to comps structure (safe: not modifying widget keys)
     S["comps"][i]["inc_ev"] = inc_ev
     S["comps"][i]["inc_pb"] = inc_pb
     S["comps"][i]["inc_pe"] = inc_pe
@@ -272,17 +814,14 @@ df_comps = pd.DataFrame(
 st.subheader("Entered Comparables")
 st.dataframe(df_comps, width='stretch')
 
-# keep your existing lists if you want, but now you also have include flags
 S["comps_num"] = int(num_comps)
 S["comps_ev_list"] = df_comps["EV/EBITDA"].astype(float).tolist()
 S["comps_pb_list"] = df_comps["P/B"].astype(float).tolist()
 S["comps_pe_list"] = df_comps["P/E"].astype(float).tolist()
 
-# NEW: store include masks too (useful later)
 S["comps_inc_ev"] = df_comps["Include_EV"].astype(bool).tolist()
 S["comps_inc_pb"] = df_comps["Include_PB"].astype(bool).tolist()
 S["comps_inc_pe"] = df_comps["Include_PE"].astype(bool).tolist()
-
 # =========================================================
 # STEP 2 — AVERAGE & IMPLIED MULTIPLES
 # =========================================================
