@@ -6,5 +6,4 @@ requests
 reportlab
 python-docx
 yfinance
-beautifulsoup
-matplotlib
+
