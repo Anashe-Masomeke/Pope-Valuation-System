@@ -5,5 +5,4 @@ numpy
 requests
 reportlab
 python-docx
- bs4 
-BeautifulSoup
+
