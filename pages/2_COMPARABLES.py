@@ -150,8 +150,6 @@ S = st.session_state
 # =========================================================
 FMP_API_KEY = st.secrets.get("FMP_API_KEY", os.getenv("FMP_API_KEY", ""))
 FINNHUB_API_KEY = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", ""))
-st.write("FMP key loaded:", bool(FMP_API_KEY))
-st.write("Finnhub key loaded:", bool(FINNHUB_API_KEY))
 
 # api/v3 usually has better coverage for profile/statements endpoints
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
@@ -362,7 +360,23 @@ def yahoo_search(query: str, quotes_count: int = 25) -> pd.DataFrame:
         pass
 
     return yahoo_lookup_html(q)
+def peer_similarity_score(target_sector: str, target_industry: str, peer_row: dict) -> int:
+    score = 0
+    ps = _clean_text(peer_row.get("Sector")).lower()
+    pi = _clean_text(peer_row.get("Industry")).lower()
+    ts = _clean_text(target_sector).lower()
+    ti = _clean_text(target_industry).lower()
 
+    if ts and ps and ts == ps:
+        score += 2
+    if ti and pi and ti == pi:
+        score += 3
+    if ts and ps and ts in ps:
+        score += 1
+    if ti and pi and ti in pi:
+        score += 2
+
+    return score
 def is_africa_quote_row(ticker: str, exchange: str, qtype: str) -> bool:
     tkr = (ticker or "").strip()
     exch = (exchange or "").strip().upper()
@@ -677,7 +691,7 @@ SECTOR_PROXY_MAP = {
     "food and consumer": ["NESTLE.NG", "ILH.JO", "BVT.JO", "ANH.JO", "FBR.JO"],
     "consumer services": ["WHL.JO", "MRP.JO", "TRU.JO"],
     "retail": ["WHL.JO", "MRP.JO", "TRU.JO", "TFG.JO", "SHP.JO"],
-    "quick service restaurants": ["FSTA.JO", "WHL.JO", "MRP.JO"],
+    "quick service restaurants": ["FBR.JO", "WHL.JO", "MRP.JO"],
     "gold mining": ["GFI.JO", "ANG.JO", "HAR.JO"],
     "mining": ["GFI.JO", "ANG.JO", "HAR.JO", "IMP.JO", "AMS.JO"],
     "mining exploration": ["GFI.JO", "ANG.JO", "HAR.JO"],
@@ -743,7 +757,76 @@ def get_local_counter_sector(target_symbol: str) -> str:
             return str(row.get("sector", "")).strip()
 
     return ""
+def yahoo_find_sector_peers(
+    target_symbol: str,
+    target_company: str = "",
+    max_peers: int = 8,
+    manual_sector: str = ""
+) -> list:
+    sym = normalize_peer_ticker(target_symbol)
+    candidates = []
 
+    # First get sector/industry from target itself
+    prof = yahoo_profile_and_metrics(sym)
+    sector = _clean_text(prof.get("Sector"))
+    industry = _clean_text(prof.get("Industry"))
+
+    # fallback from FMP if Yahoo sector empty
+    if not sector and not industry:
+        fp = fmp_profile(sym)
+        sector = _clean_text(fp.get("Sector"))
+        industry = _clean_text(fp.get("Industry"))
+
+    search_terms = []
+
+    if industry:
+        search_terms.extend([
+            f"{industry} Africa",
+            f"{industry} JSE",
+            f"{industry} NGX",
+            f"{industry} NSE Kenya",
+        ])
+
+    if sector:
+        search_terms.extend([
+            f"{sector} Africa",
+            f"{sector} JSE",
+            f"{sector} NGX",
+            f"{sector} NSE Kenya",
+        ])
+
+    if target_company:
+        search_terms.append(f"{target_company} competitors")
+
+    seen = set()
+    peers = []
+
+    for q in search_terms:
+        try:
+            df = yahoo_search(q, quotes_count=20)
+            if df is None or df.empty:
+                continue
+
+            df = filter_africa(df)
+            if df is None or df.empty:
+                continue
+
+            for _, r in df.iterrows():
+                tkr = normalize_peer_ticker(r.get("Ticker", ""))
+                if not tkr or tkr == sym:
+                    continue
+                if tkr in seen:
+                    continue
+
+                seen.add(tkr)
+                peers.append(tkr)
+
+                if len(peers) >= max_peers:
+                    return peers
+        except Exception:
+            continue
+
+    return peers[:max_peers]
 def get_company_specific_proxy_peers(target_symbol: str, target_company: str = "", max_peers: int = 8) -> list:
     sym = str(target_symbol or "").strip().upper()
     nm = str(target_company or "").strip().upper()
@@ -846,7 +929,7 @@ def build_known_peer_name_map() -> dict:
         "NPN.JO": {"company": "Naspers Limited", "country": "South Africa", "exchange": "JSE"},
         "JSE.JO": {"company": "JSE Limited", "country": "South Africa", "exchange": "JSE"},
         "BTI": {"company": "British American Tobacco p.l.c.", "country": "United Kingdom", "exchange": "NYSE"},
-        "FSTA.JO": {"company": "Famous Brands Limited", "country": "South Africa", "exchange": "JSE"},
+        "FBR.JO": {"company": "Famous Brands Limited", "country": "South Africa", "exchange": "JSE"},
         "RTG": {"company": "Rainbow Tourism Group", "country": "Zimbabwe", "exchange": "ZSE"},
         "NPK.JO": {"company": "Nampak Limited", "country": "South Africa", "exchange": "JSE"},
         "TBS.JO": {"company": "Tiger Brands Limited", "country": "South Africa", "exchange": "JSE"},
@@ -1922,6 +2005,131 @@ def resolve_symbol(query: str) -> dict:
         return hit
 
     return {}
+# =========================================================
+# Dynamic Yahoo sector / industry peer discovery
+# =========================================================
+def peer_similarity_score(target_sector: str, target_industry: str, peer_row: dict) -> int:
+    score = 0
+
+    ts = _clean_text(target_sector).lower()
+    ti = _clean_text(target_industry).lower()
+    ps = _clean_text(peer_row.get("Sector", "")).lower()
+    pi = _clean_text(peer_row.get("Industry", "")).lower()
+    exch = _clean_text(peer_row.get("Exchange", "")).upper()
+    ticker = _clean_text(peer_row.get("Ticker", "")).upper()
+    country = _clean_text(peer_row.get("Country", "")).lower()
+
+    if ts and ps:
+        if ts == ps:
+            score += 4
+        elif ts in ps or ps in ts:
+            score += 2
+
+    if ti and pi:
+        if ti == pi:
+            score += 5
+        elif ti in pi or pi in ti:
+            score += 3
+
+    # Africa / preferred market boost
+    if any(ticker.endswith(sfx) for sfx in AFRICA_SUFFIXES):
+        score += 2
+
+    if exch in {"JSE", "JOHANNESBURG", "NGX", "NSE", "JNB"}:
+        score += 1
+
+    if country in {"south africa", "nigeria", "kenya", "zimbabwe", "botswana", "uganda", "ghana", "mauritius"}:
+        score += 1
+
+    return score
+
+
+def yahoo_find_sector_peers(
+    target_symbol: str,
+    target_company: str = "",
+    max_peers: int = 8,
+    manual_sector: str = ""
+) -> list:
+    """
+    Dynamic peer discovery:
+    1) read target sector/industry
+    2) search Yahoo with sector/industry combinations
+    3) keep African listed equity-like candidates
+    """
+    sym = normalize_peer_ticker(target_symbol)
+    if not sym:
+        return []
+
+    prof = yahoo_profile_and_metrics(sym)
+
+    target_sector = _clean_text(prof.get("Sector"))
+    target_industry = _clean_text(prof.get("Industry"))
+
+    if manual_sector.strip():
+        target_sector = manual_sector.strip()
+
+    # fallback to FMP profile if Yahoo profile is sparse
+    if not target_sector and not target_industry:
+        fp = fmp_profile(sym)
+        target_sector = _clean_text(fp.get("Sector"))
+        target_industry = _clean_text(fp.get("Industry"))
+
+    # last fallback from local Zimbabwe mapping
+    if not target_sector:
+        target_sector = _clean_text(get_local_counter_sector(sym))
+
+    queries = []
+
+    if target_industry:
+        queries.extend([
+            f"{target_industry} Africa",
+            f"{target_industry} JSE",
+            f"{target_industry} NGX",
+            f"{target_industry} NSE Kenya",
+            f"{target_industry} listed companies Africa",
+        ])
+
+    if target_sector:
+        queries.extend([
+            f"{target_sector} Africa",
+            f"{target_sector} JSE",
+            f"{target_sector} NGX",
+            f"{target_sector} NSE Kenya",
+            f"{target_sector} listed companies Africa",
+        ])
+
+    if target_company:
+        queries.extend([
+            f"{target_company} competitors",
+            f"{target_company} peers Africa",
+        ])
+
+    seen = set()
+    peer_candidates = []
+
+    for q in queries:
+        try:
+            df = yahoo_search(q, quotes_count=25)
+            if df is None or df.empty:
+                continue
+
+            df = filter_africa(df)
+            if df is None or df.empty:
+                continue
+
+            for _, r in df.iterrows():
+                tkr = normalize_peer_ticker(r.get("Ticker", ""))
+                if not tkr or tkr == sym:
+                    continue
+                if tkr in seen:
+                    continue
+
+                seen.add(tkr)
+                peer_candidates.append(tkr)
+        except Exception:
+            continue
+
+    return peer_candidates[: max(max_peers * 2, 12)]
 def build_live_comps_from_target(target_query: str, max_peers: int = 8):
     target = resolve_symbol(target_query)
     if not target:
@@ -1936,29 +2144,54 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8):
     peers = []
     peer_source = ""
 
+    # -----------------------------------------------------
+    # 1) Known hardcoded peers first (best quality when available)
+    # -----------------------------------------------------
     peers = get_company_specific_proxy_peers(
         target_symbol=target_symbol,
         target_company=target_company_name,
-        max_peers=max_peers,
+        max_peers=max_peers
     )
     if peers:
         peer_source = "Company-specific peers"
 
+    # -----------------------------------------------------
+    # 2) Dynamic Yahoo sector / industry search
+    # -----------------------------------------------------
     if not peers:
-        local_sector = get_local_counter_sector(target_symbol)
-        peers = get_africa_sector_proxy_peers(local_sector, max_peers=max_peers)
+        peers = yahoo_find_sector_peers(
+            target_symbol=target_symbol,
+            target_company=target_company_name,
+            max_peers=max_peers,
+            manual_sector=S.get("manual_sector_override", "")
+        )
         if peers:
-            peer_source = f"Sector proxy peers ({local_sector})"
+            peer_source = "Yahoo sector/industry peer search"
 
+    # -----------------------------------------------------
+    # 3) FMP peers
+    # -----------------------------------------------------
     if not peers:
         peers = fmp_get_peers(target_symbol, limit=max_peers)
         if peers:
             peer_source = "FMP peers"
 
+    # -----------------------------------------------------
+    # 4) Finnhub peers
+    # -----------------------------------------------------
     if not peers:
         peers = finnhub_get_peers(target_symbol, limit=max_peers)
         if peers:
             peer_source = "Finnhub peers"
+
+    # -----------------------------------------------------
+    # 5) Static sector proxy fallback last
+    # -----------------------------------------------------
+    if not peers:
+        local_sector = get_local_counter_sector(target_symbol)
+        peers = get_africa_sector_proxy_peers(local_sector, max_peers=max_peers)
+        if peers:
+            peer_source = f"Sector proxy peers ({local_sector})"
 
     peers = [normalize_peer_ticker(x) for x in peers if str(x).strip()]
     peers = [x for x in peers if x != normalize_peer_ticker(target_symbol)]
@@ -1969,7 +2202,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8):
         if p not in seen:
             seen.add(p)
             deduped.append(p)
-    peers = deduped[:max_peers]
+    peers = deduped[:max(max_peers * 2, 12)]
 
     if not peers:
         return pd.DataFrame(), {
@@ -2000,10 +2233,45 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8):
 
     df = df.drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
 
+    # -----------------------------------------------------
+    # Rank peers by sector / industry closeness
+    # -----------------------------------------------------
+    target_prof = yahoo_profile_and_metrics(target_symbol)
+    target_sector = _clean_text(target_prof.get("Sector"))
+    target_industry = _clean_text(target_prof.get("Industry"))
+
+    if not target_sector and not target_industry:
+        fp = fmp_profile(target_symbol)
+        target_sector = _clean_text(fp.get("Sector"))
+        target_industry = _clean_text(fp.get("Industry"))
+
+    df["SimilarityScore"] = df.apply(
+        lambda r: peer_similarity_score(
+            target_sector=target_sector,
+            target_industry=target_industry,
+            peer_row=r.to_dict()
+        ),
+        axis=1
+    )
+
+    # prefer rows with actual ratios as well
+    df["RatioCount"] = (
+        df["EV/EBITDA"].notna().astype(int)
+        + df["P/B"].notna().astype(int)
+        + df["P/E"].notna().astype(int)
+    )
+
+    df = df.sort_values(
+        by=["SimilarityScore", "RatioCount"],
+        ascending=[False, False]
+    ).head(max_peers).reset_index(drop=True)
+
     meta = {
         "target": target,
         "peer_source": peer_source,
         "peer_count": len(df),
+        "target_sector": target_sector,
+        "target_industry": target_industry,
     }
 
     if not df.empty:
@@ -2083,7 +2351,15 @@ with cC:
 
 S["target_company"] = target_company
 S["auto_peer_count"] = int(peer_count)
+S.setdefault("manual_sector_override", "")
 
+manual_sector = st.text_input(
+    "Optional manual sector override",
+    value=S.get("manual_sector_override", ""),
+    key="manual_sector_override_input",
+    placeholder="e.g. Telecommunications, Banking, Beverages"
+)
+S["manual_sector_override"] = manual_sector
 
 # ================= LIVE PEER SEARCH HERE =================
 
@@ -2129,10 +2405,14 @@ live_meta = S.get("live_comps_meta", {})
 if live_meta:
     tgt = live_meta.get("target", {})
     if tgt:
+        extra_sector = S.get("manual_sector_override", "").strip()
+        extra_txt = f" | Manual sector override: {extra_sector}" if extra_sector else ""
+
         st.caption(
             f"Resolved target: {tgt.get('company', '')} "
             f"({tgt.get('symbol', '')}) via {tgt.get('source', '')} | "
             f"Peer source: {live_meta.get('peer_source', '')}"
+            f"{extra_txt}"
         )
 
 if live_df is not None and not live_df.empty:
@@ -2142,12 +2422,18 @@ if live_df is not None and not live_df.empty:
     for c in ratio_cols:
         df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
 
+    display_cols = ["Company", "Ticker", "Exchange", "Country", "Sector", "Industry",
+                    "EV/EBITDA", "P/B", "P/E", "Source"]
+
+    if "SimilarityScore" in df_show.columns:
+        display_cols.insert(6, "SimilarityScore")
+
     st.dataframe(
-        df_show[["Company", "Ticker", "Exchange", "Country", "Sector", "Industry",
-                 "EV/EBITDA", "P/B", "P/E", "Source"]].style.format({
+        df_show[display_cols].style.format({
             "EV/EBITDA": "{:,.2f}",
             "P/B": "{:,.2f}",
             "P/E": "{:,.2f}",
+            "SimilarityScore": "{:,.0f}",
         }),
         width="stretch"
     )
