@@ -150,6 +150,8 @@ S = st.session_state
 # =========================================================
 FMP_API_KEY = st.secrets.get("FMP_API_KEY", os.getenv("FMP_API_KEY", ""))
 FINNHUB_API_KEY = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", ""))
+st.write("FMP key loaded:", bool(FMP_API_KEY))
+st.write("Finnhub key loaded:", bool(FINNHUB_API_KEY))
 
 # api/v3 usually has better coverage for profile/statements endpoints
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
