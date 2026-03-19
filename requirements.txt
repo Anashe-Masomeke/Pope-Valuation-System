@@ -7,3 +7,5 @@ reportlab
 python-docx
 yfinance
 scikit-learn
+lxml
+html5lib
