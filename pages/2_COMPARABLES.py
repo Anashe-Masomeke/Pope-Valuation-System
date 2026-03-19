@@ -1,19 +1,22 @@
 import streamlit as st
-# =========================================================
-# Streamlit Page
-# =========================================================
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import StringIO
 st.set_page_config(page_title="Comparables Valuation (Excel Style)", layout="wide")
+import yfinance as yf
+import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from io import BytesIO
 import base64
 import re
+import time
+import random
 import requests
 from bs4 import BeautifulSoup
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+# =========================================================
+# Watermark
+# =========================================================
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -22,8 +25,6 @@ def add_watermark():
 
         watermark_css = f"""
         <style>
-
-        /* Make watermark very light */
         .stApp::before {{
             content: "";
             position: fixed;
@@ -35,11 +36,10 @@ def add_watermark():
             background-repeat: no-repeat;
             background-position: center;
             background-size: 1500px;
-            opacity: 0.07;   /* 🔥 control watermark visibility here */
+            opacity: 0.07;
             pointer-events: none;
             z-index: 0;
         }}
-
         .block-container {{
             position: relative;
             z-index: 1;
@@ -49,6 +49,7 @@ def add_watermark():
         st.markdown(watermark_css, unsafe_allow_html=True)
 
 add_watermark()
+
 # =========================================================
 # Styling helpers
 # =========================================================
@@ -59,19 +60,15 @@ def format_numeric_columns(df: pd.DataFrame):
             fmt[col] = "{:,.2f}"
     return df.style.format(fmt)
 
-
-
 # ---------------------------------------------------------
-# ✅ FIX SIDEBAR COLLAPSE ARROW (Material Icons)
+# Sidebar styling
 # ---------------------------------------------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
-
-/* ✅ Load Material Icons so Streamlit's sidebar collapse icon renders correctly */
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-/* ✅ Make sure ONLY icons use the Material Icons font (prevents 'keyboard_double_arrow_right' text) */
-.material-icons, 
+.material-icons,
 span.material-icons,
 i.material-icons,
 [data-testid="stSidebarCollapseButton"] span,
@@ -89,7 +86,6 @@ i.material-icons,
     -webkit-font-smoothing: antialiased !important;
 }
 
-/* ✅ Style the collapse/expand button nicely */
 [data-testid="stSidebarCollapseButton"] button {
     background: #003399 !important;
     border: 1px solid rgba(255,255,255,0.25) !important;
@@ -111,7 +107,7 @@ i.material-icons,
     height: 22px !important;
     fill: white !important;
 }
-/* ===== SIDEBAR GLASS STYLE ===== */
+
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #003399 0%, #001a4d 100%) !important;
     color: white !important;
@@ -119,27 +115,19 @@ section[data-testid="stSidebar"] {
     backdrop-filter: blur(8px);
 }
 
-/* Sidebar text */
-section[data-testid="stSidebar"] * {
-    color: white !important;
-}
+section[data-testid="stSidebar"] * { color: white !important; }
 
-/* Sidebar headings */
-section[data-testid="stSidebar"] h1,
-section[data-testid="stSidebar"] h2,
-section[data-testid="stSidebar"] h3 {
-    color: #ffffff !important;
-}
-
-/* Remove default sidebar padding spacing */
-section[data-testid="stSidebar"] .block-container {
-    padding-top: 1rem !important;
-}
-
+section[data-testid="stSidebar"] .block-container { padding-top: 1rem !important; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-st.markdown("""
+# ---------------------------------------------------------
+# Font
+# ---------------------------------------------------------
+st.markdown(
+    """
 <style>
 html, body, .stApp, .block-container,
 p, div, label,
@@ -147,420 +135,1925 @@ h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small {
   font-family: Georgia, "Times New Roman", serif !important;
 }
-
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 st.caption("All values & inputs are saved in session_state (won’t reset when switching tabs).")
-# =========================================================
-# WIKIDATA + JSE(WIKIPEDIA) CONFIG + HELPERS (PUT ABOVE STEP 1)
-# ✅ UPDATED: Global peers now use Yahoo Finance (NOT Wikidata)
-# =========================================================
+
 S = st.session_state
 
-# Use ONE headers dict (avoid overriding twice)
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+# =========================================================
+# API KEYS
+# =========================================================
+FMP_API_KEY = st.secrets.get("FMP_API_KEY", os.getenv("FMP_API_KEY", ""))
+FINNHUB_API_KEY = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", ""))
 
-def _safe_get(url, params=None, timeout=25):
-    r = requests.get(url, params=params, timeout=timeout, headers=HEADERS)
-    r.raise_for_status()
-    return r
+# api/v3 usually has better coverage for profile/statements endpoints
+FMP_BASE = "https://financialmodelingprep.com/api/v3"
+FINNHUB_BASE = "https://finnhub.io/api/v1"
 
 # =========================================================
-# JSE (Wikipedia) peers - stays the same
+# Robust HTTP session
 # =========================================================
-JSE_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_companies_traded_on_the_JSE"
+SESSION = requests.Session()
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
-def load_jse_wikipedia_catalog() -> pd.DataFrame:
-    """
-    Returns a single cleaned DataFrame with columns:
-      Symbol | Company | Notes | Link
-    (We IGNORE table headings like A/B/C/W because those are not sectors.)
-    """
-    try:
-        html = _safe_get(JSE_WIKI_URL, timeout=30).text
-    except Exception:
-        return pd.DataFrame(columns=["Symbol", "Company", "Notes", "Link"])
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://finance.yahoo.com/",
+    "Origin": "https://finance.yahoo.com",
+    "X-Requested-With": "XMLHttpRequest",
+    "Connection": "keep-alive",
+}
 
-    soup = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("table", class_="wikitable")
-    if not tables:
-        return pd.DataFrame(columns=["Symbol", "Company", "Notes", "Link"])
-
-    rows = []
-    for tbl in tables:
+def _safe_get(url, params=None, timeout=25, tries=3):
+    last_err = None
+    for i in range(int(tries)):
         try:
-            df_list = pd.read_html(str(tbl))
-        except Exception:
-            continue
-        if not df_list:
-            continue
-
-        t = df_list[0].copy()
-        t.columns = [str(c).strip() for c in t.columns]
-        lower_map = {str(c).strip().lower(): str(c).strip() for c in t.columns}
-
-        sym_col = lower_map.get("symbol") or lower_map.get("ticker") or lower_map.get("code")
-        comp_col = lower_map.get("company") or lower_map.get("name")
-        notes_col = lower_map.get("notes") or lower_map.get("sector") or lower_map.get("industry")
-
-        if not sym_col or not comp_col:
-            continue
-
-        # capture wikipedia company link per row where possible
-        link_map = {}
-        for tr in tbl.find_all("tr"):
-            tds = tr.find_all(["td", "th"])
-            if len(tds) < 2:
+            r = SESSION.get(url, params=params, timeout=timeout, headers=HEADERS)
+            if r.status_code == 429:
+                time.sleep(2 + i * 2 + random.random())
                 continue
-            sym_txt = tds[0].get_text(" ", strip=True)
-            comp_td = tds[1]
-            a = comp_td.find("a", href=True)
-            if sym_txt and a and a["href"].startswith("/wiki/"):
-                link_map[sym_txt.strip()] = "https://en.wikipedia.org" + a["href"]
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            last_err = e
+            time.sleep(0.6 + 0.6 * i + random.random())
+    raise last_err
 
-        for _, r in t.iterrows():
-            sym = str(r.get(sym_col, "")).strip()
-            comp = str(r.get(comp_col, "")).strip()
-            notes = str(r.get(notes_col, "")).strip() if notes_col else ""
-            link = link_map.get(sym, "")
+def _safe_get_json(url, params=None, timeout=25, tries=3):
+    r = _safe_get(url=url, params=params, timeout=timeout, tries=tries)
+    return r.json()
 
-            if not sym or not comp:
-                continue
-            if sym.lower() == "nan" or comp.lower() == "nan":
-                continue
+def yahoo_warmup():
+    try:
+        _safe_get("https://finance.yahoo.com/", timeout=15, tries=2)
+        _safe_get(
+            "https://query2.finance.yahoo.com/v1/finance/search",
+            params={"q": "test", "quotesCount": 1, "newsCount": 0},
+            timeout=15,
+            tries=2,
+        )
+    except Exception:
+        pass
 
-            rows.append({
-                "Symbol": sym,
-                "Company": comp,
-                "Notes": "" if str(notes).lower() == "nan" else notes,
-                "Link": link,
-            })
+yahoo_warmup()
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return pd.DataFrame(columns=["Symbol", "Company", "Notes", "Link"])
-
-    for c in ["Symbol", "Company", "Notes"]:
-        df[c] = df[c].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
-
-    df = df.drop_duplicates(subset=["Symbol", "Company"], keep="first").reset_index(drop=True)
-    return df
-
-def extract_note_tags(notes: str) -> list[str]:
-    """
-    Turn Notes into tags, e.g.
-    "breweries, beverages, soft drinks" -> ["breweries","beverages","soft drinks"]
-    """
-    n = (notes or "").strip().lower()
-    if not n or n == "nan":
-        return []
-
-    parts = re.split(r"[;,/|]| and |\(|\)|—|-", n)
-    tags = []
-    for p in parts:
-        p = p.strip()
-        if len(p) < 3:
-            continue
-        if p.isdigit():
-            continue
-        tags.append(p)
-
-    seen = set()
-    out = []
-    for t in tags:
-        if t in seen:
-            continue
-        seen.add(t)
-        out.append(t)
-    return out
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
-def build_notes_tag_index() -> dict:
-    """
-    Build tag -> count using ALL Notes on JSE list.
-    """
-    df = load_jse_wikipedia_catalog()
-    tag_counts = {}
-    for n in df["Notes"].fillna("").astype(str).tolist():
-        for tag in extract_note_tags(n):
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-    return tag_counts
-
-def suggest_matching_tags(keyword: str, top_n: int = 25) -> list[str]:
-    """
-    Show only tags that relate to what user typed.
-    """
-    kw = (keyword or "").strip().lower()
-    if not kw:
-        return []
-
-    tag_counts = build_notes_tag_index()
-    hits = []
-    for tag, cnt in tag_counts.items():
-        if kw in tag:
-            hits.append((tag, cnt))
-
-    hits.sort(key=lambda x: (-x[1], x[0]))
-    return [h[0] for h in hits[:top_n]]
-
-def peers_from_notes_tag(tag_or_keyword: str, k: int = 8) -> list[dict]:
-    """
-    Pull JSE peers where Notes contains tag/keyword OR tag appears in extracted tags.
-    """
-    df = load_jse_wikipedia_catalog()
-    if df.empty:
-        return []
-
-    q = (tag_or_keyword or "").strip().lower()
-    if not q:
-        return []
-
-    mask = df["Notes"].fillna("").astype(str).str.lower().str.contains(q, na=False)
-
-    if not mask.any():
-        tags_list = df["Notes"].fillna("").astype(str).apply(extract_note_tags)
-        mask = tags_list.apply(lambda tags: any(q == t for t in tags))
-
-    filt = df[mask].copy()
-    if filt.empty:
-        return []
-
-    filt = filt.sort_values(["Symbol", "Company"]).head(int(k))
-    return filt.to_dict("records")
-
-def format_peer_lines(peer_rows: list[dict]) -> str:
-    lines = []
-    for r in peer_rows:
-        sym = (r.get("Symbol", "") or "").strip()
-        nm = (r.get("Company", "") or "").strip()
-        notes = (r.get("Notes", "") or "").strip()
-        lines.append(f"- **{sym}** — {nm}" + (f" *(Notes: {notes})*" if notes else ""))
-    return "\n".join(lines)
 # =========================================================
-# Yahoo Finance Search (MUST be above yahoo_africa_peers)
+# Yahoo endpoints
 # =========================================================
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
-
-def yahoo_search(query: str, quotes_count: int = 50) -> pd.DataFrame:
-    params = {"q": query, "quotesCount": int(quotes_count), "newsCount": 0}
-    r = requests.get(YAHOO_SEARCH_URL, params=params, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-
-    rows = []
-    for q in data.get("quotes", []) or []:
-        rows.append({
-            "Company": q.get("shortname") or q.get("longname") or "",
-            "Ticker": q.get("symbol") or "",
-            "Exchange": q.get("exchange") or "",
-            "Type": q.get("quoteType") or "",
-        })
-
-    return pd.DataFrame(rows)
-# =========================
-# Yahoo Africa filter (STRICT)  ✅ UPDATED (Africa-only + bigger peer pool)
-# =========================
-
-# ✅ Africa exchanges (tight list; avoid India/US/etc)
-AFRICA_EXCHANGES = {
-    # South Africa
-    "JNB", "JSE", "JOH",
-
-    # Morocco (Casablanca)
-    "CAS",
-
-    # Egypt (Yahoo varies)
-    "EGX", "CAI",
-
-    # Kenya (Yahoo often uses NBO)
-    "NBO",
-
-    # Ghana
-    "GSE",
-
-    # Nigeria (Yahoo varies; keep if you see it working for you)
-    "NGM", "NSI",
-
-    # East/Southern Africa (Yahoo varies; keep if you see it working)
-    "USE", "DSE", "LUSE", "ZSE", "MSE",
-}
-
-# ✅ Africa ticker suffixes (most reliable on Yahoo)
-AFRICA_SUFFIXES = (
-    ".JO",  # South Africa
-    ".NG",  # Nigeria (some listings)
-    ".KE",  # Kenya (some listings)
-    ".GH",  # Ghana (rare)
-    ".MU",  # Mauritius
-    ".ZM",  # Zambia (rare)
-    ".ZW",  # Zimbabwe (rare)
-    ".TZ",  # Tanzania (rare)
-    ".UG",  # Uganda (rare)
-    ".BW",  # Botswana (rare)
-)
-
-# 🚫 Block NON-Africa exchanges that were leaking in (India/US/UK etc)
-BLOCK_EXCHANGES = {
-    "NSE", "BSE",        # India
-    "NYQ", "NMS", "NAS", # USA
-    "LSE",               # UK
-    "HKG",               # Hong Kong
-    "JPX",               # Japan
-    "TSX", "TOR",        # Canada
-}
-
-# 🚫 Block NON-Africa ticker suffixes that were leaking in (India/UK/US etc)
-BLOCK_SUFFIXES = (
-    ".NS", ".BO",  # India (BIG problem)
-    ".L",          # UK
-    ".TO", ".V",   # Canada
-    ".HK",         # Hong Kong
-    ".T",          # Japan
-)
+YAHOO_QUOTESUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote"
 
 BAD_QUOTETYPES = {"FUTURE", "INDEX", "CURRENCY", "CRYPTOCURRENCY", "ETF", "MUTUALFUND", "OPTION"}
 
-def is_africa_quote(row: dict) -> bool:
-    # row may be either raw yahoo json-like or our normalized DF row
-    tkr = (row.get("symbol") or row.get("Ticker") or "").strip()
-    exch = (row.get("exchange") or row.get("Exchange") or "").strip().upper()
-    qtype = (row.get("quoteType") or row.get("Type") or "").strip().upper()
+AFRICA_SUFFIXES = (".JO", ".NG", ".KE", ".GH", ".MU", ".TZ", ".UG", ".BW", ".ZM", ".ZW")
+AFRICA_EXCHANGES = {
+    "JNB", "JSE", "JOH", "ZA",
+    "EGX", "CAI",
+    "NBO",
+    "NGM", "NSI", "NGX",
+    "MUN", "SEM",
+}
+
+BLOCK_SUFFIXES = (".NS", ".BO", ".L", ".TO", ".V", ".HK", ".T", ".AX", ".SA")
+BLOCK_EXCHANGES = {"NSE", "BSE", "NYQ", "NMS", "NAS", "LSE", "HKG", "JPX", "TSX", "ASX", "SAO"}
+
+# =========================================================
+# Generic helpers
+# =========================================================
+def _clean_num(x):
+    try:
+        if x is None or x == "":
+            return np.nan
+        return float(x)
+    except Exception:
+        return np.nan
+
+def _first_non_null(d: dict, keys):
+    for k in keys:
+        v = d.get(k)
+        if v is not None and v != "":
+            return v
+    return None
+
+def _clean_text(x) -> str:
+    if x is None:
+        return ""
+    try:
+        if pd.isna(x):
+            return ""
+    except Exception:
+        pass
+    return str(x).strip()
+
+def _norm_text(x: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(x or "").lower().strip())
+
+def _looks_like_symbol(x: str) -> bool:
+    x = str(x or "").strip()
+    if not x:
+        return False
+    if " " in x:
+        return False
+    if len(x) > 20:
+        return False
+    return bool(re.fullmatch(r"[A-Z0-9.\-]+", x.upper()))
+
+def normalize_peer_ticker(symbol: str) -> str:
+    sym = str(symbol or "").strip().upper()
+    fixes = {
+        "MTNN": "MTNN.NG",
+        "MTNN.NGSE": "MTNN.NG",
+        "SCOM": "SCOM.KE",
+        "SAFARICOM": "SCOM.KE",
+        "EQTY": "EQTY.KE",
+        "KCB": "KCB.KE",
+    }
+    return fixes.get(sym, sym)
+
+def _num_input_default(x, fallback=0.0):
+    try:
+        if x is None or pd.isna(x):
+            return float(fallback)
+        return float(x)
+    except Exception:
+        return float(fallback)
+
+# =========================================================
+# Yahoo search helpers
+# =========================================================
+def yahoo_lookup_html(query: str) -> pd.DataFrame:
+    q = (query or "").strip()
+    if not q:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    try:
+        r = _safe_get(
+            "https://finance.yahoo.com/lookup",
+            params={"s": q},
+            timeout=25,
+            tries=2,
+        )
+        tables = pd.read_html(StringIO(r.text))
+    except Exception:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    if not tables:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    t = tables[0].copy()
+    t.columns = [str(c).strip() for c in t.columns]
+
+    sym_col = next((c for c in t.columns if c.lower() == "symbol"), None)
+    name_col = next((c for c in t.columns if c.lower() == "name"), None)
+
+    if not sym_col:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    out = pd.DataFrame({
+        "Company": t[name_col] if name_col else "",
+        "Ticker": t[sym_col],
+        "Exchange": "",
+        "Type": "",
+    })
+    out["Ticker"] = out["Ticker"].astype(str).str.strip()
+    out["Company"] = out["Company"].astype(str).str.strip()
+
+    out = out.dropna(subset=["Ticker"]).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+    return out
+
+def yahoo_search(query: str, quotes_count: int = 25) -> pd.DataFrame:
+    q = (query or "").strip()
+    if not q:
+        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+
+    quotes_count = int(max(5, min(int(quotes_count), 50)))
+    params = {"q": q, "quotesCount": quotes_count, "newsCount": 0}
+
+    try:
+        r = _safe_get(YAHOO_SEARCH_URL, params=params, timeout=20, tries=2)
+        data = r.json()
+
+        rows = []
+        for item in (data.get("quotes", []) or []):
+            rows.append({
+                "Company": item.get("shortname") or item.get("longname") or "",
+                "Ticker": item.get("symbol") or "",
+                "Exchange": item.get("exchange") or "",
+                "Type": item.get("quoteType") or "",
+            })
+
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+
+    return yahoo_lookup_html(q)
+
+def is_africa_quote_row(ticker: str, exchange: str, qtype: str) -> bool:
+    tkr = (ticker or "").strip()
+    exch = (exchange or "").strip().upper()
+    qt = (qtype or "").strip().upper()
 
     if not tkr:
         return False
-
-    # remove futures/indices etc
-    if qtype in BAD_QUOTETYPES:
+    if qt in BAD_QUOTETYPES:
         return False
-
-    # 🚫 hard block known non-africa tickers
     if tkr.endswith(BLOCK_SUFFIXES):
         return False
-
-    # 🚫 hard block known non-africa exchanges
     if exch in BLOCK_EXCHANGES:
         return False
-
-    # ✅ accept Africa by exchange OR by suffix
-    if exch in AFRICA_EXCHANGES:
-        return True
-
     if tkr.endswith(AFRICA_SUFFIXES):
         return True
-
+    if exch in AFRICA_EXCHANGES:
+        return True
     return False
-
 
 def filter_africa(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
 
-    # normalize expected column names from yahoo_search()
-    if "symbol" in df.columns and "Ticker" not in df.columns:
-        df = df.rename(columns={"symbol": "Ticker"})
-    if "shortname" in df.columns and "Company" not in df.columns:
-        df = df.rename(columns={"shortname": "Company"})
-    if "exchange" in df.columns and "Exchange" not in df.columns:
-        df = df.rename(columns={"exchange": "Exchange"})
-    if "quoteType" in df.columns and "Type" not in df.columns:
-        df = df.rename(columns={"quoteType": "Type"})
-
-    rows = []
+    keep = []
     for _, r in df.iterrows():
-        d = {
-            "Company": str(r.get("Company", "") or "").strip(),
-            "Ticker": str(r.get("Ticker", "") or "").strip(),
-            "Exchange": str(r.get("Exchange", "") or "").strip(),
-            "Type": str(r.get("Type", "") or "").strip(),
+        comp = str(r.get("Company", "") or "").strip()
+        tkr = str(r.get("Ticker", "") or "").strip()
+        ex = str(r.get("Exchange", "") or "").strip()
+        tp = str(r.get("Type", "") or "").strip()
+        if is_africa_quote_row(tkr, ex, tp):
+            keep.append({
+                "Company": comp,
+                "Ticker": tkr,
+                "Exchange": ex,
+                "Type": tp,
+            })
+
+    out = pd.DataFrame(keep)
+    return out.drop_duplicates(subset=["Ticker"]).reset_index(drop=True) if not out.empty else out
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def yahoo_quote_exists(symbol: str) -> bool:
+    sym = normalize_peer_ticker(symbol)
+    if not sym:
+        return False
+    try:
+        r = _safe_get(YAHOO_QUOTE_URL, params={"symbols": sym}, timeout=15, tries=2)
+        res = (r.json().get("quoteResponse") or {}).get("result") or []
+        return bool(res) and str(res[0].get("symbol", "")).strip().upper() == sym.upper()
+    except Exception:
+        return False
+
+# =========================================================
+# ZIM COUNTERS
+# =========================================================
+def get_sector_file_path() -> str:
+    candidates = [
+        "SECTORS.xlsx",
+        "assets/SECTORS.xlsx",
+        "data/SECTORS.xlsx",
+        "/mnt/data/SECTORS.xlsx",
+    ]
+    for p in candidates:
+        if Path(p).exists():
+            return p
+    return ""
+
+FALLBACK_ZIM_COUNTERS = [
+    {"symbol": "AFDIS", "company": "Afdis", "exchange": "ZSE", "sector": "Beverages"},
+    {"symbol": "ARISTON", "company": "Ariston", "exchange": "ZSE", "sector": "Agriculture"},
+    {"symbol": "ART", "company": "ART", "exchange": "ZSE", "sector": "Packaging And Paper"},
+    {"symbol": "BAT", "company": "BAT", "exchange": "ZSE", "sector": "Tobacco"},
+    {"symbol": "CAFCA", "company": "Cafca Limited", "exchange": "ZSE", "sector": "Electricals And Cables"},
+    {"symbol": "CBZ", "company": "CBZ", "exchange": "ZSE", "sector": "Banking"},
+    {"symbol": "CFI", "company": "CFI", "exchange": "ZSE", "sector": "Agriculture"},
+    {"symbol": "DAIRIBORD", "company": "Dairibord", "exchange": "ZSE", "sector": "Food And Dairy"},
+    {"symbol": "DELTA", "company": "Delta", "exchange": "ZSE", "sector": "Beverages"},
+    {"symbol": "ECOZIM", "company": "Econet Wireless Zimbabwe", "exchange": "ZSE", "sector": "Telecommunications"},
+    {"symbol": "FBC", "company": "FBC", "exchange": "ZSE", "sector": "Banking"},
+    {"symbol": "FIDELITY", "company": "Fidelity", "exchange": "ZSE", "sector": "Financial Services"},
+    {"symbol": "FML", "company": "FML", "exchange": "ZSE", "sector": "Insurance"},
+    {"symbol": "FMP", "company": "FMP", "exchange": "ZSE", "sector": "Real Estate"},
+    {"symbol": "GB", "company": "General Beltings", "exchange": "ZSE", "sector": "Industrial Products"},
+    {"symbol": "HIPPO", "company": "Hippo", "exchange": "ZSE", "sector": "Agriculture"},
+    {"symbol": "MASH", "company": "Mash Holdings", "exchange": "ZSE", "sector": "Real Estate"},
+    {"symbol": "MASIMBA", "company": "Masimba", "exchange": "ZSE", "sector": "Construction"},
+    {"symbol": "MEIKLES", "company": "Meikles", "exchange": "ZSE", "sector": "Consumer Services"},
+    {"symbol": "NAMPAK", "company": "Nampak", "exchange": "ZSE", "sector": "Packaging And Paper"},
+    {"symbol": "NMBZ", "company": "NMBZ", "exchange": "ZSE", "sector": "Banking"},
+    {"symbol": "OKZIM", "company": "OK Zimbabwe", "exchange": "ZSE", "sector": "Retail"},
+    {"symbol": "PROPLASTICS", "company": "Proplastics", "exchange": "ZSE", "sector": "Plastics"},
+    {"symbol": "RIOZIM", "company": "RioZim", "exchange": "ZSE", "sector": "Mining"},
+    {"symbol": "RTG", "company": "RTG", "exchange": "ZSE", "sector": "Hotels And Leisure"},
+    {"symbol": "SEEDCO", "company": "Seed Co Limited", "exchange": "ZSE", "sector": "Agriculture"},
+    {"symbol": "STARAFRICA", "company": "Starafrica", "exchange": "ZSE", "sector": "Food Processing"},
+    {"symbol": "TANGANDA", "company": "Tanganda", "exchange": "ZSE", "sector": "Agriculture"},
+    {"symbol": "TN", "company": "TN Cybertech Investments Holdings Limited", "exchange": "ZSE", "sector": "Technology"},
+    {"symbol": "TSL", "company": "TSL", "exchange": "ZSE", "sector": "Logistics And Agriculture"},
+    {"symbol": "TURNALL", "company": "Turnall", "exchange": "ZSE", "sector": "Building Materials"},
+    {"symbol": "UNIFREIGHT", "company": "Unifreight", "exchange": "ZSE", "sector": "Logistics"},
+    {"symbol": "WILLDALE", "company": "Willdale", "exchange": "ZSE", "sector": "Building Materials"},
+    {"symbol": "ZB", "company": "ZB", "exchange": "ZSE", "sector": "Banking"},
+    {"symbol": "ZECO", "company": "ZECO", "exchange": "ZSE", "sector": "Engineering"},
+    {"symbol": "ZIMPAPERS", "company": "Zimpapers", "exchange": "ZSE", "sector": "Media"},
+    {"symbol": "ZIMRE", "company": "Zimre", "exchange": "ZSE", "sector": "Insurance"},
+    {"symbol": "ZSEH", "company": "ZSE Holdings", "exchange": "ZSE", "sector": "Exchange Services"},
+    {"symbol": "ASUN", "company": "African Sun", "exchange": "VFEX", "sector": "Hotels And Leisure"},
+    {"symbol": "AXIA", "company": "Axia", "exchange": "VFEX", "sector": "Retail"},
+    {"symbol": "CMCL", "company": "Caledonia", "exchange": "VFEX", "sector": "Gold Mining"},
+    {"symbol": "EDGARS", "company": "Edgars", "exchange": "VFEX", "sector": "Retail"},
+    {"symbol": "FCB", "company": "First Capital Bank Limited", "exchange": "VFEX", "sector": "Banking"},
+    {"symbol": "INNSCOR", "company": "Innscor Africa Limited", "exchange": "VFEX", "sector": "Food And Consumer"},
+    {"symbol": "INVICTUS", "company": "Invictus Energy ZDR", "exchange": "VFEX", "sector": "Energy"},
+    {"symbol": "KAVANGO", "company": "Kavango Resources Plc", "exchange": "VFEX", "sector": "Mining Exploration"},
+    {"symbol": "NEDBANKZDR", "company": "Nedbank ZDR", "exchange": "VFEX", "sector": "Banking"},
+    {"symbol": "PADENGA", "company": "Padenga", "exchange": "VFEX", "sector": "Gold Mining"},
+    {"symbol": "SEEDINT", "company": "Seed Co International", "exchange": "VFEX", "sector": "Agriculture"},
+    {"symbol": "SIMBISA", "company": "Simbisa", "exchange": "VFEX", "sector": "Quick Service Restaurants"},
+    {"symbol": "WESTPROP", "company": "WestProp Holdings Limited", "exchange": "VFEX", "sector": "Real Estate"},
+    {"symbol": "ZIMPLOW", "company": "Zimplow Holdings Limited", "exchange": "VFEX", "sector": "Industrial Equipment"},
+    {"symbol": "TIGERE", "company": "TIGERE REIT", "exchange": "VFEX", "sector": "Real Estate"},
+]
+
+@st.cache_data(show_spinner=False)
+def load_zim_counters_from_excel(path: str) -> list:
+    if not path or not Path(path).exists():
+        return []
+
+    try:
+        raw = pd.read_excel(path, header=None)
+    except Exception:
+        return []
+
+    header_row = None
+    for i in range(len(raw)):
+        row_vals = [str(x).strip().lower() for x in raw.iloc[i].tolist()]
+        if "counter" in row_vals and "sector" in row_vals:
+            header_row = i
+            break
+
+    if header_row is None:
+        return []
+
+    try:
+        df = pd.read_excel(path, header=header_row)
+    except Exception:
+        return []
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    counter_col = next((c for c in df.columns if str(c).strip().lower() == "counter"), None)
+    sector_col = next((c for c in df.columns if str(c).strip().lower() == "sector"), None)
+
+    if counter_col is None or sector_col is None:
+        return []
+
+    df = df[[counter_col, sector_col]].copy()
+    df.columns = ["COUNTER", "SECTOR"]
+
+    df["COUNTER"] = df["COUNTER"].fillna("").astype(str).str.strip()
+    df["SECTOR"] = df["SECTOR"].fillna("").astype(str).str.strip()
+
+    out = []
+    seen = set()
+    for _, r in df.iterrows():
+        company = str(r["COUNTER"]).strip()
+        sector = str(r["SECTOR"]).strip()
+
+        if not company or company.upper() == "COUNTER":
+            continue
+
+        key = _norm_text(company)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        fallback_match = next(
+            (x for x in FALLBACK_ZIM_COUNTERS if _norm_text(x["company"]) == key or _norm_text(x["symbol"]) == key),
+            None
+        )
+
+        if fallback_match:
+            out.append({
+                "symbol": fallback_match["symbol"],
+                "company": fallback_match["company"],
+                "exchange": fallback_match["exchange"],
+                "sector": sector if sector else fallback_match["sector"],
+            })
+        else:
+            out.append({
+                "symbol": company.upper().replace(" ", ""),
+                "company": company,
+                "exchange": "ZSE",
+                "sector": sector,
+            })
+
+    return out
+
+SECTOR_FILE = get_sector_file_path()
+ZIM_COUNTERS = load_zim_counters_from_excel(SECTOR_FILE)
+if not ZIM_COUNTERS:
+    ZIM_COUNTERS = FALLBACK_ZIM_COUNTERS
+
+# =========================================================
+# Local company map
+# =========================================================
+LOCAL_COMPANY_MAP = {
+    "mtn": {"symbol": "MTN.JO", "company": "MTN Group Limited", "exchange": "JSE", "source": "local_map"},
+    "vodacom": {"symbol": "VOD.JO", "company": "Vodacom Group Limited", "exchange": "JSE", "source": "local_map"},
+    "econet": {"symbol": "ECOZIM", "company": "Econet Wireless Zimbabwe", "exchange": "ZSE", "source": "local_map"},
+}
+
+# =========================================================
+# Company-specific peer map
+# =========================================================
+COMPANY_SPECIFIC_PEERS = {
+    "PADENGA": [
+        {"ticker": "GFI.JO", "company": "Gold Fields", "country": "South Africa"},
+        {"ticker": "ANG.JO", "company": "AngloGold Ashanti", "country": "South Africa"},
+        {"ticker": "HAR.JO", "company": "Harmony Gold Mining Company Limited", "country": "South Africa"},
+    ],
+    "CMCL": [
+        {"ticker": "GFI.JO", "company": "Gold Fields", "country": "South Africa"},
+        {"ticker": "ANG.JO", "company": "AngloGold Ashanti", "country": "South Africa"},
+        {"ticker": "HAR.JO", "company": "Harmony Gold Mining Company Limited", "country": "South Africa"},
+    ],
+    "DELTA": [
+        {"ticker": "ANH.JO", "company": "Anheuser-Busch InBev", "country": "South Africa"},
+        {"ticker": "HEIA.AS", "company": "Heineken N.V.", "country": "Netherlands"},
+        {"ticker": "HEIO.AS", "company": "Heineken Holding", "country": "Netherlands"},
+        {"ticker": "ABEV", "company": "Ambev S.A.", "country": "Brazil"},
+        {"ticker": "AFDIS", "company": "African Distillers", "country": "Zimbabwe"},
+    ],
+    "AFDIS": [
+        {"ticker": "ANH.JO", "company": "Anheuser-Busch InBev", "country": "South Africa"},
+        {"ticker": "HEIA.AS", "company": "Heineken N.V.", "country": "Netherlands"},
+        {"ticker": "HEIO.AS", "company": "Heineken Holding", "country": "Netherlands"},
+        {"ticker": "ABEV", "company": "Ambev S.A.", "country": "Brazil"},
+        {"ticker": "DELTA", "company": "Delta", "country": "Zimbabwe"},
+    ],
+    "ECOZIM": [
+        {"ticker": "MTN.JO", "company": "MTN Group Limited", "country": "South Africa"},
+        {"ticker": "VOD.JO", "company": "Vodacom Group Limited", "country": "South Africa"},
+        {"ticker": "MTNN.NG", "company": "MTN Nigeria Communications Plc", "country": "Nigeria"},
+        {"ticker": "SCOM.KE", "company": "Safaricom Plc", "country": "Kenya"},
+    ],
+    "CBZ": [
+        {"ticker": "FSR.JO", "company": "FirstRand", "country": "South Africa"},
+        {"ticker": "SBK.JO", "company": "Standard Bank Group", "country": "South Africa"},
+        {"ticker": "NED.JO", "company": "Nedbank Group", "country": "South Africa"},
+        {"ticker": "ABG.JO", "company": "Absa Group", "country": "South Africa"},
+        {"ticker": "KCB.KE", "company": "KCB Group", "country": "Kenya"},
+        {"ticker": "EQTY.KE", "company": "Equity Group", "country": "Kenya"},
+    ],
+    "FBC": [
+        {"ticker": "FSR.JO", "company": "FirstRand", "country": "South Africa"},
+        {"ticker": "SBK.JO", "company": "Standard Bank Group", "country": "South Africa"},
+        {"ticker": "NED.JO", "company": "Nedbank Group", "country": "South Africa"},
+        {"ticker": "ABG.JO", "company": "Absa Group", "country": "South Africa"},
+    ],
+    "NMBZ": [
+        {"ticker": "FSR.JO", "company": "FirstRand", "country": "South Africa"},
+        {"ticker": "SBK.JO", "company": "Standard Bank Group", "country": "South Africa"},
+        {"ticker": "NED.JO", "company": "Nedbank Group", "country": "South Africa"},
+        {"ticker": "ABG.JO", "company": "Absa Group", "country": "South Africa"},
+    ],
+    "ZB": [
+        {"ticker": "FSR.JO", "company": "FirstRand", "country": "South Africa"},
+        {"ticker": "SBK.JO", "company": "Standard Bank Group", "country": "South Africa"},
+        {"ticker": "NED.JO", "company": "Nedbank Group", "country": "South Africa"},
+        {"ticker": "ABG.JO", "company": "Absa Group", "country": "South Africa"},
+    ],
+    "ZIMRE": [
+        {"ticker": "SLM.JO", "company": "Sanlam", "country": "South Africa"},
+        {"ticker": "DSY.JO", "company": "Discovery", "country": "South Africa"},
+        {"ticker": "OMU.JO", "company": "Old Mutual", "country": "South Africa"},
+    ],
+    "FML": [
+        {"ticker": "SLM.JO", "company": "Sanlam", "country": "South Africa"},
+        {"ticker": "DSY.JO", "company": "Discovery", "country": "South Africa"},
+        {"ticker": "OMU.JO", "company": "Old Mutual", "country": "South Africa"},
+    ],
+    "INNSCOR": [
+        {"ticker": "TBS.JO", "company": "Tiger Brands", "country": "South Africa"},
+        {"ticker": "RCL.JO", "company": "RCL Foods", "country": "South Africa"},
+        {"ticker": "FBR.JO", "company": "Famous Brands", "country": "South Africa"},
+        {"ticker": "OCE.JO", "company": "Oceana Group", "country": "South Africa"},
+    ],
+    "WESTPROP": [
+        {"ticker": "GRT.JO", "company": "Growthpoint Properties", "country": "South Africa"},
+        {"ticker": "RES.JO", "company": "Resilient REIT", "country": "South Africa"},
+        {"ticker": "HYP.JO", "company": "Hyprop", "country": "South Africa"},
+        {"ticker": "FFB.JO", "company": "Fortress", "country": "South Africa"},
+    ],
+    "RTG": [
+        {"ticker": "SSU.JO", "company": "Southern Sun", "country": "South Africa"},
+        {"ticker": "ASUN", "company": "African Sun", "country": "Zimbabwe"},
+    ],
+    "ASUN": [
+        {"ticker": "SSU.JO", "company": "Southern Sun", "country": "South Africa"},
+        {"ticker": "RTG", "company": "Rainbow Tourism Group", "country": "Zimbabwe"},
+    ],
+}
+
+SECTOR_PROXY_MAP = {
+    "telecommunications": ["MTN.JO", "VOD.JO", "MTNN.NG", "SCOM.KE"],
+    "banking": ["FSR.JO", "SBK.JO", "NED.JO", "ABG.JO", "KCB.KE", "EQTY.KE"],
+    "financial services": ["FSR.JO", "SBK.JO", "NED.JO", "ABG.JO", "SLM.JO", "DSY.JO"],
+    "insurance": ["SLM.JO", "DSY.JO", "OMU.JO"],
+    "beverages": ["ANH.JO", "HEIA.AS", "HEIO.AS", "ABEV", "AFDIS"],
+    "food and dairy": ["NESTLE.NG", "ILH.JO", "BVT.JO", "FBR.JO"],
+    "food and consumer": ["NESTLE.NG", "ILH.JO", "BVT.JO", "ANH.JO", "FBR.JO"],
+    "consumer services": ["WHL.JO", "MRP.JO", "TRU.JO"],
+    "retail": ["WHL.JO", "MRP.JO", "TRU.JO", "TFG.JO", "SHP.JO"],
+    "quick service restaurants": ["FSTA.JO", "WHL.JO", "MRP.JO"],
+    "gold mining": ["GFI.JO", "ANG.JO", "HAR.JO"],
+    "mining": ["GFI.JO", "ANG.JO", "HAR.JO", "IMP.JO", "AMS.JO"],
+    "mining exploration": ["GFI.JO", "ANG.JO", "HAR.JO"],
+    "real estate": ["GRT.JO", "RES.JO", "HYP.JO", "FFB.JO"],
+    "construction": ["MNP.JO", "AIP.JO", "BAW.JO"],
+    "industrial products": ["KAP.JO", "BAW.JO", "MNP.JO"],
+    "industrial equipment": ["KAP.JO", "BAW.JO", "MNP.JO"],
+    "engineering": ["BAW.JO", "MNP.JO", "AIP.JO"],
+    "electricals and cables": ["ARI.JO", "KAP.JO"],
+    "building materials": ["PPC.JO", "MNP.JO"],
+    "packaging and paper": ["NPK.JO", "KAP.JO"],
+    "plastics": ["KAP.JO", "NPK.JO"],
+    "agriculture": ["SEEDINT", "NESTLE.NG"],
+    "food processing": ["NESTLE.NG", "BVT.JO", "FBR.JO"],
+    "logistics": ["IMP.JO", "BAW.JO"],
+    "logistics and agriculture": ["IMP.JO", "BAW.JO", "SEEDINT"],
+    "tobacco": ["BTI", "OMN.JO"],
+    "technology": ["MTN.JO", "VOD.JO"],
+    "media": ["NPN.JO"],
+    "exchange services": ["JSE.JO"],
+    "energy": ["SOL.JO"],
+}
+
+# =========================================================
+# Local matching helpers
+# =========================================================
+def find_local_counter(query: str) -> dict:
+    q = _norm_text(query)
+    if not q:
+        return {}
+
+    mapped = LOCAL_COMPANY_MAP.get(str(query).strip().lower())
+    if mapped:
+        return mapped
+
+    for row in ZIM_COUNTERS:
+        if _norm_text(row["symbol"]) == q or _norm_text(row["company"]) == q:
+            return {
+                "symbol": row["symbol"],
+                "company": row["company"],
+                "exchange": row["exchange"],
+                "source": "zim_local_universe",
+            }
+
+    for row in ZIM_COUNTERS:
+        if q in _norm_text(row["company"]):
+            return {
+                "symbol": row["symbol"],
+                "company": row["company"],
+                "exchange": row["exchange"],
+                "source": "zim_local_universe",
+            }
+
+    return {}
+
+def get_local_counter_sector(target_symbol: str) -> str:
+    sym = str(target_symbol or "").strip().upper()
+    if not sym:
+        return ""
+
+    for row in ZIM_COUNTERS:
+        if str(row.get("symbol", "")).strip().upper() == sym:
+            return str(row.get("sector", "")).strip()
+
+    return ""
+
+def get_company_specific_proxy_peers(target_symbol: str, target_company: str = "", max_peers: int = 8) -> list:
+    sym = str(target_symbol or "").strip().upper()
+    nm = str(target_company or "").strip().upper()
+
+    candidates = []
+
+    if sym in COMPANY_SPECIFIC_PEERS:
+        candidates = COMPANY_SPECIFIC_PEERS[sym]
+    else:
+        for key, vals in COMPANY_SPECIFIC_PEERS.items():
+            if nm and key in nm:
+                candidates = vals
+                break
+
+    out = []
+    seen = set()
+    for row in candidates:
+        tkr = normalize_peer_ticker(row.get("ticker", ""))
+        if tkr and tkr not in seen:
+            seen.add(tkr)
+            out.append(tkr)
+
+    return out[:max_peers]
+
+def get_africa_sector_proxy_peers(sector_keyword: str, max_peers: int = 8) -> list:
+    s = str(sector_keyword or "").strip().lower()
+    return [normalize_peer_ticker(x) for x in SECTOR_PROXY_MAP.get(s, [])[:max_peers]]
+
+# =========================================================
+# Peer name lookup
+# =========================================================
+def build_known_peer_name_map() -> dict:
+    peer_name_map = {}
+
+    for _, peer_list in COMPANY_SPECIFIC_PEERS.items():
+        for row in peer_list:
+            tkr = normalize_peer_ticker(row.get("ticker", ""))
+            nm = str(row.get("company", "")).strip()
+            ctry = str(row.get("country", "")).strip()
+            if tkr and nm:
+                peer_name_map[tkr] = {
+                    "company": nm,
+                    "country": ctry,
+                    "exchange": "",
+                }
+
+    for row in ZIM_COUNTERS:
+        tkr = str(row.get("symbol", "")).strip().upper()
+        nm = str(row.get("company", "")).strip()
+        ex = str(row.get("exchange", "")).strip()
+        if tkr and nm:
+            peer_name_map[tkr] = {
+                "company": nm,
+                "country": "Zimbabwe" if ex in ["ZSE", "VFEX"] else "",
+                "exchange": ex,
+            }
+
+    manual_names = {
+        "FSR.JO": {"company": "FirstRand Limited", "country": "South Africa", "exchange": "JSE"},
+        "SBK.JO": {"company": "Standard Bank Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "NED.JO": {"company": "Nedbank Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "ABG.JO": {"company": "Absa Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "KCB.KE": {"company": "KCB Group Plc", "country": "Kenya", "exchange": "NSE"},
+        "EQTY.KE": {"company": "Equity Group Holdings Plc", "country": "Kenya", "exchange": "NSE"},
+        "SLM.JO": {"company": "Sanlam Limited", "country": "South Africa", "exchange": "JSE"},
+        "DSY.JO": {"company": "Discovery Limited", "country": "South Africa", "exchange": "JSE"},
+        "OMU.JO": {"company": "Old Mutual Limited", "country": "South Africa", "exchange": "JSE"},
+        "MTN.JO": {"company": "MTN Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "VOD.JO": {"company": "Vodacom Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "MTNN.NG": {"company": "MTN Nigeria Communications Plc", "country": "Nigeria", "exchange": "NGX"},
+        "SCOM.KE": {"company": "Safaricom Plc", "country": "Kenya", "exchange": "NSE"},
+        "GFI.JO": {"company": "Gold Fields Limited", "country": "South Africa", "exchange": "JSE"},
+        "ANG.JO": {"company": "AngloGold Ashanti Plc", "country": "South Africa", "exchange": "JSE"},
+        "HAR.JO": {"company": "Harmony Gold Mining Company Limited", "country": "South Africa", "exchange": "JSE"},
+        "GRT.JO": {"company": "Growthpoint Properties Limited", "country": "South Africa", "exchange": "JSE"},
+        "RES.JO": {"company": "Resilient REIT Limited", "country": "South Africa", "exchange": "JSE"},
+        "HYP.JO": {"company": "Hyprop Investments Limited", "country": "South Africa", "exchange": "JSE"},
+        "FFB.JO": {"company": "Fortress Real Estate Investments Limited", "country": "South Africa", "exchange": "JSE"},
+        "HEIA.AS": {"company": "Heineken N.V.", "country": "Netherlands", "exchange": "Euronext Amsterdam"},
+        "HEIO.AS": {"company": "Heineken Holding N.V.", "country": "Netherlands", "exchange": "Euronext Amsterdam"},
+        "ABEV": {"company": "Ambev S.A.", "country": "Brazil", "exchange": "NYSE"},
+        "ANH.JO": {"company": "Anheuser-Busch InBev", "country": "South Africa", "exchange": "JSE"},
+        "NESTLE.NG": {"company": "Nestlé Nigeria Plc", "country": "Nigeria", "exchange": "NGX"},
+        "BVT.JO": {"company": "Brimstone / Consumer Proxy", "country": "South Africa", "exchange": "JSE"},
+        "WHL.JO": {"company": "Woolworths Holdings Limited", "country": "South Africa", "exchange": "JSE"},
+        "MRP.JO": {"company": "Mr Price Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "TRU.JO": {"company": "Truworths International Limited", "country": "South Africa", "exchange": "JSE"},
+        "TFG.JO": {"company": "The Foschini Group Limited", "country": "South Africa", "exchange": "JSE"},
+        "SHP.JO": {"company": "Shoprite Holdings Limited", "country": "South Africa", "exchange": "JSE"},
+        "SSU.JO": {"company": "Southern Sun Limited", "country": "South Africa", "exchange": "JSE"},
+        "SOL.JO": {"company": "Sasol Limited", "country": "South Africa", "exchange": "JSE"},
+        "BAW.JO": {"company": "Barloworld Limited", "country": "South Africa", "exchange": "JSE"},
+        "MNP.JO": {"company": "Mondi Plc", "country": "South Africa", "exchange": "JSE"},
+        "AIP.JO": {"company": "Adcock Ingram Holdings Limited", "country": "South Africa", "exchange": "JSE"},
+        "KAP.JO": {"company": "KAP Limited", "country": "South Africa", "exchange": "JSE"},
+        "PPC.JO": {"company": "PPC Ltd", "country": "South Africa", "exchange": "JSE"},
+        "ARI.JO": {"company": "African Rainbow Minerals / Industrial Proxy", "country": "South Africa", "exchange": "JSE"},
+        "IMP.JO": {"company": "Impala Platinum Holdings Limited", "country": "South Africa", "exchange": "JSE"},
+        "AMS.JO": {"company": "Anglo American Platinum Limited", "country": "South Africa", "exchange": "JSE"},
+        "NPN.JO": {"company": "Naspers Limited", "country": "South Africa", "exchange": "JSE"},
+        "JSE.JO": {"company": "JSE Limited", "country": "South Africa", "exchange": "JSE"},
+        "BTI": {"company": "British American Tobacco p.l.c.", "country": "United Kingdom", "exchange": "NYSE"},
+        "FSTA.JO": {"company": "Famous Brands Limited", "country": "South Africa", "exchange": "JSE"},
+        "RTG": {"company": "Rainbow Tourism Group", "country": "Zimbabwe", "exchange": "ZSE"},
+        "NPK.JO": {"company": "Nampak Limited", "country": "South Africa", "exchange": "JSE"},
+        "TBS.JO": {"company": "Tiger Brands Limited", "country": "South Africa", "exchange": "JSE"},
+        "RCL.JO": {"company": "RCL Foods Limited", "country": "South Africa", "exchange": "JSE"},
+        "FBR.JO": {"company": "Famous Brands Limited", "country": "South Africa", "exchange": "JSE"},
+        "OCE.JO": {"company": "Oceana Group Limited", "country": "South Africa", "exchange": "JSE"},
+    }
+
+    peer_name_map.update(manual_names)
+    return peer_name_map
+
+KNOWN_PEER_NAME_MAP = build_known_peer_name_map()
+
+# =========================================================
+# Live market data functions
+# =========================================================
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def fmp_get_peers(symbol: str, limit: int = 10) -> list:
+    sym = normalize_peer_ticker(symbol)
+    if not sym or not FMP_API_KEY:
+        return []
+
+    try:
+        data = _safe_get_json(
+            url=f"{FMP_BASE}/stock_peers",
+            params={"symbol": sym, "apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+
+        peers = []
+        if isinstance(data, list):
+            peers.extend(data)
+        elif isinstance(data, dict):
+            peers.extend(data.get("peersList", []) or [])
+            peers.extend(data.get("peers", []) or [])
+
+        peers = [normalize_peer_ticker(x) for x in peers if str(x).strip()]
+        peers = [x for x in peers if x != sym]
+
+        out = []
+        seen = set()
+        for p in peers:
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+
+        return out[:limit]
+    except Exception:
+        return []
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def finnhub_get_peers(symbol: str, limit: int = 10) -> list:
+    sym = normalize_peer_ticker(symbol)
+    if not sym or not FINNHUB_API_KEY:
+        return []
+
+    try:
+        data = _safe_get_json(
+            url=f"{FINNHUB_BASE}/stock/peers",
+            params={"symbol": sym, "token": FINNHUB_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        peers = [normalize_peer_ticker(x) for x in (data or []) if str(x).strip()]
+        peers = [x for x in peers if x != sym]
+        return peers[:limit]
+    except Exception:
+        return []
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def fmp_profile(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym or not FMP_API_KEY:
+        return {}
+
+    try:
+        data = _safe_get_json(
+            url=f"{FMP_BASE}/profile/{sym}",
+            params={"apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        row = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
+        if not row:
+            return {}
+
+        return {
+            "Company": _first_non_null(row, ["companyName", "name", "symbol"]) or "",
+            "Ticker": sym,
+            "Sector": _first_non_null(row, ["sector"]) or "",
+            "Industry": _first_non_null(row, ["industry"]) or "",
+            "Exchange": _first_non_null(row, ["exchangeShortName", "exchange"]) or "",
+            "Country": _first_non_null(row, ["country"]) or "",
         }
-        # mirror keys for is_africa_quote
-        d["symbol"] = d["Ticker"]
-        d["exchange"] = d["Exchange"]
-        d["quoteType"] = d["Type"]
+    except Exception:
+        return {}
 
-        if is_africa_quote(d):
-            rows.append(d)
 
-    out = pd.DataFrame(rows).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def fmp_ratios(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym or not FMP_API_KEY:
+        return {}
+
+    out = {"Ticker": sym, "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan, "ratio_source": ""}
+
+    try:
+        ratios = _safe_get_json(
+            url=f"{FMP_BASE}/ratios-ttm/{sym}",
+            params={"apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        row = ratios[0] if isinstance(ratios, list) and ratios else (ratios if isinstance(ratios, dict) else {})
+
+        pe = _clean_num(_first_non_null(row, [
+            "priceEarningsRatioTTM", "peRatioTTM", "peTTM", "priceToEarningsRatioTTM"
+        ]))
+        pb = _clean_num(_first_non_null(row, [
+            "priceToBookRatioTTM", "pbRatioTTM", "pbTTM", "priceToBookTTM"
+        ]))
+
+        out["P/E"] = pe
+        out["P/B"] = pb
+    except Exception:
+        pass
+
+    try:
+        km = _safe_get_json(
+            url=f"{FMP_BASE}/key-metrics-ttm/{sym}",
+            params={"apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        row = km[0] if isinstance(km, list) and km else (km if isinstance(km, dict) else {})
+        ev = _clean_num(_first_non_null(row, [
+            "enterpriseValueOverEBITDATTM", "evToEbitdaTTM", "enterpriseValueOverEBITDA", "evToEbitda"
+        ]))
+        out["EV/EBITDA"] = ev
+    except Exception:
+        pass
+
+    if not (pd.isna(out["P/E"]) and pd.isna(out["P/B"]) and pd.isna(out["EV/EBITDA"])):
+        out["ratio_source"] = "FMP"
+
     return out
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def yahoo_africa_peers(sector_keyword: str, limit: int = 200) -> pd.DataFrame:
-    """
-    Africa peers driven by SECTOR keyword.
-    ✅ Build a BIG Africa pool (don’t stop early), then return head(limit).
-    """
-    sk = (sector_keyword or "").strip()
-    if not sk:
-        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+def fmp_raw_fundamentals(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym or not FMP_API_KEY:
+        return {}
 
-    # More Africa-focused queries (broader coverage)
-    queries = [
-        sk,
-        f"{sk} company",
-        f"{sk} listed",
-        f"{sk} Africa",
-        f"{sk} South Africa",
-        f"{sk} Nigeria",
-        f"{sk} Kenya",
-        f"{sk} Egypt",
-        f"{sk} Morocco",
-        f"{sk} Ghana",
-        f"{sk} Uganda",
-        f"{sk} Tanzania",
-        f"{sk} Zambia",
-        f"{sk} Botswana",
-        f"{sk} Namibia",
-        f"{sk} Mauritius",
-    ]
+    out = {
+        "Ticker": sym,
+        "market_cap": np.nan,
+        "total_debt": np.nan,
+        "cash": np.nan,
+        "net_income": np.nan,
+        "book_value_equity": np.nan,
+        "ebitda": np.nan,
+        "raw_source": ""
+    }
 
-    combined = pd.DataFrame()
+    try:
+        prof = _safe_get_json(
+            url=f"{FMP_BASE}/profile/{sym}",
+            params={"apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        row = prof[0] if isinstance(prof, list) and prof else (prof if isinstance(prof, dict) else {})
+        out["market_cap"] = _clean_num(_first_non_null(row, ["mktCap", "marketCap"]))
+    except Exception:
+        pass
 
-    for q in queries:
+    try:
+        bs = _safe_get_json(
+            url=f"{FMP_BASE}/balance-sheet-statement/{sym}",
+            params={"limit": 1, "apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        row = bs[0] if isinstance(bs, list) and bs else (bs if isinstance(bs, dict) else {})
+        out["cash"] = _clean_num(_first_non_null(row, ["cashAndCashEquivalents", "cashAndShortTermInvestments"]))
+        out["total_debt"] = _clean_num(_first_non_null(row, ["totalDebt", "shortTermDebt", "longTermDebt"]))
+        out["book_value_equity"] = _clean_num(_first_non_null(row, ["totalStockholdersEquity", "totalEquity"]))
+    except Exception:
+        pass
+
+    try:
+        is_ = _safe_get_json(
+            url=f"{FMP_BASE}/income-statement/{sym}",
+            params={"limit": 1, "apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        row = is_[0] if isinstance(is_, list) and is_ else (is_ if isinstance(is_, dict) else {})
+        out["net_income"] = _clean_num(_first_non_null(row, ["netIncome", "netIncomeCommonStockholders"]))
+        out["ebitda"] = _clean_num(_first_non_null(row, ["ebitda"]))
+    except Exception:
+        pass
+
+    if any(not pd.isna(out[k]) for k in [
+        "market_cap", "total_debt", "cash", "net_income", "book_value_equity", "ebitda"
+    ]):
+        out["raw_source"] = "FMP raw fundamentals"
+
+    return out
+
+
+def derive_ratios_from_raw(raw: dict) -> dict:
+    out = {
+        "Ticker": raw.get("Ticker", ""),
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": ""
+    }
+
+    market_cap = _clean_num(raw.get("market_cap"))
+    total_debt = _clean_num(raw.get("total_debt"))
+    cash = _clean_num(raw.get("cash"))
+    net_income = _clean_num(raw.get("net_income"))
+    book_value_equity = _clean_num(raw.get("book_value_equity"))
+    ebitda = _clean_num(raw.get("ebitda"))
+
+    if not pd.isna(market_cap) and not pd.isna(net_income) and net_income != 0:
+        out["P/E"] = market_cap / net_income
+
+    if not pd.isna(market_cap) and not pd.isna(book_value_equity) and book_value_equity != 0:
+        out["P/B"] = market_cap / book_value_equity
+
+    if not pd.isna(market_cap) and not pd.isna(ebitda) and ebitda != 0:
+        debt = 0.0 if pd.isna(total_debt) else total_debt
+        csh = 0.0 if pd.isna(cash) else cash
+        enterprise_value = market_cap + debt - csh
+        out["EV/EBITDA"] = enterprise_value / ebitda
+
+    if not (pd.isna(out["P/E"]) and pd.isna(out["P/B"]) and pd.isna(out["EV/EBITDA"])):
+        out["ratio_source"] = "Derived from raw fundamentals"
+
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def finnhub_basic_metrics(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym or not FINNHUB_API_KEY:
+        return {}
+
+    out = {"Ticker": sym, "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan, "ratio_source": ""}
+
+    try:
+        data = _safe_get_json(
+            url=f"{FINNHUB_BASE}/stock/metric",
+            params={"symbol": sym, "metric": "all", "token": FINNHUB_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        m = (data or {}).get("metric", {}) or {}
+
+        pe = _clean_num(_first_non_null(m, ["peTTM", "peAnnual"]))
+        pb = _clean_num(_first_non_null(m, ["pbAnnual"]))
+        ev = _clean_num(_first_non_null(m, ["evEbitdaTTM"]))
+
+        out["P/E"] = pe
+        out["P/B"] = pb
+        out["EV/EBITDA"] = ev
+
+        if not (pd.isna(pe) and pd.isna(pb) and pd.isna(ev)):
+            out["ratio_source"] = "Finnhub stock/metric"
+    except Exception:
+        pass
+
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def yahoo_quote_profile(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym:
+        return {}
+
+    try:
+        r = _safe_get(
+            YAHOO_QUOTE_URL,
+            params={"symbols": sym},
+            timeout=20,
+            tries=2,
+        )
+        results = ((r.json() or {}).get("quoteResponse") or {}).get("result") or []
+        if not results:
+            return {}
+
+        row = results[0]
+        return {
+            "Company": row.get("longName") or row.get("shortName") or "",
+            "Ticker": sym,
+            "Exchange": row.get("fullExchangeName") or row.get("exchange") or "",
+            "Country": row.get("region") or "",
+            "Sector": "",
+            "Industry": "",
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def yahoo_profile_and_metrics(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym:
+        return {}
+
+    def _raw(v):
+        if isinstance(v, dict):
+            if "raw" in v:
+                return v.get("raw")
+            if "fmt" in v:
+                return v.get("fmt")
+        return v
+
+    out = {
+        "Ticker": sym,
+        "Company": "",
+        "Exchange": "",
+        "Country": "",
+        "Sector": "",
+        "Industry": "",
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": "",
+    }
+
+    try:
+        url = YAHOO_QUOTESUMMARY_URL.format(symbol=sym)
+        r = _safe_get(
+            url,
+            params={"modules": "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile"},
+            timeout=25,
+            tries=2,
+        )
+        data = r.json()
+        res = (((data.get("quoteSummary") or {}).get("result")) or [])
+        if not res:
+            return out
+
+        root = res[0]
+        price = root.get("price") or {}
+        summary = root.get("summaryDetail") or {}
+        dks = root.get("defaultKeyStatistics") or {}
+        fin = root.get("financialData") or {}
+        ap = root.get("assetProfile") or {}
+
+        out["Company"] = (
+            _raw(price.get("longName"))
+            or _raw(price.get("shortName"))
+            or sym
+        )
+        out["Exchange"] = _raw(price.get("exchangeName")) or _raw(price.get("fullExchangeName")) or ""
+        out["Country"] = ap.get("country") or ""
+        out["Sector"] = ap.get("sector") or ""
+        out["Industry"] = ap.get("industry") or ""
+
+        pe = _raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")) or _raw(fin.get("trailingPE"))
+        pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
+        evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
+
+        out["P/E"] = _clean_num(pe)
+        out["P/B"] = _clean_num(pb)
+        out["EV/EBITDA"] = _clean_num(evebitda)
+
+        if not (pd.isna(out["P/E"]) and pd.isna(out["P/B"]) and pd.isna(out["EV/EBITDA"])):
+            out["ratio_source"] = "Yahoo quoteSummary"
+    except Exception:
+        pass
+
+    return out
+
+def yahoo_stats_table_fallback(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+
+    out = {
+        "Ticker": sym,
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": ""
+    }
+
+    if not sym:
+        return out
+
+    def parse_ratio_value(x):
+        s = str(x).strip()
+        if s in ["", "N/A", "NaN", "None", "-", "--"]:
+            return np.nan
+
+        s = s.replace(",", "").strip()
+        m = re.search(r"-?\d+(?:\.\d+)?", s)
+        if not m:
+            return np.nan
+
         try:
-            # get more candidates per query
-            dfq = yahoo_search(q, quotes_count=400)
-            combined = pd.concat([combined, filter_africa(dfq)], ignore_index=True)
+            return float(m.group(0))
+        except Exception:
+            return np.nan
+
+    url = f"https://finance.yahoo.com/quote/{sym}/key-statistics?p={sym}"
+
+    html_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+
+    try:
+        r = SESSION.get(url, headers=html_headers, timeout=25)
+        r.raise_for_status()
+        html = r.text or ""
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        # ---- 1) Parse actual HTML tables exactly like the Statistics page ----
+        for table in soup.find_all("table"):
+            for tr in table.find_all("tr"):
+                cells = tr.find_all(["th", "td"])
+                vals = [c.get_text(" ", strip=True) for c in cells if c.get_text(" ", strip=True)]
+
+                if len(vals) < 2:
+                    continue
+
+                label = vals[0].strip().lower()
+                value = vals[-1].strip()
+
+                if pd.isna(out["P/E"]) and "trailing p/e" in label:
+                    out["P/E"] = parse_ratio_value(value)
+
+                elif pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
+                    out["P/B"] = parse_ratio_value(value)
+
+                elif pd.isna(out["EV/EBITDA"]) and (
+                    "enterprise value/ebitda" in label or "ev/ebitda" in label
+                ):
+                    out["EV/EBITDA"] = parse_ratio_value(value)
+
+        # ---- 2) Fallback: try pandas read_html on same page ----
+        if pd.isna(out["P/E"]) or pd.isna(out["P/B"]) or pd.isna(out["EV/EBITDA"]):
+            try:
+                tables = pd.read_html(StringIO(html))
+            except Exception:
+                tables = []
+
+            for t in tables:
+                if t is None or t.empty:
+                    continue
+
+                for _, row in t.iterrows():
+                    vals = [
+                        str(x).strip()
+                        for x in row.tolist()
+                        if str(x).strip() not in ["", "nan", "None"]
+                    ]
+                    if len(vals) < 2:
+                        continue
+
+                    label = vals[0].lower()
+                    value = vals[-1]
+
+                    if pd.isna(out["P/E"]) and "trailing p/e" in label:
+                        out["P/E"] = parse_ratio_value(value)
+
+                    elif pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
+                        out["P/B"] = parse_ratio_value(value)
+
+                    elif pd.isna(out["EV/EBITDA"]) and (
+                        "enterprise value/ebitda" in label or "ev/ebitda" in label
+                    ):
+                        out["EV/EBITDA"] = parse_ratio_value(value)
+
+        # ---- 3) Last fallback: regex directly from page source ----
+        if pd.isna(out["P/E"]):
+            m = re.search(r"Trailing P/E.*?(-?\d+(?:\.\d+)?)", html, re.I | re.S)
+            if m:
+                out["P/E"] = parse_ratio_value(m.group(1))
+
+        if pd.isna(out["P/B"]):
+            m = re.search(r"Price/Book.*?(-?\d+(?:\.\d+)?)", html, re.I | re.S)
+            if m:
+                out["P/B"] = parse_ratio_value(m.group(1))
+
+        if pd.isna(out["EV/EBITDA"]):
+            m = re.search(r"Enterprise Value/EBITDA.*?(-?\d+(?:\.\d+)?)", html, re.I | re.S)
+            if m:
+                out["EV/EBITDA"] = parse_ratio_value(m.group(1))
+
+        if not (pd.isna(out["P/E"]) and pd.isna(out["P/B"]) and pd.isna(out["EV/EBITDA"])):
+            out["ratio_source"] = "Yahoo Statistics"
+
+    except Exception:
+        pass
+
+    return out
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def yahoo_html_ratio_fallback(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    out = {
+        "Ticker": sym,
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": ""
+    }
+
+    if not sym:
+        return out
+
+    try:
+        url = f"https://finance.yahoo.com/quote/{sym}"
+        r = _safe_get(url, timeout=20, tries=2)
+        html = r.text or ""
+
+        patterns = {
+            "P/E": [
+                r'"trailingPE"\s*:\s*\{"raw"\s*:\s*([\-0-9.]+)',
+                r'"trailingPE"\s*:\s*([\-0-9.]+)',
+            ],
+            "P/B": [
+                r'"priceToBook"\s*:\s*\{"raw"\s*:\s*([\-0-9.]+)',
+                r'"priceToBook"\s*:\s*([\-0-9.]+)',
+            ],
+            "EV/EBITDA": [
+                r'"enterpriseToEbitda"\s*:\s*\{"raw"\s*:\s*([\-0-9.]+)',
+                r'"enterpriseToEbitda"\s*:\s*([\-0-9.]+)',
+            ],
+        }
+
+        for field, pats in patterns.items():
+            for pat in pats:
+                m = re.search(pat, html)
+                if m:
+                    out[field] = _clean_num(m.group(1))
+                    break
+
+        if not (pd.isna(out["P/E"]) and pd.isna(out["P/B"]) and pd.isna(out["EV/EBITDA"])):
+            out["ratio_source"] = "Yahoo HTML fallback"
+    except Exception:
+        pass
+
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def yfinance_ratio_snapshot(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    out = {
+        "Ticker": sym,
+        "Company": "",
+        "Exchange": "",
+        "Country": "",
+        "Sector": "",
+        "Industry": "",
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": ""
+    }
+
+    if not sym:
+        return out
+
+    try:
+        tk = yf.Ticker(sym)
+        info = tk.info or {}
+
+        out["Company"] = _clean_text(info.get("longName") or info.get("shortName") or "")
+        out["Sector"] = _clean_text(info.get("sector") or "")
+        out["Industry"] = _clean_text(info.get("industry") or "")
+        out["Country"] = _clean_text(info.get("country") or "")
+        out["Exchange"] = _clean_text(info.get("exchange") or "")
+
+        pe = _clean_num(_first_non_null(info, ["trailingPE", "forwardPE"]))
+        pb = _clean_num(_first_non_null(info, ["priceToBook"]))
+        ev = _clean_num(_first_non_null(info, ["enterpriseToEbitda"]))
+
+        if pd.isna(pe) or pd.isna(pb) or pd.isna(ev):
+            market_cap = _clean_num(_first_non_null(info, ["marketCap"]))
+            total_debt = _clean_num(_first_non_null(info, ["totalDebt"]))
+            cash = _clean_num(_first_non_null(info, ["totalCash"]))
+            ebitda = _clean_num(_first_non_null(info, ["ebitda"]))
+            book_value = _clean_num(_first_non_null(info, ["bookValue"]))
+            shares = _clean_num(_first_non_null(info, ["sharesOutstanding"]))
+            net_income = _clean_num(_first_non_null(info, ["netIncomeToCommon"]))
+
+            if pd.isna(pb) and not pd.isna(book_value) and not pd.isna(shares) and shares != 0:
+                book_equity = book_value * shares
+                if not pd.isna(market_cap) and book_equity != 0:
+                    pb = market_cap / book_equity
+
+            if pd.isna(pe) and not pd.isna(market_cap) and not pd.isna(net_income) and net_income != 0:
+                pe = market_cap / net_income
+
+            if pd.isna(ev) and not pd.isna(market_cap) and not pd.isna(ebitda) and ebitda != 0:
+                debt = 0.0 if pd.isna(total_debt) else total_debt
+                csh = 0.0 if pd.isna(cash) else cash
+                ev = (market_cap + debt - csh) / ebitda
+
+        out["P/E"] = pe
+        out["P/B"] = pb
+        out["EV/EBITDA"] = ev
+
+        if not (pd.isna(pe) and pd.isna(pb) and pd.isna(ev)):
+            out["ratio_source"] = "yfinance"
+    except Exception:
+        pass
+
+    return out
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def yfinance_derived_from_statements(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+
+    out = {
+        "Ticker": sym,
+        "Company": "",
+        "Exchange": "",
+        "Country": "",
+        "Sector": "",
+        "Industry": "",
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": "",
+    }
+
+    if not sym:
+        return out
+
+    def _pick_first_series_value(df, possible_rows):
+        try:
+            if df is None or df.empty:
+                return np.nan
+            for row_name in possible_rows:
+                if row_name in df.index:
+                    vals = pd.to_numeric(df.loc[row_name], errors="coerce").dropna()
+                    if len(vals) > 0:
+                        return float(vals.iloc[0])
+        except Exception:
+            pass
+        return np.nan
+
+    try:
+        tk = yf.Ticker(sym)
+
+        info = {}
+        try:
+            info = tk.info or {}
+        except Exception:
+            info = {}
+
+        out["Company"] = _clean_text(info.get("longName") or info.get("shortName") or "")
+        out["Exchange"] = _clean_text(info.get("exchange") or "")
+        out["Country"] = _clean_text(info.get("country") or "")
+        out["Sector"] = _clean_text(info.get("sector") or "")
+        out["Industry"] = _clean_text(info.get("industry") or "")
+
+        market_cap = np.nan
+        try:
+            market_cap = _clean_num(info.get("marketCap"))
         except Exception:
             pass
 
-        combined = combined.drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+        if pd.isna(market_cap):
+            try:
+                fi = tk.fast_info or {}
+                market_cap = _clean_num(fi.get("market_cap"))
+            except Exception:
+                pass
 
-    if combined.empty:
-        return pd.DataFrame(columns=["Company", "Ticker", "Exchange", "Type"])
+        income_stmt = None
+        balance_sheet = None
 
-    # double-safe: equities only
-    combined["Type"] = combined["Type"].fillna("").astype(str).str.upper()
-    combined = combined[~combined["Type"].isin(list(BAD_QUOTETYPES))]
+        try:
+            income_stmt = tk.income_stmt
+        except Exception:
+            income_stmt = None
 
-    combined = combined.sort_values(["Exchange", "Company"], ascending=[True, True])
-    return combined.head(int(limit)).reset_index(drop=True)
+        if income_stmt is None or getattr(income_stmt, "empty", True):
+            try:
+                income_stmt = tk.financials
+            except Exception:
+                income_stmt = None
+
+        try:
+            balance_sheet = tk.balance_sheet
+        except Exception:
+            balance_sheet = None
+
+        net_income = _pick_first_series_value(
+            income_stmt,
+            [
+                "Net Income",
+                "NetIncome",
+                "Net Income Common Stockholders",
+                "Net Income Applicable To Common Shares",
+            ],
+        )
+
+        ebitda = _pick_first_series_value(
+            income_stmt,
+            [
+                "EBITDA",
+                "Ebitda",
+            ],
+        )
+
+        total_equity = _pick_first_series_value(
+            balance_sheet,
+            [
+                "Stockholders Equity",
+                "Total Stockholder Equity",
+                "Total Equity Gross Minority Interest",
+                "Common Stock Equity",
+                "Total Equity",
+            ],
+        )
+
+        total_debt = _pick_first_series_value(
+            balance_sheet,
+            [
+                "Total Debt",
+                "Net Debt",
+                "Long Term Debt And Capital Lease Obligation",
+                "Long Term Debt",
+                "Current Debt",
+            ],
+        )
+
+        cash = _pick_first_series_value(
+            balance_sheet,
+            [
+                "Cash And Cash Equivalents",
+                "Cash Cash Equivalents And Short Term Investments",
+                "Cash",
+            ],
+        )
+
+        # fallbacks from info
+        if pd.isna(net_income):
+            net_income = _clean_num(info.get("netIncomeToCommon"))
+
+        if pd.isna(ebitda):
+            ebitda = _clean_num(info.get("ebitda"))
+
+        if pd.isna(total_debt):
+            total_debt = _clean_num(info.get("totalDebt"))
+
+        if pd.isna(cash):
+            cash = _clean_num(info.get("totalCash"))
+
+        # derive ratios
+        pe = np.nan
+        pb = np.nan
+        ev_ebitda = np.nan
+
+        if not pd.isna(market_cap) and not pd.isna(net_income) and net_income != 0:
+            pe = market_cap / net_income
+
+        if not pd.isna(market_cap) and not pd.isna(total_equity) and total_equity != 0:
+            pb = market_cap / total_equity
+
+        if not pd.isna(market_cap) and not pd.isna(ebitda) and ebitda != 0:
+            debt = 0.0 if pd.isna(total_debt) else total_debt
+            csh = 0.0 if pd.isna(cash) else cash
+            enterprise_value = market_cap + debt - csh
+            ev_ebitda = enterprise_value / ebitda
+
+        out["P/E"] = _clean_num(pe)
+        out["P/B"] = _clean_num(pb)
+        out["EV/EBITDA"] = _clean_num(ev_ebitda)
+
+        if not (pd.isna(out["P/E"]) and pd.isna(out["P/B"]) and pd.isna(out["EV/EBITDA"])):
+            out["ratio_source"] = "yfinance derived statements"
+
+    except Exception:
+        pass
+
+    return out
+def get_live_peer_row(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+    if not sym:
+        return {}
+
+    known = KNOWN_PEER_NAME_MAP.get(sym, {})
+
+    # 1) Yahoo
+    yq = yahoo_quote_profile(sym)
+    yh = yahoo_profile_and_metrics(sym)
+    yhtml = yahoo_html_ratio_fallback(sym)
+    ystats = yahoo_stats_table_fallback(sym)
+
+    # 2) yfinance
+    yfin = yfinance_ratio_snapshot(sym)
+    yfin_derived = yfinance_derived_from_statements(sym)
+
+    # 3) Finnhub
+    fh = finnhub_basic_metrics(sym)
+
+    # 4) FMP direct
+    fp = fmp_profile(sym)
+    fr = fmp_ratios(sym)
+
+    # 5) FMP derived
+    rawf = fmp_raw_fundamentals(sym)
+    derived = derive_ratios_from_raw(rawf)
+
+    local_name = sym
+    local_exchange = ""
+    local_sector = ""
+    local_industry = ""
+    local_country = ""
+
+    for row in ZIM_COUNTERS:
+        if str(row.get("symbol", "")).strip().upper() == sym:
+            local_name = str(row.get("company", "")).strip() or sym
+            local_exchange = str(row.get("exchange", "")).strip()
+            local_sector = str(row.get("sector", "")).strip()
+            local_industry = local_sector
+            local_country = "Zimbabwe"
+            break
+
+    company_name = (
+        yh.get("Company")
+        or yq.get("Company")
+        or yfin.get("Company")
+        or fp.get("Company")
+        or known.get("company", "")
+        or local_name
+    )
+
+    exchange_name = (
+        yh.get("Exchange")
+        or yq.get("Exchange")
+        or yfin.get("Exchange")
+        or fp.get("Exchange")
+        or known.get("exchange", "")
+        or local_exchange
+    )
+
+    country_name = (
+        yh.get("Country")
+        or yq.get("Country")
+        or yfin.get("Country")
+        or fp.get("Country")
+        or known.get("country", "")
+        or local_country
+    )
+
+    sector_name = (
+        yh.get("Sector")
+        or yfin.get("Sector")
+        or fp.get("Sector")
+        or local_sector
+    )
+
+    industry_name = (
+        yh.get("Industry")
+        or yfin.get("Industry")
+        or fp.get("Industry")
+        or local_industry
+        or sector_name
+    )
+
+    pe = ystats.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yh.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yhtml.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yfin.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yfin_derived.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = fh.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = fr.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = derived.get("P/E", np.nan)
+
+    pb = ystats.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yh.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yhtml.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yfin.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yfin_derived.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = fh.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = fr.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = derived.get("P/B", np.nan)
+
+    ev_ebitda = ystats.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yh.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yfin.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yfin_derived.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = fh.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = fr.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = derived.get("EV/EBITDA", np.nan)
+    source = (
+            ystats.get("ratio_source")
+            or yh.get("ratio_source")
+            or yhtml.get("ratio_source")
+            or yfin.get("ratio_source")
+            or yfin_derived.get("ratio_source")
+            or fh.get("ratio_source")
+            or fr.get("ratio_source")
+            or derived.get("ratio_source")
+            or ""
+    )
+    return {
+        "Company": company_name,
+        "Ticker": sym,
+        "Exchange": exchange_name,
+        "Country": country_name,
+        "Sector": sector_name,
+        "Industry": industry_name,
+        "EV/EBITDA": _clean_num(ev_ebitda),
+        "P/B": _clean_num(pb),
+        "P/E": _clean_num(pe),
+        "Source": source,
+    }
+
+# =========================================================
+# Symbol resolution
+# =========================================================
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def fmp_search_symbol(query: str) -> dict:
+    q = (query or "").strip()
+    if not q or not FMP_API_KEY:
+        return {}
+
+    try:
+        data = _safe_get_json(
+            url=f"{FMP_BASE}/search",
+            params={"query": q, "limit": 10, "apikey": FMP_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+
+        if isinstance(data, list) and data:
+            row = data[0]
+            return {
+                "symbol": normalize_peer_ticker(row.get("symbol", "")),
+                "company": str(row.get("name", "")).strip(),
+                "exchange": str(row.get("exchangeShortName", "")).strip(),
+                "source": "fmp_search",
+            }
+    except Exception:
+        pass
+
+    return {}
 
 
-def format_global_peer_lines_yahoo(df: pd.DataFrame, max_rows: int = 25) -> str:
-    if df is None or df.empty:
-        return ""
-    out = []
-    show = df.head(int(max_rows))
-    for _, r in show.iterrows():
-        nm = str(r.get("Company", "")).strip()
-        tk = str(r.get("Ticker", "")).strip()
-        ex = str(r.get("Exchange", "")).strip()
-        tp = str(r.get("Type", "")).strip()
-        meta = " | ".join([x for x in [tk, ex, tp] if x])
-        out.append(f"- **{nm}**" + (f" *({meta})*" if meta else ""))
-    return "\n".join(out)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def finnhub_search_symbol(query: str) -> dict:
+    q = (query or "").strip()
+    if not q or not FINNHUB_API_KEY:
+        return {}
+
+    try:
+        data = _safe_get_json(
+            url=f"{FINNHUB_BASE}/search",
+            params={"q": q, "token": FINNHUB_API_KEY},
+            timeout=25,
+            tries=2,
+        )
+        results = data.get("result", []) if isinstance(data, dict) else []
+        if results:
+            row = results[0]
+            return {
+                "symbol": normalize_peer_ticker(row.get("symbol", "")),
+                "company": str(row.get("description", "")).strip(),
+                "exchange": "",
+                "source": "finnhub_search",
+            }
+    except Exception:
+        pass
+
+    return {}
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def resolve_symbol(query: str) -> dict:
+    q = (query or "").strip()
+    if not q:
+        return {}
+
+    local_hit = find_local_counter(q)
+    if local_hit:
+        return local_hit
+
+    if _looks_like_symbol(q):
+        return {
+            "symbol": normalize_peer_ticker(q),
+            "company": q.strip().upper(),
+            "exchange": "",
+            "source": "manual",
+        }
+
+    try:
+        df = yahoo_search(q, quotes_count=15)
+        if df is not None and not df.empty:
+            df = df.copy()
+            df["Type"] = df["Type"].fillna("").astype(str)
+            df["Exchange"] = df["Exchange"].fillna("").astype(str)
+            df["Ticker"] = df["Ticker"].fillna("").astype(str)
+            df["Company"] = df["Company"].fillna("").astype(str)
+
+            africa_df = filter_africa(df)
+            if africa_df is not None and not africa_df.empty:
+                row = africa_df.iloc[0]
+                sym = normalize_peer_ticker(row.get("Ticker", ""))
+                if sym:
+                    return {
+                        "symbol": sym,
+                        "company": str(row.get("Company", "")).strip(),
+                        "exchange": str(row.get("Exchange", "")).strip(),
+                        "source": "yahoo_africa",
+                    }
+
+            eq = df[df["Type"].str.upper().isin(["EQUITY", "COMMON STOCK", ""])].copy()
+            row = eq.iloc[0] if not eq.empty else df.iloc[0]
+            sym = normalize_peer_ticker(row.get("Ticker", ""))
+            if sym:
+                return {
+                    "symbol": sym,
+                    "company": str(row.get("Company", "")).strip(),
+                    "exchange": str(row.get("Exchange", "")).strip(),
+                    "source": "yahoo_search",
+                }
+    except Exception:
+        pass
+
+    hit = fmp_search_symbol(q)
+    if hit:
+        return hit
+
+    hit = finnhub_search_symbol(q)
+    if hit:
+        return hit
+
+    return {}
+def build_live_comps_from_target(target_query: str, max_peers: int = 8):
+    target = resolve_symbol(target_query)
+    if not target:
+        return pd.DataFrame(), {"error": "Could not resolve the target company/ticker."}
+
+    target_symbol = str(target.get("symbol", "")).strip().upper()
+    target_company_name = str(target.get("company", "")).strip()
+
+    if not target_symbol:
+        return pd.DataFrame(), {"error": "Resolved target did not return a valid ticker."}
+
+    peers = []
+    peer_source = ""
+
+    peers = get_company_specific_proxy_peers(
+        target_symbol=target_symbol,
+        target_company=target_company_name,
+        max_peers=max_peers,
+    )
+    if peers:
+        peer_source = "Company-specific peers"
+
+    if not peers:
+        local_sector = get_local_counter_sector(target_symbol)
+        peers = get_africa_sector_proxy_peers(local_sector, max_peers=max_peers)
+        if peers:
+            peer_source = f"Sector proxy peers ({local_sector})"
+
+    if not peers:
+        peers = fmp_get_peers(target_symbol, limit=max_peers)
+        if peers:
+            peer_source = "FMP peers"
+
+    if not peers:
+        peers = finnhub_get_peers(target_symbol, limit=max_peers)
+        if peers:
+            peer_source = "Finnhub peers"
+
+    peers = [normalize_peer_ticker(x) for x in peers if str(x).strip()]
+    peers = [x for x in peers if x != normalize_peer_ticker(target_symbol)]
+
+    deduped = []
+    seen = set()
+    for p in peers:
+        if p not in seen:
+            seen.add(p)
+            deduped.append(p)
+    peers = deduped[:max_peers]
+
+    if not peers:
+        return pd.DataFrame(), {
+            "error": f"No peers found for {target_symbol}.",
+            "target": target,
+            "peer_source": peer_source,
+        }
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(peers)))) as ex:
+        futs = {ex.submit(get_live_peer_row, sym): sym for sym in peers}
+        for fut in as_completed(futs):
+            try:
+                row = fut.result()
+                if row:
+                    rows.append(row)
+            except Exception:
+                pass
+
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return pd.DataFrame(), {
+            "error": f"Peers were found for {target_symbol}, but ratio download failed.",
+            "target": target,
+            "peer_source": peer_source,
+        }
+
+    df = df.drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+
+    meta = {
+        "target": target,
+        "peer_source": peer_source,
+        "peer_count": len(df),
+    }
+
+    if not df.empty:
+        all_ratio_empty = (df["EV/EBITDA"].isna() & df["P/B"].isna() & df["P/E"].isna()).all()
+        if all_ratio_empty:
+            meta["warning"] = (
+                f"Peers were found for {target_symbol}, but live ratios were empty. "
+                f"You can still use the peers and fill ratios manually."
+            )
+
+    return df, meta
+
+
+def apply_live_comps_to_session(df_live: pd.DataFrame):
+    if df_live is None or df_live.empty:
+        return
+
+    S.setdefault("comps", {})
+
+    n = len(df_live)
+    S["num_comps"] = n
+    S["num_comps_input"] = n
+
+    for i, (_, r) in enumerate(df_live.iterrows()):
+        S[f"comp_name_{i}"] = str(r.get("Company", "")).strip() or str(r.get("Ticker", "")).strip()
+        S[f"comp_ticker_{i}"] = str(r.get("Ticker", "")).strip()
+        S[f"comp_source_{i}"] = str(r.get("Source", "")).strip()
+
+        S[f"comp_ev_{i}"] = np.nan if pd.isna(r.get("EV/EBITDA", np.nan)) else float(r["EV/EBITDA"])
+        S[f"comp_pb_{i}"] = np.nan if pd.isna(r.get("P/B", np.nan)) else float(r["P/B"])
+        S[f"comp_pe_{i}"] = np.nan if pd.isna(r.get("P/E", np.nan)) else float(r["P/E"])
+
+        S[f"inc_ev_{i}"] = not pd.isna(r.get("EV/EBITDA", np.nan))
+        S[f"inc_pb_{i}"] = not pd.isna(r.get("P/B", np.nan))
+        S[f"inc_pe_{i}"] = not pd.isna(r.get("P/E", np.nan))
+
+        S["comps"].setdefault(i, {})
+        S["comps"][i]["name"] = S[f"comp_name_{i}"]
+        S["comps"][i]["ticker"] = S[f"comp_ticker_{i}"]
+        S["comps"][i]["source"] = S[f"comp_source_{i}"]
+        S["comps"][i]["ev"] = S[f"comp_ev_{i}"]
+        S["comps"][i]["pb"] = S[f"comp_pb_{i}"]
+        S["comps"][i]["pe"] = S[f"comp_pe_{i}"]
+        S["comps"][i]["inc_ev"] = S[f"inc_ev_{i}"]
+        S["comps"][i]["inc_pb"] = S[f"inc_pb_{i}"]
+        S["comps"][i]["inc_pe"] = S[f"inc_pe_{i}"]
 
 # =========================================================
 # STEP 1 — INPUT COMPARABLE COMPANIES & MULTIPLES
 # =========================================================
-
 st.header("Step 1 — Input Comparable Companies & Multiples")
-st.subheader("Auto Peer Suggestions (JSE Wikipedia Notes-based + Yahoo Africa)")
+st.subheader("Auto Peer Suggestions from Africa Sector Mapping")
 
 S.setdefault("target_company", "")
 S.setdefault("auto_peer_count", 8)
@@ -589,128 +2082,85 @@ with cC:
 S["target_company"] = target_company
 S["auto_peer_count"] = int(peer_count)
 
-S.setdefault("sector_keyword", "")
-sector_keyword = st.text_input(
-    "Sector keyword (from Notes / industry idea) — drives peers",
-    value=S.get("sector_keyword", ""),
-    key="sector_keyword_input",
-    placeholder="e.g., beverages, banking, insurance, mining, retail, telecoms ...",
+
+# ================= LIVE PEER SEARCH HERE =================
+
+st.subheader("Live peer search and ratio fill")
+st.caption("Zimbabwe counters use mapped sector to fetch Africa peers first, then FMP/Finnhub as fallback.")
+live_peer_limit = st.slider(
+    "Live peers to import",
+    min_value=3,
+    max_value=12,
+    value=6,
+    step=1,
+    key="live_peer_limit"
 )
-S["sector_keyword"] = sector_keyword
 
-tag_options = suggest_matching_tags(sector_keyword, top_n=30) if sector_keyword.strip() else []
-chosen_tag = None
-if tag_options:
-    chosen_tag = st.selectbox(
-        "Matching Notes tags found on JSE (pick one to be precise)",
-        options=["(use my typed keyword)"] + tag_options,
-        index=0,
-        key="chosen_notes_tag",
-    )
+run_live_comps = st.button("⚡ Auto-search live peers and ratios")
 
-sector_used = sector_keyword.strip().lower()
-if chosen_tag and chosen_tag != "(use my typed keyword)":
-    sector_used = chosen_tag.strip().lower()
+S.setdefault("live_comps_df", pd.DataFrame())
+S.setdefault("live_comps_meta", {})
 
-if not sector_used and not target_company.strip():
-    st.warning("Type a sector keyword (e.g., 'banking') or a target company name first.")
-else:
-    if sector_used:
-        st.info(f"✅ JSE peers will be pulled by Notes tag: **{sector_used}**")
+if run_live_comps:
+    if not target_company.strip():
+        st.warning("Enter the company name or ticker first.")
     else:
-        st.info("✅ No sector keyword chosen — JSE peers may be empty.")
+        with st.spinner("Searching live peers and ratios..."):
+            live_df, meta = build_live_comps_from_target(
+                target_query=target_company,
+                max_peers=int(live_peer_limit)
+            )
+            S["live_comps_df"] = live_df
+            S["live_comps_meta"] = meta
 
-    jse_peer_rows = peers_from_notes_tag(sector_used, k=int(peer_count)) if sector_used else []
+            if live_df is not None and not live_df.empty:
+                apply_live_comps_to_session(live_df)
+                st.success(f"Loaded {len(live_df)} live peers into Step 1.")
+                if meta.get("warning"):
+                    st.warning(meta["warning"])
+            else:
+                st.error(meta.get("error", "Live peer search failed."))
 
-    # ✅ BIG pool slider
-    africa_limit = st.slider("How many Africa peers to fetch (Yahoo Finance)", 20, 300, 120, 20)
-    africa_df = yahoo_africa_peers(
-        sector_keyword=sector_used if sector_used else sector_keyword,
-        limit=int(africa_limit),
+live_df = S.get("live_comps_df", pd.DataFrame())
+live_meta = S.get("live_comps_meta", {})
+
+if live_meta:
+    tgt = live_meta.get("target", {})
+    if tgt:
+        st.caption(
+            f"Resolved target: {tgt.get('company', '')} "
+            f"({tgt.get('symbol', '')}) via {tgt.get('source', '')} | "
+            f"Peer source: {live_meta.get('peer_source', '')}"
+        )
+
+if live_df is not None and not live_df.empty:
+    df_show = live_df.copy()
+
+    ratio_cols = ["EV/EBITDA", "P/B", "P/E"]
+    for c in ratio_cols:
+        df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
+
+    st.dataframe(
+        df_show[["Company", "Ticker", "Exchange", "Country", "Sector", "Industry",
+                 "EV/EBITDA", "P/B", "P/E", "Source"]].style.format({
+            "EV/EBITDA": "{:,.2f}",
+            "P/B": "{:,.2f}",
+            "P/E": "{:,.2f}",
+        }),
+        width="stretch"
     )
 
-    peer_universe = st.radio(
-        "Which peers do you want to use?",
-        ["JSE only", "Africa only (Yahoo Finance)", "Both (JSE + Africa Yahoo)"],
-        index=2,
-        key="peer_universe_choice",
-    )
+    missing_all = df_show[ratio_cols].isna().all(axis=1)
+    if missing_all.any():
+        st.warning(
+            "Some peers were found, but a few ratio fields are still unavailable from the live providers."
+        )
 
-    c1, c2 = st.columns(2)
+# ================= END LIVE PEER SEARCH =================
 
-    with c1:
-        st.subheader("🇿🇦 JSE peers (Wikipedia Notes-based)")
-        if jse_peer_rows:
-            st.success(f"Suggested JSE peers (Notes match: {sector_used})")
-            st.markdown(format_peer_lines(jse_peer_rows))
 
-            jse_names = [r["Company"].strip() for r in jse_peer_rows if r.get("Company")]
-            chosen_jse = st.multiselect(
-                "Select JSE peers to use",
-                options=jse_names,
-                default=jse_names,
-                key="chosen_jse_peers_names",
-            )
-        else:
-            st.warning("No JSE peers found for that Notes keyword (try 'bank', 'insurance', 'telecom').")
-            chosen_jse = []
 
-    with c2:
-        st.subheader("🌍 Africa peers (Yahoo Finance)")
-        st.caption("Africa-only filter (blocks India/US/UK tickers and exchanges).")
-
-        if africa_df is not None and not africa_df.empty:
-            st.success(f"Suggested Africa peers (Yahoo Finance) — pool size: {len(africa_df)}")
-            st.markdown(format_global_peer_lines_yahoo(africa_df, max_rows=25))
-
-            global_options = []
-            for _, r in africa_df.iterrows():
-                nm = str(r.get("Company", "")).strip()
-                tk = str(r.get("Ticker", "")).strip()
-                ex = str(r.get("Exchange", "")).strip()
-                tp = str(r.get("Type", "")).strip()
-                meta = " | ".join([x for x in [tk, ex, tp] if x])
-                label = f"{nm} — {meta}" if meta else nm
-                global_options.append(label)
-
-            chosen_global_labels = st.multiselect(
-                "Select Africa peers to use",
-                options=global_options,
-                default=global_options[: min(len(global_options), int(peer_count))],
-                key="chosen_africa_peers_labels",
-            )
-            chosen_global = [x.split(" — ")[0].strip() for x in chosen_global_labels]
-        else:
-            st.warning("No Africa peers returned. Try a broader keyword (e.g., 'financial', 'insurance', 'bank').")
-            chosen_global = []
-
-    if peer_universe == "JSE only":
-        selected = chosen_jse
-    elif peer_universe == "Africa only (Yahoo Finance)":
-        selected = chosen_global
-    else:
-        selected = chosen_jse + chosen_global
-
-    seen = set()
-    selected_final = []
-    for nm in selected:
-        k = (nm or "").strip().lower()
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        selected_final.append(nm.strip())
-
-    st.info(f"✅ Selected peers to apply: **{len(selected_final)}**")
-
-    if auto_apply and selected_final:
-        if "num_comps" not in S or int(S.get("num_comps", 3)) < len(selected_final):
-            S["num_comps"] = len(selected_final)
-            S["num_comps_input"] = len(selected_final)
-
-        for i, name in enumerate(selected_final):
-            S[f"comp_name_{i}"] = name
-
-# ---- your existing Step 1 comparables inputs (unchanged)
+# ---- your existing Step 1 comparables inputs (UNCHANGED below)
 S.setdefault("num_comps", 3)
 S.setdefault("comps", {})
 
@@ -726,12 +2176,11 @@ S["num_comps"] = int(num_comps)
 for i in range(int(num_comps)):
     S["comps"].setdefault(i, {
         "name": f"Comp {i + 1}",
-        "ev": 0.0, "pb": 0.0, "pe": 0.0,
+        "ev": np.nan, "pb": np.nan, "pe": np.nan,
         "inc_ev": True, "inc_pb": True, "inc_pe": True
     })
 
 rows_comps = []
-
 for i in range(int(num_comps)):
     st.subheader(f"Comparable {i + 1}")
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1.3])
@@ -746,10 +2195,10 @@ for i in range(int(num_comps)):
         S["comps"][i]["name"] = name_val
 
     with c2:
-        default_ev = float(S.get(f"comp_ev_{i}", S["comps"][i]["ev"]))
+        default_ev = _num_input_default(S.get(f"comp_ev_{i}", S["comps"][i]["ev"]), 0.0)
         ev_val = st.number_input(
             f"{name_val} EV/EBITDA",
-            value=float(default_ev),
+            value=default_ev,
             step=0.01,
             format="%.2f",
             key=f"comp_ev_{i}",
@@ -757,10 +2206,10 @@ for i in range(int(num_comps)):
         S["comps"][i]["ev"] = ev_val
 
     with c3:
-        default_pb = float(S.get(f"comp_pb_{i}", S["comps"][i]["pb"]))
+        default_pb = _num_input_default(S.get(f"comp_pb_{i}", S["comps"][i]["pb"]), 0.0)
         pb_val = st.number_input(
             f"{name_val} P/B",
-            value=float(default_pb),
+            value=default_pb,
             step=0.01,
             format="%.2f",
             key=f"comp_pb_{i}",
@@ -768,16 +2217,20 @@ for i in range(int(num_comps)):
         S["comps"][i]["pb"] = pb_val
 
     with c4:
-        default_pe = float(S.get(f"comp_pe_{i}", S["comps"][i]["pe"]))
+        default_pe = _num_input_default(S.get(f"comp_pe_{i}", S["comps"][i]["pe"]), 0.0)
         pe_val = st.number_input(
             f"{name_val} P/E",
-            value=float(default_pe),
+            value=default_pe,
             step=0.01,
             format="%.2f",
             key=f"comp_pe_{i}",
         )
         S["comps"][i]["pe"] = pe_val
+    ticker_val = S.get(f"comp_ticker_{i}", "")
+    source_val = S.get(f"comp_source_{i}", "")
 
+    if ticker_val or source_val:
+        st.caption(f"Ticker: {ticker_val} | Ratio source: {source_val}")
     ev_key = f"inc_ev_{i}"
     pb_key = f"inc_pb_{i}"
     pe_key = f"inc_pe_{i}"
@@ -822,14 +2275,11 @@ S["comps_pe_list"] = df_comps["P/E"].astype(float).tolist()
 S["comps_inc_ev"] = df_comps["Include_EV"].astype(bool).tolist()
 S["comps_inc_pb"] = df_comps["Include_PB"].astype(bool).tolist()
 S["comps_inc_pe"] = df_comps["Include_PE"].astype(bool).tolist()
+
 # =========================================================
 # STEP 2 — AVERAGE & IMPLIED MULTIPLES
 # =========================================================
 st.header("Step 2 — Average & Implied Multiples")
-
-# Excel-style averaging:
-# - zeros INCLUDED
-# - blanks (NaN) ignored
 
 ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
 pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"]
@@ -838,9 +2288,6 @@ pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
 avg_ev = float(ev_series.mean()) if ev_series.notna().any() else np.nan
 avg_pb = float(pb_series.mean()) if pb_series.notna().any() else np.nan
 avg_pe = float(pe_series.mean()) if pe_series.notna().any() else np.nan
-
-
-
 
 S.setdefault("discount_pct", 25.0)
 discount_pct = st.number_input(
@@ -1638,7 +3085,6 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
     wb.save(bio)
     bio.seek(0)
     return bio.getvalue()
-
 
 excel_bytes = build_comps_excel_with_formulas(S, df_comps)
 
