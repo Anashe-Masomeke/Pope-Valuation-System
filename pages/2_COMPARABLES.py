@@ -1180,7 +1180,7 @@ def get_live_peer_row(
     yh = yahoo_profile_and_metrics(sym)
     ystats = yahoo_stats_table_fallback(sym)
     yhtml = yahoo_html_ratio_fallback(sym)
-    inv = investing_ratios(sym)
+    inv = {}
 
     info = {}
     try:
@@ -1192,7 +1192,6 @@ def get_live_peer_row(
     company = (
         _clean_text(yh.get("Company"))
         or _clean_text(info.get("longName") or info.get("shortName"))
-        or _clean_text(inv.get("Company"))
         or fallback_company
         or sym
     )
@@ -1247,9 +1246,6 @@ def get_live_peer_row(
     yahoo_html_exists = bool(yhtml.get("page_exists", False))
     yahoo_exists = yahoo_quote_exists or yahoo_stats_exists or yahoo_html_exists
 
-    has_investing_page = bool(inv.get("profile_url"))
-    has_investing_ratio = not _all_nan_ratio_dict(inv)
-
     source = ""
     ratio_note = ""
     profile_url = make_yahoo_profile_url(sym)
@@ -1261,7 +1257,7 @@ def get_live_peer_row(
             ystats.get("ratio_source")
             or yh.get("ratio_source")
             or yhtml.get("ratio_source")
-            or ""
+            or "Yahoo Finance"
         )
         ratio_note = (
             ystats.get("ratio_note")
@@ -1272,17 +1268,6 @@ def get_live_peer_row(
             if yhtml.get("ratio_source")
             else "Yahoo ratios fetched."
         )
-
-    elif has_investing_ratio:
-        # only used if it actually returned values
-        pe = inv.get("P/E", np.nan)
-        pb = inv.get("P/B", np.nan)
-        ev_ebitda = inv.get("EV/EBITDA", np.nan)
-        source = inv.get("ratio_source") or "Investing"
-        ratio_note = inv.get("ratio_note") or "Fetched from Investing first page."
-        profile_url = inv.get("profile_url") or profile_url
-        stats_url = inv.get("stats_url") or stats_url
-
     else:
         if yahoo_exists:
             source = ""
@@ -1292,16 +1277,9 @@ def get_live_peer_row(
                 or yhtml.get("ratio_note")
                 or "Yahoo page exists, but ratios were not found."
             )
-        elif has_investing_page:
-            source = ""
-            ratio_note = inv.get("ratio_note") or "Investing page exists, but ratios were not returned."
-            profile_url = inv.get("profile_url") or profile_url
-            stats_url = inv.get("stats_url") or stats_url
-            needs_manual_investing = True
         else:
             source = ""
-            ratio_note = "No Yahoo or Investing source returned values."
-
+            ratio_note = "Yahoo Finance returned no usable ratios."
     out.update({
         "Company": company,
         "Exchange": exchange,
