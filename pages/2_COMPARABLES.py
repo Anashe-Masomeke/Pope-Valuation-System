@@ -1342,11 +1342,19 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8, manual_s
             + df["P/E"].notna().astype(int)
     )
 
-    # keep peer list stable; do NOT let live ratio availability reshuffle peers
-    df = df.sort_values(
-        by=["SimilarityScore", "Company"],
+    # prefer peers that actually returned Yahoo ratios
+    df_with_ratios = df[df["RatioCount"] > 0].copy()
+
+    if not df_with_ratios.empty:
+        df = df_with_ratios.sort_values(
+            by=["RatioCount", "SimilarityScore", "Company"],
+            ascending=[False, False, True]
+        ).head(max_peers).reset_index(drop=True)
+    else:
+        df = df.sort_values(
+                by=["SimilarityScore", "Company"],
         ascending=[False, True]
-    ).head(max_peers).reset_index(drop=True)
+        ).head(max_peers).reset_index(drop=True)
 
     meta = {
         "target": target_profile,
@@ -1618,6 +1626,7 @@ if live_df is not None and not live_df.empty:
         "P/B",
         "P/E",
         "Source",
+        "RatioNote",
     ]
     st.dataframe(
         df_show[display_cols],
