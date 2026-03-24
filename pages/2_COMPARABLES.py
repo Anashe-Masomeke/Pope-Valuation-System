@@ -938,12 +938,10 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         s = str(x).strip()
         if s in ["", "N/A", "NaN", "None", "-", "--"]:
             return np.nan
-
-        s = s.replace(",", "").strip()
+        s = s.replace(",", "").replace("x", "").strip()
         m = re.search(r"-?\d+(?:\.\d+)?", s)
         if not m:
             return np.nan
-
         try:
             return float(m.group(0))
         except Exception:
@@ -972,106 +970,116 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         if html:
             out["page_exists"] = True
 
-        soup = BeautifulSoup(html, "html.parser")
+        # ---------------------------------
+        # 1) Try pandas.read_html first
+        # ---------------------------------
+        tables = []
+        try:
+            tables = pd.read_html(StringIO(html))
+        except Exception:
+            tables = []
 
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if not rows:
-                continue
+        wanted_labels = {
+            "P/E": ["trailing p/e", "forward p/e"],
+            "P/B": ["price/book", "price to book"],
+            "EV/EBITDA": ["enterprise value/ebitda", "ev/ebitda"],
+        }
 
-            header_cells = rows[0].find_all(["th", "td"])
-            headers = [c.get_text(" ", strip=True).lower() for c in header_cells]
+        def extract_from_table_df(df):
+            found = {"P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan}
 
-            current_idx = None
-            for i, h in enumerate(headers):
-                if "current" in h:
-                    current_idx = i
+            if df is None or df.empty:
+                return found
+
+            # flatten columns safely
+            cols = [str(c).strip().lower() for c in df.columns]
+            df2 = df.copy()
+            df2.columns = cols
+
+            # choose likely "current" column
+            current_col = None
+            for c in df2.columns:
+                if "current" in c:
+                    current_col = c
                     break
 
-            forward_pe_val = np.nan
-            trailing_pe_val = np.nan
-            pb_val = np.nan
-            ev_ebitda_val = np.nan
+            if current_col is None and len(df2.columns) >= 2:
+                current_col = df2.columns[1]
 
-            for tr in rows[1:]:
+            if current_col is None:
+                return found
+
+            label_col = df2.columns[0]
+
+            for _, row in df2.iterrows():
+                label = str(row.get(label_col, "")).strip().lower()
+                value = row.get(current_col, "")
+
+                if pd.isna(found["P/E"]) and any(x in label for x in wanted_labels["P/E"]):
+                    found["P/E"] = parse_ratio_value(value)
+
+                if pd.isna(found["P/B"]) and any(x in label for x in wanted_labels["P/B"]):
+                    found["P/B"] = parse_ratio_value(value)
+
+                if pd.isna(found["EV/EBITDA"]) and any(x in label for x in wanted_labels["EV/EBITDA"]):
+                    found["EV/EBITDA"] = parse_ratio_value(value)
+
+            return found
+
+        for t in tables:
+            vals = extract_from_table_df(t)
+
+            if pd.isna(out["P/E"]) and not pd.isna(vals["P/E"]):
+                out["P/E"] = vals["P/E"]
+            if pd.isna(out["P/B"]) and not pd.isna(vals["P/B"]):
+                out["P/B"] = vals["P/B"]
+            if pd.isna(out["EV/EBITDA"]) and not pd.isna(vals["EV/EBITDA"]):
+                out["EV/EBITDA"] = vals["EV/EBITDA"]
+
+        # ---------------------------------
+        # 2) BeautifulSoup row-by-row fallback
+        # ---------------------------------
+        if _all_nan_ratio_dict(out):
+            soup = BeautifulSoup(html, "html.parser")
+
+            rows = soup.find_all("tr")
+            for tr in rows:
                 cells = tr.find_all(["th", "td"])
-                vals = [c.get_text(" ", strip=True) for c in cells]
+                vals = [c.get_text(" ", strip=True) for c in cells if c.get_text(" ", strip=True)]
 
                 if len(vals) < 2:
                     continue
 
                 label = vals[0].strip().lower()
-                value = vals[current_idx] if current_idx is not None and len(vals) > current_idx else vals[-1]
 
-                if "forward p/e" in label and pd.isna(forward_pe_val):
-                    forward_pe_val = parse_ratio_value(value)
+                # Prefer second value after label, otherwise last
+                value_candidates = vals[1:]
+                value = value_candidates[0] if value_candidates else vals[-1]
 
-                elif "trailing p/e" in label and pd.isna(trailing_pe_val):
-                    trailing_pe_val = parse_ratio_value(value)
+                if pd.isna(out["P/E"]) and ("trailing p/e" in label or "forward p/e" in label):
+                    out["P/E"] = parse_ratio_value(value)
 
-                elif ("price/book" in label or "price to book" in label) and pd.isna(pb_val):
-                    pb_val = parse_ratio_value(value)
+                if pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
+                    out["P/B"] = parse_ratio_value(value)
 
-                elif ("enterprise value/ebitda" in label or "ev/ebitda" in label) and pd.isna(ev_ebitda_val):
-                    ev_ebitda_val = parse_ratio_value(value)
+                if pd.isna(out["EV/EBITDA"]) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
+                    out["EV/EBITDA"] = parse_ratio_value(value)
 
-            if pd.isna(out["P/E"]):
-                if not pd.isna(forward_pe_val):
-                    out["P/E"] = forward_pe_val
-                elif not pd.isna(trailing_pe_val):
-                    out["P/E"] = trailing_pe_val
-
-            if pd.isna(out["P/B"]) and not pd.isna(pb_val):
-                out["P/B"] = pb_val
-
-            if pd.isna(out["EV/EBITDA"]) and not pd.isna(ev_ebitda_val):
-                out["EV/EBITDA"] = ev_ebitda_val
-
-        if pd.isna(out["P/E"]) or pd.isna(out["P/B"]) or pd.isna(out["EV/EBITDA"]):
-            try:
-                tables = pd.read_html(StringIO(html))
-            except Exception:
-                tables = []
-
-            for t in tables:
-                if t is None or t.empty:
-                    continue
-
-                for _, row in t.iterrows():
-                    vals = [
-                        str(x).strip()
-                        for x in row.tolist()
-                        if str(x).strip() not in ["", "nan", "None"]
-                    ]
-                    if len(vals) < 2:
-                        continue
-
-                    label = vals[0].lower()
-                    value = vals[-1]
-
-                    if pd.isna(out["P/E"]) and ("forward p/e" in label or "trailing p/e" in label):
-                        out["P/E"] = parse_ratio_value(value)
-
-                    elif pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
-                        out["P/B"] = parse_ratio_value(value)
-
-                    elif pd.isna(out["EV/EBITDA"]) and (
-                        "enterprise value/ebitda" in label or "ev/ebitda" in label
-                    ):
-                        out["EV/EBITDA"] = parse_ratio_value(value)
-
+        # ---------------------------------
+        # 3) Raw HTML regex fallback
+        # ---------------------------------
         if pd.isna(out["P/E"]):
-            m = re.search(r"Trailing P/E.*?(-?\d+(?:\.\d+)?)", html, re.I | re.S)
+            m = re.search(r"Trailing P/E.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
             if m:
                 out["P/E"] = parse_ratio_value(m.group(1))
 
         if pd.isna(out["P/B"]):
-            m = re.search(r"Price/Book.*?(-?\d+(?:\.\d+)?)", html, re.I | re.S)
+            m = re.search(r"Price/Book.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
             if m:
                 out["P/B"] = parse_ratio_value(m.group(1))
 
         if pd.isna(out["EV/EBITDA"]):
-            m = re.search(r"Enterprise Value/EBITDA.*?(-?\d+(?:\.\d+)?)", html, re.I | re.S)
+            m = re.search(r"Enterprise Value/EBITDA.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
             if m:
                 out["EV/EBITDA"] = parse_ratio_value(m.group(1))
 
@@ -1085,7 +1093,6 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         out["ratio_note"] = f"Yahoo stats fetch failed: {repr(e)}"
 
     return out
-
 
 @st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
