@@ -624,7 +624,7 @@ def _safe_get(url, params=None, timeout=25, tries=3, headers=None):
     last_err = None
     use_headers = headers or HEADERS
 
-    for _ in range(int(tries)):
+    for attempt in range(int(tries)):
         try:
             r = SESSION.get(
                 url,
@@ -646,7 +646,7 @@ def _safe_get(url, params=None, timeout=25, tries=3, headers=None):
 
         except Exception as e:
             last_err = e
-            time.sleep(0.8 + random.random())
+            time.sleep(1.5 + attempt * 1.2 + random.random())
 
     raise last_err
 
@@ -656,7 +656,7 @@ def yahoo_warmup():
         _safe_get(
             "https://finance.yahoo.com/",
             timeout=15,
-            tries=2,
+            tries=4,
             headers={
                 "User-Agent": HEADERS["User-Agent"],
                 "Accept-Language": "en-US,en;q=0.9",
@@ -667,7 +667,7 @@ def yahoo_warmup():
             "https://query2.finance.yahoo.com/v1/finance/search",
             params={"q": "test", "quotesCount": 1, "newsCount": 0},
             timeout=15,
-            tries=2,
+            tries=4,
         )
     except Exception:
         pass
@@ -706,7 +706,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 20)
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -751,7 +751,7 @@ def investing_ratios(symbol: str):
             "Connection": "keep-alive",
         }
 
-        r = _safe_get(investing_url, timeout=25, tries=2, headers=html_headers)
+        r = _safe_get(investing_url, timeout=25, tries=4, headers=html_headers)
         html = r.text or ""
 
         def parse_ratio_value(x):
@@ -830,7 +830,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -868,7 +868,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
                 "modules": "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile"
             },
             timeout=25,
-            tries=2,
+            tries=4,
         )
         data = r.json()
         res = (((data.get("quoteSummary") or {}).get("result")) or [])
@@ -916,7 +916,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -966,7 +966,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     }
 
     try:
-        r = _safe_get(url, timeout=25, tries=2, headers=html_headers)
+        r = _safe_get(url, timeout=25, tries=4, headers=html_headers)
         html = r.text or ""
 
         if html:
@@ -1087,7 +1087,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1146,7 +1146,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 20)
 def get_live_peer_row(
     symbol: str,
     fallback_company: str = "",
@@ -1348,7 +1348,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8, manual_s
         live["UniverseIndustry"] = _clean_text(r.get("industry"))
         live["UniverseKeywords"] = _clean_text(r.get("sector_keywords"))
         rows.append(live)
-
+    time.sleep(0.6 + random.random() * 0.6)
     df = pd.DataFrame(rows).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
 
     if df.empty:
@@ -1359,14 +1359,15 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8, manual_s
         }
 
     df["RatioCount"] = (
-        df["EV/EBITDA"].notna().astype(int)
-        + df["P/B"].notna().astype(int)
-        + df["P/E"].notna().astype(int)
+            df["EV/EBITDA"].notna().astype(int)
+            + df["P/B"].notna().astype(int)
+            + df["P/E"].notna().astype(int)
     )
 
+    # keep peer list stable; do NOT let live ratio availability reshuffle peers
     df = df.sort_values(
-        by=["SimilarityScore", "RatioCount", "Company"],
-        ascending=[False, False, True]
+        by=["SimilarityScore", "Company"],
+        ascending=[False, True]
     ).head(max_peers).reset_index(drop=True)
 
     meta = {
