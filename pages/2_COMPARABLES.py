@@ -513,16 +513,16 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
     df = df[df["ticker"].map(lambda x: _clean_text(x).upper()) != tgt_symbol].copy()
     df = df[df["company"].map(lambda x: _norm_text(x)) != _norm_text(tgt_company)].copy()
 
-    # clean helper columns
+    # helper columns
     df["sector_l"] = df["sector"].map(lambda x: _clean_text(x).lower())
     df["industry_l"] = df["industry"].map(lambda x: _clean_text(x).lower())
     df["keywords_l"] = df["sector_keywords"].map(lambda x: _clean_text(x).lower())
     df["company_l"] = df["company"].map(lambda x: _clean_text(x).lower())
 
-    # broad same-sector match first
-    same_sector = df[df["sector_l"] == tgt_sector].copy() if tgt_sector else pd.DataFrame()
+    # broad same-sector universe
+    same_sector = df[df["sector_l"] == tgt_sector].copy() if tgt_sector else df.copy()
 
-    # if industry exists, prefer same industry inside sector
+    # exact / close industry
     same_industry = pd.DataFrame()
     if not same_sector.empty and tgt_industry:
         same_industry = same_sector[
@@ -530,9 +530,9 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
             same_sector["industry_l"].eq(tgt_industry)
         ].copy()
 
-    # keyword fallback if exact industry is too small
+    # keyword matches
     keyword_match = pd.DataFrame()
-    if same_industry.empty and not same_sector.empty and tgt_keywords:
+    if not same_sector.empty and tgt_keywords:
         keyword_match = same_sector[
             same_sector.apply(
                 lambda r: any(
@@ -543,47 +543,45 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
             )
         ].copy()
 
-    # choose best available bucket
-    if not same_industry.empty:
-        chosen = same_industry.copy()
-    elif not keyword_match.empty:
-        chosen = keyword_match.copy()
-    elif not same_sector.empty:
-        chosen = same_sector.copy()
-    else:
-        chosen = df.copy()
+    # combine instead of picking one bucket only
+    combined = pd.concat([same_industry, keyword_match, same_sector], axis=0, ignore_index=True)
+
+    if combined.empty:
+        combined = df.copy()
+
+    combined = combined.drop_duplicates(subset=["ticker"]).copy()
 
     # score + priority
-    chosen["SimilarityScore"] = chosen.apply(
+    combined["SimilarityScore"] = combined.apply(
         lambda r: strict_peer_score(r.to_dict(), target_profile), axis=1
     )
 
-    if "match_priority" not in chosen.columns:
-        chosen["match_priority"] = ""
+    if "match_priority" not in combined.columns:
+        combined["match_priority"] = ""
 
-    chosen["match_priority_num"] = pd.to_numeric(
-        chosen["match_priority"], errors="coerce"
+    combined["match_priority_num"] = pd.to_numeric(
+        combined["match_priority"], errors="coerce"
     ).fillna(0)
 
-    chosen = chosen.sort_values(
+    combined = combined.sort_values(
         by=["SimilarityScore", "match_priority_num", "company"],
         ascending=[False, False, True]
-    ).drop_duplicates(subset=["ticker"]).reset_index(drop=True)
+    ).reset_index(drop=True)
 
     S["debug_filter_stage_counts"] = {
         "universe_rows": len(df),
         "same_sector_rows": len(same_sector),
         "same_industry_rows": len(same_industry),
         "keyword_match_rows": len(keyword_match),
-        "chosen_rows": len(chosen),
+        "combined_rows": len(combined),
     }
 
-    S["debug_strict_candidates_preview"] = chosen[[
+    S["debug_strict_candidates_preview"] = combined[[
         "ticker", "company", "sector", "industry", "sector_keywords",
         "match_priority", "SimilarityScore"
     ]].head(30)
 
-    return chosen.head(max_peers).reset_index(drop=True)
+    return combined.head(max_peers).reset_index(drop=True)
 # =========================================================
 # LIVE RATIOS
 # =========================================================
