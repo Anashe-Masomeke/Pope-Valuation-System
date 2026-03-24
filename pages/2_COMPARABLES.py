@@ -1643,7 +1643,7 @@ if live_df is not None and not live_df.empty:
     ]
     st.dataframe(
         df_show[display_cols],
-        use_container_width=True,
+        width='stretch',
         column_config={
             "YahooStats": st.column_config.LinkColumn("Stats Page", display_text="Open Stats"),
             "YahooProfile": st.column_config.LinkColumn("Profile Page", display_text="Open"),
@@ -1746,7 +1746,7 @@ with st.expander("Debug peer search"):
 
         debug_cols = ["Ticker", "Source", "RatioNote", "EV/EBITDA", "P/B", "P/E"]
         available_debug_cols = [c for c in debug_cols if c in live_df.columns]
-        st.dataframe(live_df[available_debug_cols], use_container_width=True)
+        st.dataframe(live_df[available_debug_cols], width='stretch')
         st.write("Ratio notes by ticker:")
         for _, rr in live_df.iterrows():
             st.write(f"{rr.get('Ticker', '')}: {rr.get('RatioNote', '')}")
@@ -1865,7 +1865,7 @@ df_comps = pd.DataFrame(
 )
 
 st.subheader("Entered Comparables")
-st.dataframe(df_comps, use_container_width=True)
+st.dataframe(df_comps, width='stretch')
 
 S["comps_num"] = int(num_comps)
 S["comps_ev_list"] = df_comps["EV/EBITDA"].astype(float).tolist()
@@ -1908,7 +1908,7 @@ st.dataframe(
         "Discount (%)": [discount_pct] * 3,
         "Implied": [implied_ev, implied_pb, implied_pe]
     }).style.format({"Average": "{:,.2f}", "Implied": "{:,.2f}"}),
-    use_container_width=True
+    width='stretch'
 )
 
 S["implied_ev"] = float(implied_ev) if not pd.isna(implied_ev) else 0.0
