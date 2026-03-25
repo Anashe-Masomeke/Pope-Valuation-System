@@ -365,11 +365,7 @@ def get_target_profile(target_query: str, manual_sector_override: str = ""):
     if manual_sector_override.strip():
         sec, ind = normalize_sector_override(manual_sector_override)
         preferred_sector = sec or preferred_sector
-
-        # only replace industry if override actually provides one
-        if ind:
-            preferred_industry = ind
-
+        preferred_industry = ind
         source = f"{source} + manual_sector_override"
     if not preferred_keywords:
         preferred_keywords = split_keywords(f"{preferred_sector},{preferred_industry}")
@@ -1346,16 +1342,24 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8, manual_s
         }
 
     df["RatioCount"] = (
-        df["EV/EBITDA"].notna().astype(int)
-        + df["P/B"].notna().astype(int)
-        + df["P/E"].notna().astype(int)
+            df["EV/EBITDA"].notna().astype(int)
+            + df["P/B"].notna().astype(int)
+            + df["P/E"].notna().astype(int)
     )
 
-    # keep all peers, but push those with ratios to the top
-    df = df.sort_values(
-        by=["RatioCount", "SimilarityScore", "Company"],
-        ascending=[False, False, True]
-    ).head(max_peers).reset_index(drop=True)
+    # prefer peers that actually returned Yahoo ratios
+    df_with_ratios = df[df["RatioCount"] > 0].copy()
+
+    if not df_with_ratios.empty:
+        df = df_with_ratios.sort_values(
+            by=["RatioCount", "SimilarityScore", "Company"],
+            ascending=[False, False, True]
+        ).head(max_peers).reset_index(drop=True)
+    else:
+        df = df.sort_values(
+                by=["SimilarityScore", "Company"],
+        ascending=[False, True]
+        ).head(max_peers).reset_index(drop=True)
 
     meta = {
         "target": target_profile,
