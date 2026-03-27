@@ -1302,18 +1302,33 @@ def get_live_peer_row(
     })
 
     return out
-def build_live_comps_from_target(target_query: str, max_peers: int = 8, manual_sector_override: str = ""):
+def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_sector_override: str = ""):
     target_profile = get_target_profile(target_query, manual_sector_override)
 
-    strict_df = strict_universe_filter(target_profile, max_peers=max_peers)
+    # 1) first use precomputed target peers
+    strict_df = get_precomputed_target_peers(
+        target_profile,
+        max_peers=max_peers * 3
+    )
+
+    peer_source = "TARGET_PEER_MATCHES"
+
+    # 2) fallback to universe filter only if no precomputed peers found
+    if strict_df is None or strict_df.empty:
+        strict_df = strict_universe_filter(
+            target_profile,
+            max_peers=max_peers * 3
+        )
+        peer_source = "Africa universe Excel"
+
     S["debug_strict_df_shape"] = strict_df.shape if strict_df is not None else (0, 0)
     S["debug_strict_df_preview"] = strict_df.head(20) if strict_df is not None and not strict_df.empty else pd.DataFrame()
 
     if strict_df is None or strict_df.empty:
         return pd.DataFrame(), {
-            "error": f"No peers found in the strict Africa universe for {target_profile.get('target_symbol') or target_query}.",
+            "error": f"No peers found for {target_profile.get('target_symbol') or target_query}.",
             "target": target_profile,
-            "peer_source": "Africa universe Excel",
+            "peer_source": peer_source,
         }
 
     rows = []
@@ -1326,44 +1341,55 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 8, manual_s
             fallback_sector=r.get("sector", ""),
             fallback_industry=r.get("industry", ""),
         )
-        live["SimilarityScore"] = strict_peer_score(r.to_dict(), target_profile)
+
+        live["SimilarityScore"] = _clean_num(r.get("SimilarityScore"))
+        if pd.isna(live["SimilarityScore"]):
+            live["SimilarityScore"] = strict_peer_score(r.to_dict(), target_profile)
+
         live["UniverseSector"] = _clean_text(r.get("sector"))
         live["UniverseIndustry"] = _clean_text(r.get("industry"))
         live["UniverseKeywords"] = _clean_text(r.get("sector_keywords"))
+        live["YahooStatus"] = _clean_text(r.get("yahoo_status"))
+        live["MatchPriority"] = _clean_text(r.get("match_priority"))
+
         rows.append(live)
-    time.sleep(0.6 + random.random() * 0.6)
+
     df = pd.DataFrame(rows).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
 
     if df.empty:
         return pd.DataFrame(), {
-            "error": f"Peers matched in Excel, but live ratio fetch returned no rows for {target_profile.get('target_symbol') or target_query}.",
+            "error": f"Peers matched but live fetch returned no rows for {target_profile.get('target_symbol') or target_query}.",
             "target": target_profile,
-            "peer_source": "Africa universe Excel",
+            "peer_source": peer_source,
         }
 
+    # HARD RULE AGAIN: never allow Zimbabwe peers through
+    df["Country_l"] = df["Country"].map(lambda x: _clean_text(x).lower())
+    df = df[df["Country_l"] != "zimbabwe"].copy()
+
+    # optional extra protection against Zimbabwe tickers
+    df["Ticker_l"] = df["Ticker"].map(lambda x: _clean_text(x).lower())
+    df = df[
+        ~df["Ticker_l"].str.endswith(".zw", na=False) &
+        ~df["Ticker_l"].str.endswith(".vx", na=False)
+    ].copy()
+
+    df = df.drop(columns=["Country_l", "Ticker_l"], errors="ignore")
+
     df["RatioCount"] = (
-            df["EV/EBITDA"].notna().astype(int)
-            + df["P/B"].notna().astype(int)
-            + df["P/E"].notna().astype(int)
+        df["EV/EBITDA"].notna().astype(int)
+        + df["P/B"].notna().astype(int)
+        + df["P/E"].notna().astype(int)
     )
 
-    # prefer peers that actually returned Yahoo ratios
-    df_with_ratios = df[df["RatioCount"] > 0].copy()
-
-    if not df_with_ratios.empty:
-        df = df_with_ratios.sort_values(
-            by=["RatioCount", "SimilarityScore", "Company"],
-            ascending=[False, False, True]
-        ).head(max_peers).reset_index(drop=True)
-    else:
-        df = df.sort_values(
-                by=["SimilarityScore", "Company"],
-        ascending=[False, True]
-        ).head(max_peers).reset_index(drop=True)
+    df = df.sort_values(
+        by=["SimilarityScore", "RatioCount", "Company"],
+        ascending=[False, False, True]
+    ).head(max_peers).reset_index(drop=True)
 
     meta = {
         "target": target_profile,
-        "peer_source": "Africa universe Excel",
+        "peer_source": peer_source,
         "peer_count": len(df),
         "target_sector": target_profile.get("preferred_sector", ""),
         "target_industry": target_profile.get("preferred_industry", ""),
