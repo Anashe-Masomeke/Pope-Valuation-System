@@ -913,7 +913,6 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
 
     return out
 
-
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
@@ -968,42 +967,63 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         if html:
             out["page_exists"] = True
 
-        # -----------------------------
-        # 1. Prefer HTML tables exactly
-        # -----------------------------
+        # ---------------------------------------------------
+        # 1. JSON blob extraction from page HTML (best method)
+        # ---------------------------------------------------
+        # Yahoo often embeds the exact rows in page data.
+        patterns = {
+            "P/E": [
+                r'"Trailing P/E".{0,250}?"raw"\s*:\s*([0-9.\-]+)',
+                r'"trailingPE"\s*:\s*\{"raw"\s*:\s*([0-9.\-]+)',
+            ],
+            "P/B": [
+                r'"Price/Book".{0,250}?"raw"\s*:\s*([0-9.\-]+)',
+                r'"priceToBook"\s*:\s*\{"raw"\s*:\s*([0-9.\-]+)',
+            ],
+            "EV/EBITDA": [
+                r'"Enterprise Value/EBITDA".{0,250}?"raw"\s*:\s*([0-9.\-]+)',
+                r'"enterpriseToEbitda"\s*:\s*\{"raw"\s*:\s*([0-9.\-]+)',
+            ],
+        }
+
+        for field, pats in patterns.items():
+            for pat in pats:
+                m = re.search(pat, html, re.I | re.S)
+                if m:
+                    out[field] = parse_ratio_value(m.group(1))
+                    break
+
+        # ---------------------------------------------------
+        # 2. Exact table extraction using pandas.read_html
+        # ---------------------------------------------------
         try:
             tables = pd.read_html(StringIO(html))
         except Exception:
             tables = []
 
+        def get_current_col(df_):
+            cols = [str(c).strip() for c in df_.columns]
+            for c in cols:
+                if c.lower() == "current":
+                    return c
+            for c in cols:
+                if "current" in c.lower():
+                    return c
+            return cols[1] if len(cols) > 1 else None
+
+        def is_label_match(label, target):
+            label = str(label).strip().lower()
+            target = target.lower()
+            return label == target or target in label
+
         for t in tables:
-            if t is None or t.empty:
+            if t is None or t.empty or len(t.columns) < 2:
                 continue
 
             t = t.copy()
             t.columns = [str(c).strip() for c in t.columns]
-
-            # find first column as label column
             label_col = t.columns[0]
-
-            # prefer Current column exactly
-            current_col = None
-            for c in t.columns:
-                c_low = str(c).strip().lower()
-                if c_low == "current":
-                    current_col = c
-                    break
-
-            # fallback if Current not exact
-            if current_col is None:
-                for c in t.columns:
-                    if "current" in str(c).strip().lower():
-                        current_col = c
-                        break
-
-            # if still not found, use second column
-            if current_col is None and len(t.columns) >= 2:
-                current_col = t.columns[1]
+            current_col = get_current_col(t)
 
             if current_col is None:
                 continue
@@ -1012,19 +1032,23 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
                 label = str(row.get(label_col, "")).strip().lower()
                 value = row.get(current_col, "")
 
-                if pd.isna(out["P/E"]) and ("trailing p/e" in label):
+                if pd.isna(out["P/E"]) and is_label_match(label, "Trailing P/E"):
                     out["P/E"] = parse_ratio_value(value)
 
-                if pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
+                if pd.isna(out["P/B"]) and (
+                    is_label_match(label, "Price/Book") or is_label_match(label, "Price to Book")
+                ):
                     out["P/B"] = parse_ratio_value(value)
 
-                if pd.isna(out["EV/EBITDA"]) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
+                if pd.isna(out["EV/EBITDA"]) and (
+                    is_label_match(label, "Enterprise Value/EBITDA") or is_label_match(label, "EV/EBITDA")
+                ):
                     out["EV/EBITDA"] = parse_ratio_value(value)
 
-        # --------------------------------
-        # 2. BeautifulSoup table fallback
-        # --------------------------------
-        if _all_nan_ratio_dict(out):
+        # ---------------------------------------------------
+        # 3. BeautifulSoup exact row fallback
+        # ---------------------------------------------------
+        if pd.isna(out["P/E"]) or pd.isna(out["P/B"]) or pd.isna(out["EV/EBITDA"]):
             soup = BeautifulSoup(html, "html.parser")
 
             for table in soup.find_all("table"):
@@ -1032,8 +1056,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
                 if not rows:
                     continue
 
-                header_cells = rows[0].find_all(["th", "td"])
-                headers = [c.get_text(" ", strip=True).strip().lower() for c in header_cells]
+                headers = [c.get_text(" ", strip=True).strip().lower() for c in rows[0].find_all(["th", "td"])]
 
                 current_idx = None
                 for i, h in enumerate(headers):
@@ -1054,57 +1077,35 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
                 for tr in rows[1:]:
                     cells = tr.find_all(["th", "td"])
                     vals = [c.get_text(" ", strip=True) for c in cells]
-
                     if len(vals) <= current_idx:
                         continue
 
                     label = vals[0].strip().lower()
                     value = vals[current_idx]
 
-                    if pd.isna(out["P/E"]) and "trailing p/e" in label:
+                    if pd.isna(out["P/E"]) and ("trailing p/e" == label or "trailing p/e" in label):
                         out["P/E"] = parse_ratio_value(value)
 
-                    if pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
+                    if pd.isna(out["P/B"]) and (
+                        "price/book" == label or "price/book" in label or "price to book" in label
+                    ):
                         out["P/B"] = parse_ratio_value(value)
 
-                    if pd.isna(out["EV/EBITDA"]) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
+                    if pd.isna(out["EV/EBITDA"]) and (
+                        "enterprise value/ebitda" == label or "enterprise value/ebitda" in label or "ev/ebitda" in label
+                    ):
                         out["EV/EBITDA"] = parse_ratio_value(value)
-
-        # -----------------------------
-        # 3. Regex fallback
-        # -----------------------------
-        if pd.isna(out["P/E"]):
-            m = re.search(r"Trailing P/E.*?Current.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
-            if not m:
-                m = re.search(r"Trailing P/E.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
-            if m:
-                out["P/E"] = parse_ratio_value(m.group(1))
-
-        if pd.isna(out["P/B"]):
-            m = re.search(r"Price/Book.*?Current.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
-            if not m:
-                m = re.search(r"Price/Book.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
-            if m:
-                out["P/B"] = parse_ratio_value(m.group(1))
-
-        if pd.isna(out["EV/EBITDA"]):
-            m = re.search(r"Enterprise Value/EBITDA.*?Current.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
-            if not m:
-                m = re.search(r"Enterprise Value/EBITDA.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
-            if m:
-                out["EV/EBITDA"] = parse_ratio_value(m.group(1))
 
         if not _all_nan_ratio_dict(out):
             out["ratio_source"] = "Yahoo Statistics"
             out["ratio_note"] = "Fetched from Yahoo Statistics Current column."
         else:
-            out["ratio_note"] = "Yahoo statistics page loaded, but ratio rows were not found."
+            out["ratio_note"] = "Yahoo statistics page loaded, but exact ratio rows were not found."
 
     except Exception as e:
         out["ratio_note"] = f"Yahoo stats fetch failed: {repr(e)}"
 
     return out
-
 @st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
