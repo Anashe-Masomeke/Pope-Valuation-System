@@ -968,115 +968,49 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
             out["page_exists"] = True
 
         soup = BeautifulSoup(html, "html.parser")
-        text_rows = []
 
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if not rows:
+        row_map = {}
+
+        for tr in soup.find_all("tr"):
+            cells = tr.find_all(["th", "td"])
+            vals = [c.get_text(" ", strip=True) for c in cells if c.get_text(" ", strip=True)]
+
+            if len(vals) < 2:
                 continue
 
-            headers = [c.get_text(" ", strip=True).strip().lower() for c in rows[0].find_all(["th", "td"])]
-            current_idx = None
+            label = vals[0].strip().lower()
 
-            for i, h in enumerate(headers):
-                if h == "current":
-                    current_idx = i
-                    break
-            if current_idx is None:
-                for i, h in enumerate(headers):
-                    if "current" in h:
-                        current_idx = i
-                        break
-            if current_idx is None:
-                continue
+            current_val = None
+            if len(vals) >= 3:
+                current_val = vals[1]
+            else:
+                current_val = vals[-1]
 
-            for tr in rows[1:]:
-                cells = tr.find_all(["th", "td"])
-                vals = [c.get_text(" ", strip=True) for c in cells]
-                if len(vals) <= current_idx:
-                    continue
-
-                label = vals[0].strip().lower()
-                current_val = vals[current_idx].strip()
-                text_rows.append((label, current_val))
+            row_map[label] = current_val
 
         forward_pe = np.nan
         trailing_pe = np.nan
-        pb = np.nan
-        evebitda = np.nan
 
-        for label, value in text_rows:
-            if pd.isna(forward_pe) and "forward p/e" in label:
+        for label, value in row_map.items():
+            if pd.isna(forward_pe) and label == "forward p/e":
                 forward_pe = parse_ratio_value(value)
 
-            if pd.isna(trailing_pe) and "trailing p/e" in label:
+            if pd.isna(trailing_pe) and label == "trailing p/e":
                 trailing_pe = parse_ratio_value(value)
 
-            if pd.isna(pb) and ("price/book" in label or "price to book" in label):
-                pb = parse_ratio_value(value)
+            if pd.isna(out["P/B"]) and label == "price/book":
+                out["P/B"] = parse_ratio_value(value)
 
-            if pd.isna(evebitda) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
-                evebitda = parse_ratio_value(value)
+            if pd.isna(out["EV/EBITDA"]) and label == "enterprise value/ebitda":
+                out["EV/EBITDA"] = parse_ratio_value(value)
 
         out["P/E"] = forward_pe if not pd.isna(forward_pe) else trailing_pe
-        out["P/B"] = pb
-        out["EV/EBITDA"] = evebitda
-
-        if _all_nan_ratio_dict(out):
-            try:
-                tables = pd.read_html(StringIO(html))
-            except Exception:
-                tables = []
-
-            for t in tables:
-                if t is None or t.empty or len(t.columns) < 2:
-                    continue
-
-                t = t.copy()
-                t.columns = [str(c).strip().lower() for c in t.columns]
-                label_col = t.columns[0]
-
-                current_col = None
-                for c in t.columns:
-                    if c == "current":
-                        current_col = c
-                        break
-                if current_col is None:
-                    for c in t.columns:
-                        if "current" in c:
-                            current_col = c
-                            break
-                if current_col is None:
-                    continue
-
-                for _, row in t.iterrows():
-                    label = str(row.get(label_col, "")).strip().lower()
-                    value = row.get(current_col, "")
-
-                    if pd.isna(forward_pe) and "forward p/e" in label:
-                        forward_pe = parse_ratio_value(value)
-
-                    if pd.isna(trailing_pe) and "trailing p/e" in label:
-                        trailing_pe = parse_ratio_value(value)
-
-                    if pd.isna(pb) and ("price/book" in label or "price to book" in label):
-                        pb = parse_ratio_value(value)
-
-                    if pd.isna(evebitda) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
-                        evebitda = parse_ratio_value(value)
-
-                out["P/E"] = forward_pe if not pd.isna(forward_pe) else trailing_pe
-                out["P/B"] = pb
-                out["EV/EBITDA"] = evebitda
 
         if not _all_nan_ratio_dict(out):
             out["ratio_source"] = "Yahoo Statistics"
-            if not pd.isna(forward_pe):
-                out["ratio_note"] = "Fetched from Yahoo Statistics Current column. Used Forward P/E first."
-            else:
-                out["ratio_note"] = "Fetched from Yahoo Statistics Current column. Used Trailing P/E fallback."
+            out["ratio_note"] = "Fetched from exact Yahoo Statistics Valuation Measures rows."
         else:
-            out["ratio_note"] = "Yahoo statistics page loaded, but exact ratio rows were not found."
+            out["ratio_note"] = "Yahoo statistics page loaded, but exact valuation rows were not found."
 
     except Exception as e:
         out["ratio_note"] = f"Yahoo stats fetch failed: {repr(e)}"
@@ -1216,21 +1150,21 @@ def get_live_peer_row(
     # ---------------------------
     pe = ystats.get("P/E", np.nan)
     if pd.isna(pe):
-        pe = yhtml.get("P/E", np.nan)
-    if pd.isna(pe):
         pe = yh.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yhtml.get("P/E", np.nan)
 
     pb = ystats.get("P/B", np.nan)
     if pd.isna(pb):
-        pb = yhtml.get("P/B", np.nan)
-    if pd.isna(pb):
         pb = yh.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yhtml.get("P/B", np.nan)
 
     ev_ebitda = ystats.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
-        ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
-    if pd.isna(ev_ebitda):
         ev_ebitda = yh.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
 
     has_yahoo_ratio = not (
         pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
