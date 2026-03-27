@@ -914,7 +914,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 20)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -968,93 +968,51 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         if html:
             out["page_exists"] = True
 
-        # ---------------------------------
-        # 1) Try pandas.read_html first
-        # ---------------------------------
-        tables = []
+        # -----------------------------
+        # 1. Prefer HTML tables exactly
+        # -----------------------------
         try:
             tables = pd.read_html(StringIO(html))
         except Exception:
             tables = []
 
-        wanted_labels = {
-            "P/E": ["trailing p/e", "forward p/e"],
-            "P/B": ["price/book", "price to book"],
-            "EV/EBITDA": ["enterprise value/ebitda", "ev/ebitda"],
-        }
+        for t in tables:
+            if t is None or t.empty:
+                continue
 
-        def extract_from_table_df(df):
-            found = {"P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan}
+            t = t.copy()
+            t.columns = [str(c).strip() for c in t.columns]
 
-            if df is None or df.empty:
-                return found
+            # find first column as label column
+            label_col = t.columns[0]
 
-            # flatten columns safely
-            cols = [str(c).strip().lower() for c in df.columns]
-            df2 = df.copy()
-            df2.columns = cols
-
-            # choose likely "current" column
+            # prefer Current column exactly
             current_col = None
-            for c in df2.columns:
-                if "current" in c:
+            for c in t.columns:
+                c_low = str(c).strip().lower()
+                if c_low == "current":
                     current_col = c
                     break
 
-            if current_col is None and len(df2.columns) >= 2:
-                current_col = df2.columns[1]
+            # fallback if Current not exact
+            if current_col is None:
+                for c in t.columns:
+                    if "current" in str(c).strip().lower():
+                        current_col = c
+                        break
+
+            # if still not found, use second column
+            if current_col is None and len(t.columns) >= 2:
+                current_col = t.columns[1]
 
             if current_col is None:
-                return found
+                continue
 
-            label_col = df2.columns[0]
-
-            for _, row in df2.iterrows():
+            for _, row in t.iterrows():
                 label = str(row.get(label_col, "")).strip().lower()
                 value = row.get(current_col, "")
 
-                if pd.isna(found["P/E"]) and any(x in label for x in wanted_labels["P/E"]):
-                    found["P/E"] = parse_ratio_value(value)
-
-                if pd.isna(found["P/B"]) and any(x in label for x in wanted_labels["P/B"]):
-                    found["P/B"] = parse_ratio_value(value)
-
-                if pd.isna(found["EV/EBITDA"]) and any(x in label for x in wanted_labels["EV/EBITDA"]):
-                    found["EV/EBITDA"] = parse_ratio_value(value)
-
-            return found
-
-        for t in tables:
-            vals = extract_from_table_df(t)
-
-            if pd.isna(out["P/E"]) and not pd.isna(vals["P/E"]):
-                out["P/E"] = vals["P/E"]
-            if pd.isna(out["P/B"]) and not pd.isna(vals["P/B"]):
-                out["P/B"] = vals["P/B"]
-            if pd.isna(out["EV/EBITDA"]) and not pd.isna(vals["EV/EBITDA"]):
-                out["EV/EBITDA"] = vals["EV/EBITDA"]
-
-        # ---------------------------------
-        # 2) BeautifulSoup row-by-row fallback
-        # ---------------------------------
-        if _all_nan_ratio_dict(out):
-            soup = BeautifulSoup(html, "html.parser")
-
-            rows = soup.find_all("tr")
-            for tr in rows:
-                cells = tr.find_all(["th", "td"])
-                vals = [c.get_text(" ", strip=True) for c in cells if c.get_text(" ", strip=True)]
-
-                if len(vals) < 2:
-                    continue
-
-                label = vals[0].strip().lower()
-
-                # Prefer second value after label, otherwise last
-                value_candidates = vals[1:]
-                value = value_candidates[0] if value_candidates else vals[-1]
-
-                if pd.isna(out["P/E"]) and ("trailing p/e" in label or "forward p/e" in label):
+                if pd.isna(out["P/E"]) and ("trailing p/e" in label):
                     out["P/E"] = parse_ratio_value(value)
 
                 if pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
@@ -1063,27 +1021,82 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
                 if pd.isna(out["EV/EBITDA"]) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
                     out["EV/EBITDA"] = parse_ratio_value(value)
 
-        # ---------------------------------
-        # 3) Raw HTML regex fallback
-        # ---------------------------------
+        # --------------------------------
+        # 2. BeautifulSoup table fallback
+        # --------------------------------
+        if _all_nan_ratio_dict(out):
+            soup = BeautifulSoup(html, "html.parser")
+
+            for table in soup.find_all("table"):
+                rows = table.find_all("tr")
+                if not rows:
+                    continue
+
+                header_cells = rows[0].find_all(["th", "td"])
+                headers = [c.get_text(" ", strip=True).strip().lower() for c in header_cells]
+
+                current_idx = None
+                for i, h in enumerate(headers):
+                    if h == "current":
+                        current_idx = i
+                        break
+                if current_idx is None:
+                    for i, h in enumerate(headers):
+                        if "current" in h:
+                            current_idx = i
+                            break
+                if current_idx is None:
+                    current_idx = 1 if len(headers) > 1 else None
+
+                if current_idx is None:
+                    continue
+
+                for tr in rows[1:]:
+                    cells = tr.find_all(["th", "td"])
+                    vals = [c.get_text(" ", strip=True) for c in cells]
+
+                    if len(vals) <= current_idx:
+                        continue
+
+                    label = vals[0].strip().lower()
+                    value = vals[current_idx]
+
+                    if pd.isna(out["P/E"]) and "trailing p/e" in label:
+                        out["P/E"] = parse_ratio_value(value)
+
+                    if pd.isna(out["P/B"]) and ("price/book" in label or "price to book" in label):
+                        out["P/B"] = parse_ratio_value(value)
+
+                    if pd.isna(out["EV/EBITDA"]) and ("enterprise value/ebitda" in label or "ev/ebitda" in label):
+                        out["EV/EBITDA"] = parse_ratio_value(value)
+
+        # -----------------------------
+        # 3. Regex fallback
+        # -----------------------------
         if pd.isna(out["P/E"]):
-            m = re.search(r"Trailing P/E.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
+            m = re.search(r"Trailing P/E.*?Current.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
+            if not m:
+                m = re.search(r"Trailing P/E.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
             if m:
                 out["P/E"] = parse_ratio_value(m.group(1))
 
         if pd.isna(out["P/B"]):
-            m = re.search(r"Price/Book.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
+            m = re.search(r"Price/Book.*?Current.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
+            if not m:
+                m = re.search(r"Price/Book.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
             if m:
                 out["P/B"] = parse_ratio_value(m.group(1))
 
         if pd.isna(out["EV/EBITDA"]):
-            m = re.search(r"Enterprise Value/EBITDA.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
+            m = re.search(r"Enterprise Value/EBITDA.*?Current.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
+            if not m:
+                m = re.search(r"Enterprise Value/EBITDA.*?([0-9]+(?:\.[0-9]+)?)", html, re.I | re.S)
             if m:
                 out["EV/EBITDA"] = parse_ratio_value(m.group(1))
 
         if not _all_nan_ratio_dict(out):
             out["ratio_source"] = "Yahoo Statistics"
-            out["ratio_note"] = "Fetched from Yahoo Statistics."
+            out["ratio_note"] = "Fetched from Yahoo Statistics Current column."
         else:
             out["ratio_note"] = "Yahoo statistics page loaded, but ratio rows were not found."
 
