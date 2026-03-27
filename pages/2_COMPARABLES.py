@@ -894,11 +894,12 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         out["Industry"] = ap.get("industry") or ""
         out["Description"] = ap.get("longBusinessSummary") or ""
 
-        pe = _raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")) or _raw(fin.get("trailingPE"))
+        forward_pe = _raw(summary.get("forwardPE")) or _raw(dks.get("forwardPE")) or _raw(fin.get("forwardPE"))
+        trailing_pe = _raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")) or _raw(fin.get("trailingPE"))
         pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
         evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
 
-        out["P/E"] = _clean_num(pe)
+        out["P/E"] = _clean_num(forward_pe) if not pd.isna(_clean_num(forward_pe)) else _clean_num(trailing_pe)
         out["P/B"] = _clean_num(pb)
         out["EV/EBITDA"] = _clean_num(evebitda)
 
@@ -967,50 +968,69 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         if html:
             out["page_exists"] = True
 
-        soup = BeautifulSoup(html, "html.parser")
+        tables = pd.read_html(StringIO(html))
 
-        row_map = {}
+        best_hits = {
+            "forward_pe": np.nan,
+            "trailing_pe": np.nan,
+            "pb": np.nan,
+            "evebitda": np.nan,
+        }
 
-        for tr in soup.find_all("tr"):
-            cells = tr.find_all(["th", "td"])
-            vals = [c.get_text(" ", strip=True) for c in cells if c.get_text(" ", strip=True)]
-
-            if len(vals) < 2:
+        for t in tables:
+            if t is None or t.empty or len(t.columns) < 2:
                 continue
 
-            label = vals[0].strip().lower()
+            t = t.copy()
+            t.columns = [str(c).strip() for c in t.columns]
 
-            current_val = None
-            if len(vals) >= 3:
-                current_val = vals[1]
-            else:
-                current_val = vals[-1]
+            label_col = t.columns[0]
 
-            row_map[label] = current_val
+            current_col = None
+            for c in t.columns:
+                if str(c).strip().lower() == "current":
+                    current_col = c
+                    break
 
-        forward_pe = np.nan
-        trailing_pe = np.nan
+            if current_col is None:
+                for c in t.columns:
+                    if "current" in str(c).strip().lower():
+                        current_col = c
+                        break
 
-        for label, value in row_map.items():
-            if pd.isna(forward_pe) and label == "forward p/e":
-                forward_pe = parse_ratio_value(value)
+            if current_col is None:
+                continue
 
-            if pd.isna(trailing_pe) and label == "trailing p/e":
-                trailing_pe = parse_ratio_value(value)
+            for _, row in t.iterrows():
+                label = str(row.get(label_col, "")).strip().lower()
+                value = row.get(current_col, "")
 
-            if pd.isna(out["P/B"]) and label == "price/book":
-                out["P/B"] = parse_ratio_value(value)
+                if label == "forward p/e" and pd.isna(best_hits["forward_pe"]):
+                    best_hits["forward_pe"] = parse_ratio_value(value)
 
-            if pd.isna(out["EV/EBITDA"]) and label == "enterprise value/ebitda":
-                out["EV/EBITDA"] = parse_ratio_value(value)
+                elif label == "trailing p/e" and pd.isna(best_hits["trailing_pe"]):
+                    best_hits["trailing_pe"] = parse_ratio_value(value)
 
-        out["P/E"] = forward_pe if not pd.isna(forward_pe) else trailing_pe
+                elif label == "price/book" and pd.isna(best_hits["pb"]):
+                    best_hits["pb"] = parse_ratio_value(value)
+
+                elif label == "enterprise value/ebitda" and pd.isna(best_hits["evebitda"]):
+                    best_hits["evebitda"] = parse_ratio_value(value)
+
+        out["P/E"] = (
+            best_hits["forward_pe"]
+            if not pd.isna(best_hits["forward_pe"])
+            else best_hits["trailing_pe"]
+        )
+        out["P/B"] = best_hits["pb"]
+        out["EV/EBITDA"] = best_hits["evebitda"]
 
         if not _all_nan_ratio_dict(out):
+            pe_note = "Used Forward P/E first." if not pd.isna(best_hits["forward_pe"]) else "Used Trailing P/E fallback."
             out["ratio_source"] = "Yahoo Statistics"
-            out["ratio_note"] = "Fetched from exact Yahoo Statistics Valuation Measures rows."
+            out["ratio_note"] = f"Fetched from Yahoo Statistics exact Current column. {pe_note}"
         else:
-            out["ratio_note"] = "Yahoo statistics page loaded, but exact valuation rows were not found."
+            out["ratio_note"] = "Yahoo statistics page loaded, but exact Current-column valuation rows were not found."
 
     except Exception as e:
         out["ratio_note"] = f"Yahoo stats fetch failed: {repr(e)}"
