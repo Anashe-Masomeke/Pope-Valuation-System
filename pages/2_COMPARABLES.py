@@ -1302,6 +1302,78 @@ def get_live_peer_row(
     })
 
     return out
+@st.cache_data(show_spinner=False)
+def get_precomputed_target_peers(target_profile: dict, max_peers: int = 9) -> pd.DataFrame:
+    global TARGET_PEER_MATCHES_DF
+
+    if "TARGET_PEER_MATCHES_DF" not in globals() or TARGET_PEER_MATCHES_DF is None or TARGET_PEER_MATCHES_DF.empty:
+        return pd.DataFrame()
+
+    target_symbol = _clean_text(target_profile.get("target_symbol")).upper()
+    target_company = _clean_text(target_profile.get("target_company"))
+    target_key = _norm_text(target_symbol or target_company)
+
+    df = TARGET_PEER_MATCHES_DF.copy()
+
+    # identify target column
+    target_col = None
+    for c in ["target_symbol", "target_company", "target", "company"]:
+        if c in df.columns:
+            target_col = c
+            break
+
+    if target_col is None:
+        return pd.DataFrame()
+
+    df["_target_norm"] = df[target_col].map(_norm_text)
+    df = df[df["_target_norm"] == target_key].copy()
+
+    if df.empty and "target_company" in TARGET_PEER_MATCHES_DF.columns:
+        df = TARGET_PEER_MATCHES_DF.copy()
+        df["_target_norm"] = df["target_company"].map(_norm_text)
+        df = df[df["_target_norm"] == _norm_text(target_company)].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # standardize missing columns
+    for col in ["ticker", "company", "country", "exchange", "sector", "industry", "sector_keywords", "match_priority", "yahoo_status"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    # remove Zimbabwe peers
+    df["country_l"] = df["country"].map(lambda x: _clean_text(x).lower())
+    df = df[df["country_l"] != "zimbabwe"].copy()
+
+    # remove Zimbabwe tickers too
+    df["ticker"] = df["ticker"].map(normalize_peer_ticker)
+    df["ticker_l"] = df["ticker"].map(lambda x: _clean_text(x).lower())
+    df = df[
+        ~df["ticker_l"].str.endswith(".zw", na=False) &
+        ~df["ticker_l"].str.endswith(".vx", na=False)
+    ].copy()
+
+    # keep Yahoo-usable rows only
+    if "yahoo_status" in df.columns:
+        df = df[df["yahoo_status"].map(_is_yahoo_usable_status)].copy()
+
+    # similarity score
+    df["SimilarityScore"] = df.apply(
+        lambda r: strict_peer_score(r.to_dict(), target_profile),
+        axis=1
+    )
+
+    if "match_priority" not in df.columns:
+        df["match_priority"] = ""
+
+    df["match_priority_num"] = pd.to_numeric(df["match_priority"], errors="coerce").fillna(0)
+
+    df = df.sort_values(
+        by=["SimilarityScore", "match_priority_num", "company"],
+        ascending=[False, False, True]
+    ).drop_duplicates(subset=["ticker"]).reset_index(drop=True)
+
+    return df.head(max_peers).copy()    
 def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_sector_override: str = ""):
     target_profile = get_target_profile(target_query, manual_sector_override)
 
