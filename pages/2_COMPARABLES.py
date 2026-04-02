@@ -2047,8 +2047,6 @@ discount_pct = st.number_input(
     key="discount_pct",
 )
 
-# Update session state after input
-S["discount_pct"] = discount_pct
 
 discount = discount_pct / 100
 
