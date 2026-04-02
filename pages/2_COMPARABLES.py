@@ -1917,7 +1917,17 @@ S["comps_inc_ev"] = df_comps["Include_EV"].astype(bool).tolist()
 S["comps_inc_pb"] = df_comps["Include_PB"].astype(bool).tolist()
 S["comps_inc_pe"] = df_comps["Include_PE"].astype(bool).tolist()
 
-
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
+def filtered_average(series):
+    series = pd.to_numeric(series, errors="coerce")  # ensure numeric
+    series = series.dropna()  # remove NaNs only
+    
+    if len(series) == 0:
+        return np.nan
+    
+    return series.mean()
 # =========================================================
 # STEP 2: AVERAGES
 # =========================================================
