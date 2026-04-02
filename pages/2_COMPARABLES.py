@@ -9,10 +9,7 @@ from io import StringIO
 import requests
 import time
 import random
-S = st.session_state
 
-if "discount_pct" not in S:
-    S["discount_pct"] = 25.0  # default value, only set once
 st.set_page_config(page_title="Comparables Valuation", layout="wide")
 # ---------------------------------------------------------
 # GLOBAL STYLING (MATCH DDM)
@@ -2045,10 +2042,13 @@ avg_pe = filtered_average(pe_series)
 
 discount_pct = st.number_input(
     "Discount factor (%)",
-    value=S["discount_pct"],  # load from session state
     step=1.0,
-    key="discount_pct"  # ties input directly to session state
+    value=S.get("discount_pct", 25.0),  # <- load existing or default
+    key="discount_pct",
 )
+
+# Update session state after input
+S["discount_pct"] = discount_pct
 
 discount = discount_pct / 100
 
