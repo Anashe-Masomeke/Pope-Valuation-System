@@ -2039,21 +2039,16 @@ pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
 avg_ev = filtered_average(ev_series)
 avg_pb = filtered_average(pb_series)
 avg_pe = filtered_average(pe_series)
-
-# Step 0: ensure session_state has a discount_pct
 if "discount_pct" not in st.session_state:
-    st.session_state["discount_pct"] = 25.0  # only set once
+    st.session_state["discount_pct"] = 25.0
 
-# Step 1: number input tied to session_state key
 discount_pct = st.number_input(
     "Discount factor (%)",
     step=1.0,
-    key="discount_pct"  # Streamlit auto-saves here
+    key="discount_pct"
 )
 
-# Use it in calculations
 discount = discount_pct / 100
-
 implied_ev = avg_ev * (1 - discount)
 implied_pb = avg_pb * (1 - discount)
 implied_pe = avg_pe * (1 - discount)
