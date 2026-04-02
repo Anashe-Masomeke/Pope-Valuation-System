@@ -2052,20 +2052,20 @@ discount_pct = st.number_input(
 # Step 2 — Averages & Discount
 # ============================
 
-# 1️⃣ Initialize session_state only once
-if "discount_pct" not in st.session_state:
-    st.session_state["discount_pct"] = 25.0  # default value
+# Initialize session_state only once
+if "discount_factor" not in st.session_state:
+    st.session_state["discount_factor"] = 25.0  # default
 
-# 2️⃣ Pass the value explicitly to number_input
+# Use a **unique key** for the widget itself
 discount_pct = st.number_input(
     "Discount factor (%)",
     step=1.0,
-    value=st.session_state["discount_pct"],  # <-- explicitly use session_state
-    key="discount_pct"
+    value=st.session_state["discount_factor"],
+    key="discount_factor_input"  # <-- unique key
 )
 
-# 3️⃣ Save back any change immediately
-st.session_state["discount_pct"] = discount_pct
+# Save back to session_state
+st.session_state["discount_factor"] = discount_pct
 
 # =========================================================
 # HELPER FUNCTIONS
