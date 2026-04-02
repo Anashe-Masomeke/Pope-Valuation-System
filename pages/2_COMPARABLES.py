@@ -2067,6 +2067,48 @@ discount_pct = st.number_input(
 # 3️⃣ Save back any change immediately
 st.session_state["discount_pct"] = discount_pct
 
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
+def filtered_average(series):
+    series = pd.to_numeric(series, errors="coerce")
+    series = series.dropna()
+    
+    if len(series) == 0:
+        return np.nan
+    
+    return series.mean()
+
+
+# =========================================================
+# STEP 2: AVERAGES
+# =========================================================
+
+st.header("Step 2 — Average & Implied Multiples")
+
+ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
+pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"]
+pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
+
+avg_ev = filtered_average(ev_series)
+avg_pb = filtered_average(pb_series)
+avg_pe = filtered_average(pe_series)
+
+# 1️⃣ Initialize session_state only once
+if "discount_factor" not in st.session_state:
+    st.session_state["discount_factor"] = 25.0  # default value
+
+# 2️⃣ Pass the value explicitly to number_input with a unique key
+discount_pct = st.number_input(
+    "Discount factor (%)",
+    step=1.0,
+    value=st.session_state["discount_factor"],  # <-- use session_state
+    key="discount_factor_input"                  # <-- unique key
+)
+
+# 3️⃣ Save back any change immediately
+st.session_state["discount_factor"] = discount_pct
+
 # 4️⃣ Compute discount & implied multiples
 discount = discount_pct / 100
 implied_ev = avg_ev * (1 - discount)
