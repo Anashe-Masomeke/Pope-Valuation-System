@@ -1891,7 +1891,15 @@ for i in range(int(num_comps)):
     S["comps"][i]["inc_pb"] = inc_pb
     S["comps"][i]["inc_pe"] = inc_pe
 
-    rows.append([name, ev, pb, pe, inc_ev, inc_pb, inc_pe])
+    rows.append({
+       "Company": name,
+       "EV/EBITDA": ev,
+       "P/B": pb,
+       "P/E": pe,
+       "Include_EV": inc_ev,
+       "Include_PB": inc_pb,
+       "Include_PE": inc_pe
+    })
 
 df_comps = pd.DataFrame(
     rows,
