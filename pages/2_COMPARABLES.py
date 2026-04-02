@@ -2025,13 +2025,12 @@ def filtered_average(series):
 
 
 # =========================================================
-# STEP 2: AVERAGES
+# STEP 2 — AVERAGE & IMPLIED MULTIPLES
 # =========================================================
-
-
 
 st.header("Step 2 — Average & Implied Multiples")
 
+# Compute series based on selected comparables
 ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
 pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"]
 pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
@@ -2039,83 +2038,29 @@ pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
 avg_ev = filtered_average(ev_series)
 avg_pb = filtered_average(pb_series)
 avg_pe = filtered_average(pe_series)
-if "discount_pct" not in st.session_state:
-    st.session_state["discount_pct"] = 25.0
 
-discount_pct = st.number_input(
-    "Discount factor (%)",
-    step=1.0,
-    key="discount_pct"
-)
-
-# ============================
-# Step 2 — Averages & Discount
-# ============================
-
-# Initialize session_state only once
+# --- Step 2: Discount Factor ---
+# Use a **unique key** for the widget and session_state
 if "discount_factor" not in st.session_state:
     st.session_state["discount_factor"] = 25.0  # default
 
-# Use a **unique key** for the widget itself
 discount_pct = st.number_input(
     "Discount factor (%)",
     step=1.0,
-    value=st.session_state["discount_factor"],
-    key="discount_factor_input"  # <-- unique key
+    value=st.session_state["discount_factor"],  # load from session_state
+    key="discount_factor_widget",               # UNIQUE widget key
 )
 
 # Save back to session_state
 st.session_state["discount_factor"] = discount_pct
 
-# =========================================================
-# HELPER FUNCTIONS
-# =========================================================
-def filtered_average(series):
-    series = pd.to_numeric(series, errors="coerce")
-    series = series.dropna()
-    
-    if len(series) == 0:
-        return np.nan
-    
-    return series.mean()
-
-
-# =========================================================
-# STEP 2: AVERAGES
-# =========================================================
-
-st.header("Step 2 — Average & Implied Multiples")
-
-ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
-pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"]
-pe_series = df_comps.loc[df_comps["Include_PE"] == True, "P/E"]
-
-avg_ev = filtered_average(ev_series)
-avg_pb = filtered_average(pb_series)
-avg_pe = filtered_average(pe_series)
-
-# 1️⃣ Initialize session_state only once
-if "discount_factor" not in st.session_state:
-    st.session_state["discount_factor"] = 25.0  # default value
-
-# 2️⃣ Pass the value explicitly to number_input with a unique key
-discount_pct = st.number_input(
-    "Discount factor (%)",
-    step=1.0,
-    value=st.session_state["discount_factor"],  # <-- use session_state
-    key="discount_factor_input"                  # <-- unique key
-)
-
-# 3️⃣ Save back any change immediately
-st.session_state["discount_factor"] = discount_pct
-
-# 4️⃣ Compute discount & implied multiples
+# Compute discount & implied multiples
 discount = discount_pct / 100
 implied_ev = avg_ev * (1 - discount)
 implied_pb = avg_pb * (1 - discount)
 implied_pe = avg_pe * (1 - discount)
 
-# 5️⃣ Display
+# Display results
 st.dataframe(
     pd.DataFrame({
         "Multiple": ["EV/EBITDA", "P/B", "P/E"],
@@ -2126,11 +2071,10 @@ st.dataframe(
     width='stretch'
 )
 
-# 6️⃣ Save implied multiples to session_state
+# Save implied multiples to session_state
 st.session_state["implied_ev"] = float(implied_ev) if not pd.isna(implied_ev) else 0.0
 st.session_state["implied_pb"] = float(implied_pb) if not pd.isna(implied_pb) else 0.0
 st.session_state["implied_pe"] = float(implied_pe) if not pd.isna(implied_pe) else 0.0
-
 # =========================================================
 # TIMING SOURCE (from DCF) — BASE USED BY BOTH EBITDA & EARNINGS
 # =========================================================
