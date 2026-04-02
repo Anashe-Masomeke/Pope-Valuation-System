@@ -2040,14 +2040,18 @@ avg_ev = filtered_average(ev_series)
 avg_pb = filtered_average(pb_series)
 avg_pe = filtered_average(pe_series)
 
+# Step 0: ensure session_state has a discount_pct
+if "discount_pct" not in st.session_state:
+    st.session_state["discount_pct"] = 25.0  # only set once
+
+# Step 1: number input tied to session_state key
 discount_pct = st.number_input(
     "Discount factor (%)",
     step=1.0,
-    value=S.get("discount_pct", 25.0),  # <- load existing or default
-    key="discount_pct",
+    key="discount_pct"  # Streamlit auto-saves here
 )
 
-
+# Use it in calculations
 discount = discount_pct / 100
 
 implied_ev = avg_ev * (1 - discount)
