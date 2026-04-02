@@ -2048,11 +2048,32 @@ discount_pct = st.number_input(
     key="discount_pct"
 )
 
+# ============================
+# Step 2 — Averages & Discount
+# ============================
+
+# 1️⃣ Initialize session_state only once
+if "discount_pct" not in st.session_state:
+    st.session_state["discount_pct"] = 25.0  # default value
+
+# 2️⃣ Pass the value explicitly to number_input
+discount_pct = st.number_input(
+    "Discount factor (%)",
+    step=1.0,
+    value=st.session_state["discount_pct"],  # <-- explicitly use session_state
+    key="discount_pct"
+)
+
+# 3️⃣ Save back any change immediately
+st.session_state["discount_pct"] = discount_pct
+
+# 4️⃣ Compute discount & implied multiples
 discount = discount_pct / 100
 implied_ev = avg_ev * (1 - discount)
 implied_pb = avg_pb * (1 - discount)
 implied_pe = avg_pe * (1 - discount)
 
+# 5️⃣ Display
 st.dataframe(
     pd.DataFrame({
         "Multiple": ["EV/EBITDA", "P/B", "P/E"],
@@ -2063,9 +2084,10 @@ st.dataframe(
     width='stretch'
 )
 
-S["implied_ev"] = float(implied_ev) if not pd.isna(implied_ev) else 0.0
-S["implied_pb"] = float(implied_pb) if not pd.isna(implied_pb) else 0.0
-S["implied_pe"] = float(implied_pe) if not pd.isna(implied_pe) else 0.0
+# 6️⃣ Save implied multiples to session_state
+st.session_state["implied_ev"] = float(implied_ev) if not pd.isna(implied_ev) else 0.0
+st.session_state["implied_pb"] = float(implied_pb) if not pd.isna(implied_pb) else 0.0
+st.session_state["implied_pe"] = float(implied_pe) if not pd.isna(implied_pe) else 0.0
 
 # =========================================================
 # TIMING SOURCE (from DCF) — BASE USED BY BOTH EBITDA & EARNINGS
