@@ -2011,6 +2011,8 @@ def filtered_average(series):
         return np.nan
     
     return series.mean()
+    if "discount_pct" not in S:
+    S["discount_pct"] = 25.0
 # =========================================================
 # STEP 2: AVERAGES
 # =========================================================
@@ -2026,7 +2028,6 @@ avg_pe = filtered_average(pe_series)
 
 discount_pct = st.number_input(
     "Discount factor (%)",
-    value=float(st.session_state.get("discount_pct", 25.0)),
     step=1.0,
     key="discount_pct",
 )
