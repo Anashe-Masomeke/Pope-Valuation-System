@@ -2010,11 +2010,27 @@ def filtered_average(series):
     if len(series) == 0:
         return np.nan
     
- if "discount_pct" not in S:
-    S["discount_pct"] = 25.0
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
+def filtered_average(series):
+    series = pd.to_numeric(series, errors="coerce")
+    series = series.dropna()
+    
+    if len(series) == 0:
+        return np.nan
+    
+    return series.mean()
+
+
 # =========================================================
 # STEP 2: AVERAGES
 # =========================================================
+
+# ✅ MUST be OUTSIDE function (no indentation)
+if "discount_pct" not in S:
+    S["discount_pct"] = 25.0
+
 st.header("Step 2 — Average & Implied Multiples")
 
 ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
@@ -2030,6 +2046,7 @@ discount_pct = st.number_input(
     step=1.0,
     key="discount_pct",
 )
+
 discount = discount_pct / 100
 
 implied_ev = avg_ev * (1 - discount)
