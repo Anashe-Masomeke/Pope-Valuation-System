@@ -10,6 +10,90 @@ import requests
 import time
 import random
 st.set_page_config(page_title="Comparables Valuation", layout="wide")
+# ---------------------------------------------------------
+# GLOBAL STYLING (MATCH DDM)
+# ---------------------------------------------------------
+import base64
+
+def add_watermark():
+    logo_path = Path("assets") / "fbc_logo.png"
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode()
+
+        st.markdown(f"""
+        <style>
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 40;
+            left: 50;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/png;base64,{logo_base64}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 1500px;
+            opacity: 0.07;
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+
+add_watermark()
+
+
+st.markdown("""
+<style>
+
+/* Load Material Icons */
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+
+/* Sidebar collapse button fix */
+.material-icons, 
+span.material-icons,
+i.material-icons,
+[data-testid="stSidebarCollapseButton"] span,
+[data-testid="stSidebarCollapseButton"] i {
+    font-family: 'Material Icons' !important;
+}
+
+/* Sidebar button styling */
+[data-testid="stSidebarCollapseButton"] button {
+    background: #003399 !important;
+    border: 1px solid rgba(255,255,255,0.25) !important;
+    border-radius: 999px !important;
+    width: 44px !important;
+    height: 44px !important;
+    box-shadow: 0 6px 18px rgba(0, 51, 153, 0.35) !important;
+}
+
+/* Sidebar gradient */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #003399 0%, #001a4d 100%) !important;
+    color: white !important;
+}
+
+/* Sidebar text */
+section[data-testid="stSidebar"] * {
+    color: white !important;
+}
+
+/* Fonts */
+html, body, .stApp, .block-container,
+p, div, label,
+h1, h2, h3, h4, h5, h6 {
+  font-family: Georgia, "Times New Roman", serif !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 st.markdown("All values + inputs are **saved in session_state**, so switching pages keeps your work.")
 
