@@ -1639,6 +1639,30 @@ def render_peer_picker_table(df_live: pd.DataFrame):
     S["live_comps_df_selected"] = selected_df.copy()
 
     return selected_df
+
+@st.cache_data(ttl=3600)
+def fetch_yahoo_ratios(ticker):
+
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info
+
+        pe = info.get("forwardPE") or info.get("trailingPE")
+        pb = info.get("priceToBook")
+        ev_ebitda = info.get("enterpriseToEbitda")
+
+        return {
+            "P/E": pe,
+            "P/B": pb,
+            "EV/EBITDA": ev_ebitda
+        }
+
+    except:
+        return {
+            "P/E": None,
+            "P/B": None,
+            "EV/EBITDA": None
+        }
 # =========================================================
 # STEP 1 — INPUT COMPARABLE COMPANIES & MULTIPLES
 # =========================================================
@@ -1900,13 +1924,19 @@ for i in range(int(num_comps)):
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1.2])
 
     with c1:
-        default_name = S.get(f"comp_name_{i}", S["comps"][i]["name"])
-        name = st.text_input(
-            f"Company {i + 1} name",
-            value=str(default_name),
-            key=f"comp_name_{i}",
+        ticker = st.text_input(
+            f"Ticker {i+1}",
+            value=st.session_state["comps"][i]["name"],
+            key=f"name_{i}"
         )
-        S["comps"][i]["name"] = name
+        
+        ratios = fetch_yahoo_ratios(ticker)
+        
+        ev = ratios["EV/EBITDA"] if ratios["EV/EBITDA"] else 0.0
+        pb = ratios["P/B"] if ratios["P/B"] else 0.0
+        pe = ratios["P/E"] if ratios["P/E"] else 0.0
+        
+        st.session_state["comps"][i]["name"] = ticker
 
     with c2:
         default_ev = _num_input_default(S.get(f"comp_ev_{i}", S["comps"][i]["ev"]), 0.0)
