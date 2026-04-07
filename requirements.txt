@@ -10,4 +10,5 @@ scikit-learn
 lxml
 html5lib
 beautifulsoup4
+yahooquery
 
