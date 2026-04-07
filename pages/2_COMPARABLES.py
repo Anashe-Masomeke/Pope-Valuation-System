@@ -16,6 +16,7 @@ st.set_page_config(page_title="Comparables Valuation", layout="wide")
 # ---------------------------------------------------------
 import base64
 
+
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -47,8 +48,8 @@ def add_watermark():
         </style>
         """, unsafe_allow_html=True)
 
-add_watermark()
 
+add_watermark()
 
 st.markdown("""
 <style>
@@ -182,6 +183,7 @@ def filtered_average(values, band=0.4):
     keep = arr[(arr >= lower) & (arr <= upper)]
     return float(np.mean(keep if len(keep) > 0 else arr))
 
+
 # =========================================================
 # UNIVERSE FILE
 # =========================================================
@@ -309,11 +311,13 @@ def load_peer_universe_bundle(path: str):
     alias_map = alias_map.rename(columns={k: v for k, v in rename_alias.items() if k in alias_map.columns})
 
     # ensure required columns exist
-    for col in ["ticker", "company", "country", "exchange", "sector", "industry", "sector_keywords", "match_priority", "yahoo_status"]:
+    for col in ["ticker", "company", "country", "exchange", "sector", "industry", "sector_keywords", "match_priority",
+                "yahoo_status"]:
         if col not in universe.columns:
             universe[col] = ""
 
-    for col in ["target_symbol", "target_company", "preferred_sector", "preferred_industry", "preferred_peer_keywords", "search_aliases"]:
+    for col in ["target_symbol", "target_company", "preferred_sector", "preferred_industry", "preferred_peer_keywords",
+                "search_aliases"]:
         if col not in zim_map.columns:
             zim_map[col] = ""
 
@@ -349,20 +353,43 @@ UNIVERSE_DF, ZIM_TARGET_MAP_DF, SECTOR_ALIAS_DF, UNIVERSE_DEBUG = load_peer_univ
 # FALLBACK ZIM TARGET MAP
 # =========================================================
 FALLBACK_ZIM_TARGETS = [
-    {"target_symbol": "ECOZIM", "target_company": "Econet Wireless Zimbabwe", "preferred_sector": "Telecommunications", "preferred_industry": "Mobile Telecoms", "preferred_peer_keywords": "telecommunications,telecom,mobile,wireless,communications,network,broadband,data"},
-    {"target_symbol": "CBZ", "target_company": "CBZ", "preferred_sector": "Banking", "preferred_industry": "Commercial Banks", "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
-    {"target_symbol": "FBC", "target_company": "FBC", "preferred_sector": "Banking", "preferred_industry": "Commercial Banks", "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
-    {"target_symbol": "NMBZ", "target_company": "NMBZ", "preferred_sector": "Banking", "preferred_industry": "Commercial Banks", "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
-    {"target_symbol": "ZB", "target_company": "ZB", "preferred_sector": "Banking", "preferred_industry": "Commercial Banks", "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
-    {"target_symbol": "PADENGA", "target_company": "Padenga", "preferred_sector": "Mining", "preferred_industry": "Gold Mining", "preferred_peer_keywords": "gold mining,gold,gold producer,gold miner,mining,minerals,precious metals"},
-    {"target_symbol": "CMCL", "target_company": "Caledonia", "preferred_sector": "Mining", "preferred_industry": "Gold Mining", "preferred_peer_keywords": "gold mining,gold,gold producer,gold miner,mining,minerals,precious metals"},
-    {"target_symbol": "DELTA", "target_company": "Delta", "preferred_sector": "Consumer Staples", "preferred_industry": "Beverages", "preferred_peer_keywords": "beverages,brewery,beer,spirits,distillery,drinks"},
-    {"target_symbol": "AFDIS", "target_company": "Afdis", "preferred_sector": "Consumer Staples", "preferred_industry": "Beverages", "preferred_peer_keywords": "beverages,brewery,beer,spirits,distillery,drinks"},
-    {"target_symbol": "INNSCOR", "target_company": "Innscor Africa", "preferred_sector": "Consumer Staples", "preferred_industry": "Food Producers", "preferred_peer_keywords": "food,consumer,food processing,packaged foods,brands"},
-    {"target_symbol": "SIMBISA", "target_company": "Simbisa", "preferred_sector": "Consumer Discretionary", "preferred_industry": "Restaurants", "preferred_peer_keywords": "restaurants,quick service restaurants,foodservice,fast food"},
-    {"target_symbol": "WESTPROP", "target_company": "WestProp", "preferred_sector": "Real Estate", "preferred_industry": "Property", "preferred_peer_keywords": "real estate,property,reit,property development"},
-    {"target_symbol": "RTG", "target_company": "Rainbow Tourism Group", "preferred_sector": "Consumer Discretionary", "preferred_industry": "Hotels", "preferred_peer_keywords": "hotels,lodging,leisure,tourism"},
-    {"target_symbol": "ASUN", "target_company": "African Sun", "preferred_sector": "Consumer Discretionary", "preferred_industry": "Hotels", "preferred_peer_keywords": "hotels,lodging,leisure,tourism"},
+    {"target_symbol": "ECOZIM", "target_company": "Econet Wireless Zimbabwe", "preferred_sector": "Telecommunications",
+     "preferred_industry": "Mobile Telecoms",
+     "preferred_peer_keywords": "telecommunications,telecom,mobile,wireless,communications,network,broadband,data"},
+    {"target_symbol": "CBZ", "target_company": "CBZ", "preferred_sector": "Banking",
+     "preferred_industry": "Commercial Banks",
+     "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
+    {"target_symbol": "FBC", "target_company": "FBC", "preferred_sector": "Banking",
+     "preferred_industry": "Commercial Banks",
+     "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
+    {"target_symbol": "NMBZ", "target_company": "NMBZ", "preferred_sector": "Banking",
+     "preferred_industry": "Commercial Banks",
+     "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
+    {"target_symbol": "ZB", "target_company": "ZB", "preferred_sector": "Banking",
+     "preferred_industry": "Commercial Banks",
+     "preferred_peer_keywords": "banking,bank,commercial bank,lending,deposits"},
+    {"target_symbol": "PADENGA", "target_company": "Padenga", "preferred_sector": "Mining",
+     "preferred_industry": "Gold Mining",
+     "preferred_peer_keywords": "gold mining,gold,gold producer,gold miner,mining,minerals,precious metals"},
+    {"target_symbol": "CMCL", "target_company": "Caledonia", "preferred_sector": "Mining",
+     "preferred_industry": "Gold Mining",
+     "preferred_peer_keywords": "gold mining,gold,gold producer,gold miner,mining,minerals,precious metals"},
+    {"target_symbol": "DELTA", "target_company": "Delta", "preferred_sector": "Consumer Staples",
+     "preferred_industry": "Beverages", "preferred_peer_keywords": "beverages,brewery,beer,spirits,distillery,drinks"},
+    {"target_symbol": "AFDIS", "target_company": "Afdis", "preferred_sector": "Consumer Staples",
+     "preferred_industry": "Beverages", "preferred_peer_keywords": "beverages,brewery,beer,spirits,distillery,drinks"},
+    {"target_symbol": "INNSCOR", "target_company": "Innscor Africa", "preferred_sector": "Consumer Staples",
+     "preferred_industry": "Food Producers",
+     "preferred_peer_keywords": "food,consumer,food processing,packaged foods,brands"},
+    {"target_symbol": "SIMBISA", "target_company": "Simbisa", "preferred_sector": "Consumer Discretionary",
+     "preferred_industry": "Restaurants",
+     "preferred_peer_keywords": "restaurants,quick service restaurants,foodservice,fast food"},
+    {"target_symbol": "WESTPROP", "target_company": "WestProp", "preferred_sector": "Real Estate",
+     "preferred_industry": "Property", "preferred_peer_keywords": "real estate,property,reit,property development"},
+    {"target_symbol": "RTG", "target_company": "Rainbow Tourism Group", "preferred_sector": "Consumer Discretionary",
+     "preferred_industry": "Hotels", "preferred_peer_keywords": "hotels,lodging,leisure,tourism"},
+    {"target_symbol": "ASUN", "target_company": "African Sun", "preferred_sector": "Consumer Discretionary",
+     "preferred_industry": "Hotels", "preferred_peer_keywords": "hotels,lodging,leisure,tourism"},
 ]
 
 if ZIM_TARGET_MAP_DF is None or ZIM_TARGET_MAP_DF.empty:
@@ -371,9 +398,12 @@ if ZIM_TARGET_MAP_DF is None or ZIM_TARGET_MAP_DF.empty:
 if SECTOR_ALIAS_DF is None or SECTOR_ALIAS_DF.empty:
     SECTOR_ALIAS_DF = pd.DataFrame([
         {"input_alias": "telecom", "preferred_sector": "Telecommunications", "preferred_industry": "Mobile Telecoms"},
-        {"input_alias": "telecommunications", "preferred_sector": "Telecommunications", "preferred_industry": "Mobile Telecoms"},
-        {"input_alias": "communication services", "preferred_sector": "Telecommunications", "preferred_industry": "Mobile Telecoms"},
-        {"input_alias": "mobile telecoms", "preferred_sector": "Telecommunications", "preferred_industry": "Mobile Telecoms"},
+        {"input_alias": "telecommunications", "preferred_sector": "Telecommunications",
+         "preferred_industry": "Mobile Telecoms"},
+        {"input_alias": "communication services", "preferred_sector": "Telecommunications",
+         "preferred_industry": "Mobile Telecoms"},
+        {"input_alias": "mobile telecoms", "preferred_sector": "Telecommunications",
+         "preferred_industry": "Mobile Telecoms"},
         {"input_alias": "banking", "preferred_sector": "Banking", "preferred_industry": "Commercial Banks"},
         {"input_alias": "banks", "preferred_sector": "Banking", "preferred_industry": "Commercial Banks"},
         {"input_alias": "gold mining", "preferred_sector": "Mining", "preferred_industry": "Gold Mining"},
@@ -381,6 +411,8 @@ if SECTOR_ALIAS_DF is None or SECTOR_ALIAS_DF.empty:
         {"input_alias": "beverages", "preferred_sector": "Consumer Staples", "preferred_industry": "Beverages"},
         {"input_alias": "real estate", "preferred_sector": "Real Estate", "preferred_industry": "Property"},
     ])
+
+
 # =========================================================
 # TARGET RESOLUTION
 # =========================================================
@@ -463,6 +495,8 @@ def get_target_profile(target_query: str, manual_sector_override: str = ""):
         "search_aliases": search_aliases,
         "source": source,
     }
+
+
 # =========================================================
 # UNIVERSE FILTERING
 # =========================================================
@@ -581,6 +615,8 @@ def _family_words(target_profile: dict):
         }
 
     return {"good": [], "bad": []}
+
+
 def strict_universe_filter(target_profile: dict, max_peers: int = 8):
     if UNIVERSE_DF is None or UNIVERSE_DF.empty:
         return pd.DataFrame()
@@ -612,7 +648,7 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
         same_industry = same_sector[
             same_sector["industry_l"].str.contains(re.escape(tgt_industry), na=False) |
             same_sector["industry_l"].eq(tgt_industry)
-        ].copy()
+            ].copy()
 
     # keyword matches
     keyword_match = pd.DataFrame()
@@ -666,6 +702,8 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
     ]].head(30)
 
     return combined.head(max_peers).reset_index(drop=True)
+
+
 # =========================================================
 # LIVE RATIOS
 # =========================================================
@@ -701,6 +739,7 @@ INVESTING_SYMBOL_MAP = {
     "ANH.JO": {"slug": "anheuser-busch-inbev-sa-nv"},
     "BLR.RW": {"slug": "bralirwa"},
 }
+
 
 def _safe_get(url, params=None, timeout=25, tries=3, headers=None):
     last_err = None
@@ -782,9 +821,9 @@ def _first_non_null(d: dict, keys):
 
 def _all_nan_ratio_dict(d: dict) -> bool:
     return (
-        pd.isna(d.get("P/E", np.nan)) and
-        pd.isna(d.get("P/B", np.nan)) and
-        pd.isna(d.get("EV/EBITDA", np.nan))
+            pd.isna(d.get("P/E", np.nan)) and
+            pd.isna(d.get("P/B", np.nan)) and
+            pd.isna(d.get("EV/EBITDA", np.nan))
     )
 
 
@@ -968,9 +1007,9 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         out["quote_exists"] = True
 
         out["Company"] = (
-            _raw(price.get("longName"))
-            or _raw(price.get("shortName"))
-            or sym
+                _raw(price.get("longName"))
+                or _raw(price.get("shortName"))
+                or sym
         )
         out["Exchange"] = _raw(price.get("exchangeName")) or _raw(price.get("fullExchangeName")) or ""
         out["Country"] = ap.get("country") or ""
@@ -997,6 +1036,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         out["ratio_note"] = f"Yahoo quoteSummary failed: {repr(e)}"
 
     return out
+
 
 @st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_stats_table_fallback(symbol: str) -> dict:
@@ -1110,7 +1150,8 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         out["EV/EBITDA"] = best_hits["evebitda"]
 
         if not _all_nan_ratio_dict(out):
-            pe_note = "Used Forward P/E first." if not pd.isna(best_hits["forward_pe"]) else "Used Trailing P/E fallback."
+            pe_note = "Used Forward P/E first." if not pd.isna(
+                best_hits["forward_pe"]) else "Used Trailing P/E fallback."
             out["ratio_source"] = "Yahoo Statistics"
             out["ratio_note"] = f"Fetched from Yahoo Statistics exact Current column. {pe_note}"
         else:
@@ -1120,6 +1161,8 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
         out["ratio_note"] = f"Yahoo stats fetch failed: {repr(e)}"
 
     return out
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 20)
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
@@ -1181,12 +1224,12 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
 @st.cache_data(show_spinner=False, ttl=60 * 20)
 def get_live_peer_row(
-    symbol: str,
-    fallback_company: str = "",
-    fallback_country: str = "",
-    fallback_exchange: str = "",
-    fallback_sector: str = "",
-    fallback_industry: str = ""
+        symbol: str,
+        fallback_company: str = "",
+        fallback_country: str = "",
+        fallback_exchange: str = "",
+        fallback_sector: str = "",
+        fallback_industry: str = ""
 ):
     sym = normalize_peer_ticker(symbol)
 
@@ -1223,30 +1266,30 @@ def get_live_peer_row(
         info = {}
 
     company = (
-        _clean_text(yh.get("Company"))
-        or _clean_text(info.get("longName") or info.get("shortName"))
-        or fallback_company
-        or sym
+            _clean_text(yh.get("Company"))
+            or _clean_text(info.get("longName") or info.get("shortName"))
+            or fallback_company
+            or sym
     )
     exchange = (
-        _clean_text(yh.get("Exchange"))
-        or _clean_text(info.get("exchange"))
-        or fallback_exchange
+            _clean_text(yh.get("Exchange"))
+            or _clean_text(info.get("exchange"))
+            or fallback_exchange
     )
     country = (
-        _clean_text(yh.get("Country"))
-        or _clean_text(info.get("country"))
-        or fallback_country
+            _clean_text(yh.get("Country"))
+            or _clean_text(info.get("country"))
+            or fallback_country
     )
     sector = (
-        _clean_text(yh.get("Sector"))
-        or _clean_text(info.get("sector"))
-        or fallback_sector
+            _clean_text(yh.get("Sector"))
+            or _clean_text(info.get("sector"))
+            or fallback_sector
     )
     industry = (
-        _clean_text(yh.get("Industry"))
-        or _clean_text(info.get("industry"))
-        or fallback_industry
+            _clean_text(yh.get("Industry"))
+            or _clean_text(info.get("industry"))
+            or fallback_industry
     )
 
     # ---------------------------
@@ -1271,7 +1314,7 @@ def get_live_peer_row(
         ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
 
     has_yahoo_ratio = not (
-        pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
+            pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
 
     yahoo_quote_exists = bool(yh.get("quote_exists", False))
@@ -1287,10 +1330,10 @@ def get_live_peer_row(
 
     if has_yahoo_ratio:
         source = (
-            ystats.get("ratio_source")
-            or yh.get("ratio_source")
-            or yhtml.get("ratio_source")
-            or "Yahoo Finance"
+                ystats.get("ratio_source")
+                or yh.get("ratio_source")
+                or yhtml.get("ratio_source")
+                or "Yahoo Finance"
         )
         ratio_note = (
             ystats.get("ratio_note")
@@ -1305,10 +1348,10 @@ def get_live_peer_row(
         if yahoo_exists:
             source = ""
             ratio_note = (
-                ystats.get("ratio_note")
-                or yh.get("ratio_note")
-                or yhtml.get("ratio_note")
-                or "Yahoo page exists, but ratios were not found."
+                    ystats.get("ratio_note")
+                    or yh.get("ratio_note")
+                    or yhtml.get("ratio_note")
+                    or "Yahoo page exists, but ratios were not found."
             )
         else:
             source = ""
@@ -1330,6 +1373,20 @@ def get_live_peer_row(
     })
 
     return out
+
+
+def _is_yahoo_usable_status(x):
+    if pd.isna(x):
+        return False
+
+    return str(x).lower() not in [
+        "error",
+        "failed",
+        "no data",
+        "not found",
+        "invalid",
+        ""
+    ]
 @st.cache_data(show_spinner=False)
 def get_precomputed_target_peers(target_profile: dict, max_peers: int = 9) -> pd.DataFrame:
     global TARGET_PEER_MATCHES_DF
@@ -1365,7 +1422,8 @@ def get_precomputed_target_peers(target_profile: dict, max_peers: int = 9) -> pd
         return pd.DataFrame()
 
     # standardize missing columns
-    for col in ["ticker", "company", "country", "exchange", "sector", "industry", "sector_keywords", "match_priority", "yahoo_status"]:
+    for col in ["ticker", "company", "country", "exchange", "sector", "industry", "sector_keywords", "match_priority",
+                "yahoo_status"]:
         if col not in df.columns:
             df[col] = ""
 
@@ -1379,7 +1437,7 @@ def get_precomputed_target_peers(target_profile: dict, max_peers: int = 9) -> pd
     df = df[
         ~df["ticker_l"].str.endswith(".zw", na=False) &
         ~df["ticker_l"].str.endswith(".vx", na=False)
-    ].copy()
+        ].copy()
 
     # keep Yahoo-usable rows only
     if "yahoo_status" in df.columns:
@@ -1401,7 +1459,9 @@ def get_precomputed_target_peers(target_profile: dict, max_peers: int = 9) -> pd
         ascending=[False, False, True]
     ).drop_duplicates(subset=["ticker"]).reset_index(drop=True)
 
-    return df.head(max_peers).copy()    
+    return df.head(max_peers).copy()
+
+
 def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_sector_override: str = ""):
     target_profile = get_target_profile(target_query, manual_sector_override)
 
@@ -1422,7 +1482,8 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_s
         peer_source = "Africa universe Excel"
 
     S["debug_strict_df_shape"] = strict_df.shape if strict_df is not None else (0, 0)
-    S["debug_strict_df_preview"] = strict_df.head(20) if strict_df is not None and not strict_df.empty else pd.DataFrame()
+    S["debug_strict_df_preview"] = strict_df.head(
+        20) if strict_df is not None and not strict_df.empty else pd.DataFrame()
 
     if strict_df is None or strict_df.empty:
         return pd.DataFrame(), {
@@ -1472,14 +1533,14 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_s
     df = df[
         ~df["Ticker_l"].str.endswith(".zw", na=False) &
         ~df["Ticker_l"].str.endswith(".vx", na=False)
-    ].copy()
+        ].copy()
 
     df = df.drop(columns=["Country_l", "Ticker_l"], errors="ignore")
 
     df["RatioCount"] = (
-        df["EV/EBITDA"].notna().astype(int)
-        + df["P/B"].notna().astype(int)
-        + df["P/E"].notna().astype(int)
+            df["EV/EBITDA"].notna().astype(int)
+            + df["P/B"].notna().astype(int)
+            + df["P/E"].notna().astype(int)
     )
 
     df = df.sort_values(
@@ -1496,6 +1557,8 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_s
     }
 
     return df, meta
+
+
 def apply_live_comps_to_session(df_live: pd.DataFrame):
     if df_live is None or df_live.empty:
         return
@@ -1530,6 +1593,8 @@ def apply_live_comps_to_session(df_live: pd.DataFrame):
         S["comps"][i]["inc_ev"] = S[f"inc_ev_{i}"]
         S["comps"][i]["inc_pb"] = S[f"inc_pb_{i}"]
         S["comps"][i]["inc_pe"] = S[f"inc_pe_{i}"]
+
+
 def render_peer_picker_table(df_live: pd.DataFrame):
     if df_live is None or df_live.empty:
         return pd.DataFrame()
@@ -1640,29 +1705,7 @@ def render_peer_picker_table(df_live: pd.DataFrame):
 
     return selected_df
 
-@st.cache_data(ttl=3600)
-def fetch_yahoo_ratios(ticker):
 
-    try:
-        t = yf.Ticker(ticker)
-        info = t.info
-
-        pe = info.get("forwardPE") or info.get("trailingPE")
-        pb = info.get("priceToBook")
-        ev_ebitda = info.get("enterpriseToEbitda")
-
-        return {
-            "P/E": pe,
-            "P/B": pb,
-            "EV/EBITDA": ev_ebitda
-        }
-
-    except:
-        return {
-            "P/E": None,
-            "P/B": None,
-            "EV/EBITDA": None
-        }
 # =========================================================
 # STEP 1 — INPUT COMPARABLE COMPANIES & MULTIPLES
 # =========================================================
@@ -1672,7 +1715,8 @@ st.subheader("Auto Peer Suggestions from Strict Africa Universe Excel")
 if UNIVERSE_FILE:
     st.caption(f"Universe file loaded: {UNIVERSE_FILE}")
 else:
-    st.error("❌ Africa peer universe Excel was not found. Put it inside a data folder, e.g. data/africa_yahoo_peer_universe_strict_final.xlsx")
+    st.error(
+        "❌ Africa peer universe Excel was not found. Put it inside a data folder, e.g. data/africa_yahoo_peer_universe_strict_final.xlsx")
     st.stop()
 
 S.setdefault("target_company", "")
@@ -1716,7 +1760,8 @@ manual_sector = st.text_input(
 S["manual_sector_override"] = manual_sector
 
 st.subheader("Live peer search and ratio fill")
-st.caption("Peers come from your Africa universe Excel first, then ratios are fetched from Yahoo Finance Statistics tab.")
+st.caption(
+    "Peers come from your Africa universe Excel first, then ratios are fetched from Yahoo Finance Statistics tab.")
 
 live_peer_limit = st.slider(
     "Live peers to import",
@@ -1924,19 +1969,13 @@ for i in range(int(num_comps)):
     c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1.2])
 
     with c1:
-        ticker = st.text_input(
-            f"Ticker {i+1}",
-            value=st.session_state["comps"][i]["name"],
-            key=f"name_{i}"
+        default_name = S.get(f"comp_name_{i}", S["comps"][i]["name"])
+        name = st.text_input(
+            f"Company {i + 1} name",
+            value=str(default_name),
+            key=f"comp_name_{i}",
         )
-        
-        ratios = fetch_yahoo_ratios(ticker)
-        
-        ev = ratios["EV/EBITDA"] if ratios["EV/EBITDA"] else 0.0
-        pb = ratios["P/B"] if ratios["P/B"] else 0.0
-        pe = ratios["P/E"] if ratios["P/E"] else 0.0
-        
-        st.session_state["comps"][i]["name"] = ticker
+        S["comps"][i]["name"] = name
 
     with c2:
         default_ev = _num_input_default(S.get(f"comp_ev_{i}", S["comps"][i]["ev"]), 0.0)
@@ -2006,13 +2045,13 @@ for i in range(int(num_comps)):
     S["comps"][i]["inc_pe"] = inc_pe
 
     rows.append({
-       "Company": name,
-       "EV/EBITDA": ev,
-       "P/B": pb,
-       "P/E": pe,
-       "Include_EV": inc_ev,
-       "Include_PB": inc_pb,
-       "Include_PE": inc_pe
+        "Company": name,
+        "EV/EBITDA": ev,
+        "P/B": pb,
+        "P/E": pe,
+        "Include_EV": inc_ev,
+        "Include_PB": inc_pb,
+        "Include_PE": inc_pe
     })
 
 df_comps = pd.DataFrame(
@@ -2031,26 +2070,28 @@ S["comps_inc_ev"] = df_comps["Include_EV"].astype(bool).tolist()
 S["comps_inc_pb"] = df_comps["Include_PB"].astype(bool).tolist()
 S["comps_inc_pe"] = df_comps["Include_PE"].astype(bool).tolist()
 
+
 # =========================================================
 # HELPER FUNCTIONS
 # =========================================================
 def filtered_average(series):
     series = pd.to_numeric(series, errors="coerce")  # ensure numeric
     series = series.dropna()  # remove NaNs only
-    
+
     if len(series) == 0:
         return np.nan
-    
+
+
 # =========================================================
 # HELPER FUNCTIONS
 # =========================================================
 def filtered_average(series):
     series = pd.to_numeric(series, errors="coerce")
     series = series.dropna()
-    
+
     if len(series) == 0:
         return np.nan
-    
+
     return series.mean()
 
 
@@ -2078,7 +2119,7 @@ discount_pct = st.number_input(
     "Discount factor (%)",
     step=1.0,
     value=st.session_state["discount_factor"],  # load from session_state
-    key="discount_factor_widget",               # UNIQUE widget key
+    key="discount_factor_widget",  # UNIQUE widget key
 )
 
 # Save back to session_state
@@ -2256,7 +2297,8 @@ else:
             with c1:
                 st.number_input(f"EB Year {yr}", value=int(yr), disabled=True, key=f"comp_eb_year_display_{yr}")
             with c2:
-                st.number_input(f"EBITDA {yr}", value=eb_val, disabled=True, format="%.2f", key=f"comp_eb_value_display_{yr}")
+                st.number_input(f"EBITDA {yr}", value=eb_val, disabled=True, format="%.2f",
+                                key=f"comp_eb_value_display_{yr}")
             with c4:
                 weight_val = st.number_input(
                     f"EB Weight {yr} (%)",
@@ -2296,7 +2338,6 @@ else:
         maintainable_ebitda = float(df_eb["Weighted EBITDA"].sum())
         st.success(f"Maintainable EBITDA = {maintainable_ebitda:,.2f}")
         S["maintainable_ebitda"] = maintainable_ebitda
-
 
 # =========================================================
 # STEP 4 — MAINTAINABLE EARNINGS (with locked timing)
@@ -2450,7 +2491,8 @@ else:
             with c1:
                 st.number_input(f"Earnings Year {yr}", value=int(yr), disabled=True, key=f"comp_np_year_display_{yr}")
             with c2:
-                st.number_input(f"Earnings {yr}", value=np_val, disabled=True, format="%.2f", key=f"comp_np_value_display_{yr}")
+                st.number_input(f"Earnings {yr}", value=np_val, disabled=True, format="%.2f",
+                                key=f"comp_np_value_display_{yr}")
             with c4:
                 weight_val = st.number_input(
                     f"NP Weight {yr} (%)",
@@ -2474,7 +2516,8 @@ else:
             )
         df_np = pd.DataFrame(rows_np)
         if use_timing_np:
-            df_np_display = df_np[["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]]
+            df_np_display = df_np[
+                ["Year", "Earnings", "Timing", "Weight (%)", "Adjusted Earnings", "Weighted Earnings"]]
         else:
             df_np_display = df_np[["Year", "Earnings", "Weight (%)", "Weighted Earnings"]]
         df_np_display = df_np_display.copy()
@@ -2504,7 +2547,7 @@ book_equity = st.number_input(
     "Book Equity (USD)",
     value=book_equity_default,
     step=1000.0,
-    format="%.2f",   # ⚠ no commas here
+    format="%.2f",  # ⚠ no commas here
     key="book_equity_input"
 )
 S["book_equity"] = float(book_equity)
@@ -2516,7 +2559,7 @@ net_debt = st.number_input(
     "Net Debt (USD)",
     value=net_debt_default,
     step=1000.0,
-    format="%.2f",   # ⚠ no commas here
+    format="%.2f",  # ⚠ no commas here
     key="net_debt_input"
 )
 S["net_debt"] = float(net_debt)
@@ -2548,7 +2591,6 @@ if book_equity is not None and np.isfinite(float(book_equity)) and not pd.isna(i
 if maintainable_earnings is not None and np.isfinite(float(maintainable_earnings)) and not pd.isna(implied_pe):
     equity_pe = implied_pe * float(maintainable_earnings)
 
-
 S["value_ev_ebitda"] = float(equity_ev)
 S["value_pbv"] = float(equity_pb)
 S["value_pe"] = float(equity_pe)
@@ -2565,6 +2607,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
+
 def _style_range(ws, cell_range, bold=False, fill=None, align_center=False, border=True, font_color=None):
     thin = Side(style="thin", color="000000")
     b = Border(left=thin, right=thin, top=thin, bottom=thin) if border else None
@@ -2578,6 +2621,7 @@ def _style_range(ws, cell_range, bold=False, fill=None, align_center=False, bord
                 c.alignment = Alignment(horizontal="center", vertical="center")
             if b is not None:
                 c.border = b
+
 
 def build_comps_excel_with_formulas(S, df_comps) -> bytes:
     wb = Workbook()
@@ -2634,7 +2678,7 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
 
     # Borders + widths
     _style_range(ws1, f"B{start_row}:I{end_row}", border=True)
-    for col, w in zip(["B","C","D","E","F","G","H","I"], [30,16,12,10,10,12,12,12]):
+    for col, w in zip(["B", "C", "D", "E", "F", "G", "H", "I"], [30, 16, 12, 10, 10, 12, 12, 12]):
         ws1.column_dimensions[col].width = w
 
     # ============================
@@ -2677,7 +2721,7 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
     ws2["C8"] = f'=IFERROR(AVERAGEIF(Comps_Input!$I${drow1}:$I${drow2},TRUE,Comps_Input!$F${drow1}:$F${drow2}),"")'
     ws2["D8"] = f'=IF(C8="","",C8*(1-$C$3))'
 
-    for rr in [6,7,8]:
+    for rr in [6, 7, 8]:
         ws2[f"C{rr}"].number_format = mult_fmt
         ws2[f"D{rr}"].number_format = mult_fmt
 
@@ -2717,36 +2761,36 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
 
     r0 = 7
     for idx, yr in enumerate(eb_years):
-        ws3.cell(r0+idx, 2, yr)
-        ws3.cell(r0+idx, 3, float(dcf_eb_all.get(str(yr), 0.0)))
+        ws3.cell(r0 + idx, 2, yr)
+        ws3.cell(r0 + idx, 3, float(dcf_eb_all.get(str(yr), 0.0)))
 
         # Timing formula:
         # =IF($C$3, $C$4 + (ROW()-7), 1)
-        ws3.cell(r0+idx, 4, f'=IF($C$3,$C$4+{idx},1)')
+        ws3.cell(r0 + idx, 4, f'=IF($C$3,$C$4+{idx},1)')
 
         # Weight from session (store as percent)
         w = float((S.get("comp_eb_weights", {}) or {}).get(str(yr), 0.0))
-        ws3.cell(r0+idx, 5, w/100.0)
+        ws3.cell(r0 + idx, 5, w / 100.0)
 
         # Adjusted EBITDA = EBITDA * Timing
-        ws3.cell(r0+idx, 6, f"=C{r0+idx}*D{r0+idx}")
+        ws3.cell(r0 + idx, 6, f"=C{r0 + idx}*D{r0 + idx}")
         # Weighted EBITDA = Adjusted * Weight
-        ws3.cell(r0+idx, 7, f"=F{r0+idx}*E{r0+idx}")
+        ws3.cell(r0 + idx, 7, f"=F{r0 + idx}*E{r0 + idx}")
 
-        ws3.cell(r0+idx, 3).number_format = money_fmt
-        ws3.cell(r0+idx, 4).number_format = '0.0000'
-        ws3.cell(r0+idx, 5).number_format = pct_fmt
-        ws3.cell(r0+idx, 6).number_format = money_fmt
-        ws3.cell(r0+idx, 7).number_format = money_fmt
+        ws3.cell(r0 + idx, 3).number_format = money_fmt
+        ws3.cell(r0 + idx, 4).number_format = '0.0000'
+        ws3.cell(r0 + idx, 5).number_format = pct_fmt
+        ws3.cell(r0 + idx, 6).number_format = money_fmt
+        ws3.cell(r0 + idx, 7).number_format = money_fmt
 
     last = r0 + len(eb_years) - 1 if eb_years else 7
 
     # Total maintainable EBITDA
-    ws3["B" + str(last+2)] = "Maintainable EBITDA"
-    ws3["B" + str(last+2)].font = bold_font
-    ws3["G" + str(last+2)] = f"=SUM(G{r0}:G{last})"
-    ws3["G" + str(last+2)].font = bold_font
-    ws3["G" + str(last+2)].number_format = money_fmt
+    ws3["B" + str(last + 2)] = "Maintainable EBITDA"
+    ws3["B" + str(last + 2)].font = bold_font
+    ws3["G" + str(last + 2)] = f"=SUM(G{r0}:G{last})"
+    ws3["G" + str(last + 2)].font = bold_font
+    ws3["G" + str(last + 2)].number_format = money_fmt
 
     _style_range(ws3, f"B6:G{last}", border=True)
     ws3.column_dimensions["B"].width = 10
@@ -2784,33 +2828,33 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
 
     r0 = 7
     for idx, yr in enumerate(np_years):
-        ws4.cell(r0+idx, 2, yr)
-        ws4.cell(r0+idx, 3, float(dcf_np_all.get(str(yr), 0.0)))
+        ws4.cell(r0 + idx, 2, yr)
+        ws4.cell(r0 + idx, 3, float(dcf_np_all.get(str(yr), 0.0)))
 
-        ws4.cell(r0+idx, 4, f'=IF($C$3,$C$4+{idx},1)')
+        ws4.cell(r0 + idx, 4, f'=IF($C$3,$C$4+{idx},1)')
 
         w = float((S.get("comp_np_weights", {}) or {}).get(str(yr), 0.0))
-        ws4.cell(r0+idx, 5, w/100.0)
+        ws4.cell(r0 + idx, 5, w / 100.0)
 
-        ws4.cell(r0+idx, 6, f"=C{r0+idx}*D{r0+idx}")
-        ws4.cell(r0+idx, 7, f"=F{r0+idx}*E{r0+idx}")
+        ws4.cell(r0 + idx, 6, f"=C{r0 + idx}*D{r0 + idx}")
+        ws4.cell(r0 + idx, 7, f"=F{r0 + idx}*E{r0 + idx}")
 
-        ws4.cell(r0+idx, 3).number_format = money_fmt
-        ws4.cell(r0+idx, 4).number_format = '0.0000'
-        ws4.cell(r0+idx, 5).number_format = pct_fmt
-        ws4.cell(r0+idx, 6).number_format = money_fmt
-        ws4.cell(r0+idx, 7).number_format = money_fmt
+        ws4.cell(r0 + idx, 3).number_format = money_fmt
+        ws4.cell(r0 + idx, 4).number_format = '0.0000'
+        ws4.cell(r0 + idx, 5).number_format = pct_fmt
+        ws4.cell(r0 + idx, 6).number_format = money_fmt
+        ws4.cell(r0 + idx, 7).number_format = money_fmt
 
     last = r0 + len(np_years) - 1 if np_years else 7
 
-    ws4["B" + str(last+2)] = "Maintainable Earnings"
-    ws4["B" + str(last+2)].font = bold_font
-    ws4["G" + str(last+2)] = f"=SUM(G{r0}:G{last})"
-    ws4["G" + str(last+2)].font = bold_font
-    ws4["G" + str(last+2)].number_format = money_fmt
+    ws4["B" + str(last + 2)] = "Maintainable Earnings"
+    ws4["B" + str(last + 2)].font = bold_font
+    ws4["G" + str(last + 2)] = f"=SUM(G{r0}:G{last})"
+    ws4["G" + str(last + 2)].font = bold_font
+    ws4["G" + str(last + 2)].number_format = money_fmt
 
     _style_range(ws4, f"B6:G{last}", border=True)
-    for col, w in zip(["B","C","D","E","F","G"], [10,18,12,12,18,18]):
+    for col, w in zip(["B", "C", "D", "E", "F", "G"], [10, 18, 12, 12, 18, 18]):
         ws4.column_dimensions[col].width = w
 
     # ============================
@@ -2860,7 +2904,7 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
     ws5["B12"] = "P/E"
     ws5["C12"] = "=IF(Multiples!D8=\"\",\"\",Multiples!D8*$C$7)"
 
-    for rr in [10,11,12]:
+    for rr in [10, 11, 12]:
         ws5[f"C{rr}"].number_format = money_fmt
 
     _style_range(ws5, "B9:C12", border=True)
@@ -2872,6 +2916,7 @@ def build_comps_excel_with_formulas(S, df_comps) -> bytes:
     wb.save(bio)
     bio.seek(0)
     return bio.getvalue()
+
 
 excel_bytes = build_comps_excel_with_formulas(S, df_comps)
 
