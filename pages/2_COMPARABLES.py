@@ -703,7 +703,16 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
 
     return combined.head(max_peers).reset_index(drop=True)
 
-
+def retry_fetch(func, *args, retries=3):
+    for _ in range(retries):
+        try:
+            result = func(*args)
+            if result:
+                return result
+        except:
+            pass
+        time.sleep(0.5)
+    return {}
 # =========================================================
 # LIVE RATIOS
 # =========================================================
@@ -741,7 +750,7 @@ INVESTING_SYMBOL_MAP = {
 }
 
 
-def _safe_get(url, params=None, timeout=25, tries=3, headers=None):
+def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
     last_err = None
     use_headers = headers or HEADERS
 
@@ -827,7 +836,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 20)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -872,7 +881,7 @@ def investing_ratios(symbol: str):
             "Connection": "keep-alive",
         }
 
-        r = _safe_get(investing_url, timeout=25, tries=4, headers=html_headers)
+        r = _safe_get(investing_url, timeout=15, tries=4, headers=html_headers)
         html = r.text or ""
 
         def parse_ratio_value(x):
@@ -951,7 +960,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 20)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -988,7 +997,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
             params={
                 "modules": "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile"
             },
-            timeout=25,
+            timeout=15,
             tries=4,
         )
         data = r.json()
@@ -1038,7 +1047,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 20)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1086,7 +1095,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     }
 
     try:
-        r = _safe_get(url, timeout=25, tries=4, headers=html_headers)
+        r = _safe_get(url, timeout=15, tries=4, headers=html_headers)
         html = r.text or ""
 
         if html:
@@ -1163,7 +1172,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 20)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1222,7 +1231,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 20)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1231,6 +1240,8 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
+    time.sleep(0.25)
+
     sym = normalize_peer_ticker(symbol)
 
     out = {
@@ -1253,10 +1264,10 @@ def get_live_peer_row(
     if not sym:
         return out
 
-    yh = yahoo_profile_and_metrics(sym)
-    ystats = yahoo_stats_table_fallback(sym)
-    yhtml = yahoo_html_ratio_fallback(sym)
-    inv = {}
+    yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+    yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
+    inv = retry_fetch(investing_ratios, sym)
 
     info = {}
     try:
