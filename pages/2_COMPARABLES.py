@@ -1243,7 +1243,7 @@ def get_live_peer_row(
     time.sleep(0.25)
 
     sym = normalize_peer_ticker(symbol)
-
+    st.write("Fetching:", sym)
     out = {
         "Company": fallback_company or sym,
         "Ticker": sym,
