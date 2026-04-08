@@ -1246,7 +1246,6 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-
 @st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
 def get_live_peer_row(
         symbol: str,
@@ -1256,10 +1255,11 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-   time.sleep(1.2 + random.random())
+    time.sleep(1.2 + random.random())
 
     sym = normalize_peer_ticker(symbol)
     st.write("Fetching:", sym)
+
     out = {
         "Company": fallback_company or sym,
         "Ticker": sym,
@@ -1280,10 +1280,13 @@ def get_live_peer_row(
     if not sym:
         return out
 
+    # ---------------------------
+    # Fetch data
+    # ---------------------------
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
     ystats = retry_fetch(yahoo_stats_table_fallback, sym)
     yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
-    inv = {}  # ⛔ delay investing call
+    inv = {}
 
     info = {}
     try:
@@ -1292,31 +1295,34 @@ def get_live_peer_row(
     except Exception:
         info = {}
 
+    # ---------------------------
+    # Basic info
+    # ---------------------------
     company = (
-            _clean_text(yh.get("Company"))
-            or _clean_text(info.get("longName") or info.get("shortName"))
-            or fallback_company
-            or sym
+        _clean_text(yh.get("Company"))
+        or _clean_text(info.get("longName") or info.get("shortName"))
+        or fallback_company
+        or sym
     )
     exchange = (
-            _clean_text(yh.get("Exchange"))
-            or _clean_text(info.get("exchange"))
-            or fallback_exchange
+        _clean_text(yh.get("Exchange"))
+        or _clean_text(info.get("exchange"))
+        or fallback_exchange
     )
     country = (
-            _clean_text(yh.get("Country"))
-            or _clean_text(info.get("country"))
-            or fallback_country
+        _clean_text(yh.get("Country"))
+        or _clean_text(info.get("country"))
+        or fallback_country
     )
     sector = (
-            _clean_text(yh.get("Sector"))
-            or _clean_text(info.get("sector"))
-            or fallback_sector
+        _clean_text(yh.get("Sector"))
+        or _clean_text(info.get("sector"))
+        or fallback_sector
     )
     industry = (
-            _clean_text(yh.get("Industry"))
-            or _clean_text(info.get("industry"))
-            or fallback_industry
+        _clean_text(yh.get("Industry"))
+        or _clean_text(info.get("industry"))
+        or fallback_industry
     )
 
     # ---------------------------
@@ -1341,15 +1347,22 @@ def get_live_peer_row(
         ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
 
     has_yahoo_ratio = not (
-            pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
+        pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
-# ✅ Only call Investing if Yahoo completely failed
-if not has_yahoo_ratio:
-    inv = retry_fetch(investing_ratios, sym)
 
-    pe = inv.get("P/E", pe)
-    pb = inv.get("P/B", pb)
-    ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
+    # ---------------------------
+    # Only call Investing if Yahoo failed
+    # ---------------------------
+    if not has_yahoo_ratio:
+        inv = retry_fetch(investing_ratios, sym)
+
+        pe = inv.get("P/E", pe)
+        pb = inv.get("P/B", pb)
+        ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
+
+    # ---------------------------
+    # Determine availability
+    # ---------------------------
     yahoo_quote_exists = bool(yh.get("quote_exists", False))
     yahoo_stats_exists = bool(ystats.get("page_exists", False))
     yahoo_html_exists = bool(yhtml.get("page_exists", False))
@@ -1361,12 +1374,15 @@ if not has_yahoo_ratio:
     stats_url = make_yahoo_statistics_url(sym)
     needs_manual_investing = False
 
+    # ---------------------------
+    # Source + notes
+    # ---------------------------
     if has_yahoo_ratio:
         source = (
-                ystats.get("ratio_source")
-                or yh.get("ratio_source")
-                or yhtml.get("ratio_source")
-                or "Yahoo Finance"
+            ystats.get("ratio_source")
+            or yh.get("ratio_source")
+            or yhtml.get("ratio_source")
+            or "Yahoo Finance"
         )
         ratio_note = (
             ystats.get("ratio_note")
@@ -1379,16 +1395,18 @@ if not has_yahoo_ratio:
         )
     else:
         if yahoo_exists:
-            source = ""
             ratio_note = (
-                    ystats.get("ratio_note")
-                    or yh.get("ratio_note")
-                    or yhtml.get("ratio_note")
-                    or "Yahoo page exists, but ratios were not found."
+                ystats.get("ratio_note")
+                or yh.get("ratio_note")
+                or yhtml.get("ratio_note")
+                or "Yahoo page exists, but ratios were not found."
             )
         else:
-            source = ""
             ratio_note = "Yahoo Finance returned no usable ratios."
+
+    # ---------------------------
+    # Final output
+    # ---------------------------
     out.update({
         "Company": company,
         "Exchange": exchange,
