@@ -98,7 +98,9 @@ h1, h2, h3, h4, h5, h6 {
 """, unsafe_allow_html=True)
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 st.markdown("All values + inputs are **saved in session_state**, so switching pages keeps your work.")
-
+if st.button("🔄 Refresh ratios (fix missing data)"):
+    st.cache_data.clear()
+    st.rerun()
 S = st.session_state
 
 
@@ -703,20 +705,33 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
 
     return combined.head(max_peers).reset_index(drop=True)
 
-def retry_fetch(func, *args, retries=3):
-    for _ in range(retries):
+def retry_fetch(func, *args, retries=5):
+    for i in range(retries):
         try:
             result = func(*args)
-            if result:
+
+            # ✅ Only accept GOOD results (not empty ratios)
+            if result and not (
+                pd.isna(result.get("P/E", np.nan)) and
+                pd.isna(result.get("P/B", np.nan)) and
+                pd.isna(result.get("EV/EBITDA", np.nan))
+            ):
                 return result
-        except:
+
+        except Exception:
             pass
-        time.sleep(0.5)
+
+        # ✅ exponential backoff (prevents blocking)
+        time.sleep(1.5 * (i + 1) + random.random())
+
     return {}
 # =========================================================
 # LIVE RATIOS
 # =========================================================
-SESSION = requests.Session()
+def get_session():
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    return s
 
 HEADERS = {
     "User-Agent": (
@@ -756,7 +771,8 @@ def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
 
     for attempt in range(int(tries)):
         try:
-            r = SESSION.get(
+            session = get_session()
+            r = session.get(
                 url,
                 params=params,
                 timeout=timeout,
@@ -836,7 +852,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -960,7 +976,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -1047,7 +1063,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1172,7 +1188,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1231,7 +1247,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1240,7 +1256,7 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-    time.sleep(0.25)
+   time.sleep(1.2 + random.random())
 
     sym = normalize_peer_ticker(symbol)
     st.write("Fetching:", sym)
@@ -1267,7 +1283,7 @@ def get_live_peer_row(
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
     ystats = retry_fetch(yahoo_stats_table_fallback, sym)
     yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
-    inv = retry_fetch(investing_ratios, sym)
+    inv = {}  # ⛔ delay investing call
 
     info = {}
     try:
@@ -1327,7 +1343,13 @@ def get_live_peer_row(
     has_yahoo_ratio = not (
             pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
+# ✅ Only call Investing if Yahoo completely failed
+if not has_yahoo_ratio:
+    inv = retry_fetch(investing_ratios, sym)
 
+    pe = inv.get("P/E", pe)
+    pb = inv.get("P/B", pb)
+    ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
     yahoo_quote_exists = bool(yh.get("quote_exists", False))
     yahoo_stats_exists = bool(ystats.get("page_exists", False))
     yahoo_html_exists = bool(yhtml.get("page_exists", False))
@@ -1473,7 +1495,7 @@ def get_precomputed_target_peers(target_profile: dict, max_peers: int = 9) -> pd
     return df.head(max_peers).copy()
 
 
-def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_sector_override: str = ""):
+def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_sector_override: str = ""):
     target_profile = get_target_profile(target_query, manual_sector_override)
 
     # 1) first use precomputed target peers
