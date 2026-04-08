@@ -705,7 +705,7 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
 
     return combined.head(max_peers).reset_index(drop=True)
 
-def retry_fetch(func, *args, retries=5):
+def retry_fetch(func, *args, retries=2):
     for i in range(retries):
         try:
             result = func(*args)
@@ -852,7 +852,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -976,7 +976,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -1063,7 +1063,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1188,7 +1188,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1246,7 +1246,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1255,7 +1255,8 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-    time.sleep(1.2 + random.random())
+    # REMOVE COMPLETELY OR REDUCE
+    time.sleep(0.1)
 
     sym = normalize_peer_ticker(symbol)
     st.write("Fetching:", sym)
@@ -1283,46 +1284,53 @@ def get_live_peer_row(
     # ---------------------------
     # Fetch data
     # ---------------------------
+    # ✅ Only ONE Yahoo call first (fastest + structured)
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
-    ystats = retry_fetch(yahoo_stats_table_fallback, sym)
-    yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
-    inv = {}
 
+    # ❌ Skip expensive fallbacks initially
+    ystats = {}
+    yhtml = {}
+    inv = {}
+    # Only fallback if Yahoo failed completely
+    if (
+            pd.isna(yh.get("P/E", np.nan)) and
+            pd.isna(yh.get("P/B", np.nan)) and
+            pd.isna(yh.get("EV/EBITDA", np.nan))
+    ):
+        ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+
+        if (
+                pd.isna(ystats.get("P/E", np.nan)) and
+                pd.isna(ystats.get("P/B", np.nan)) and
+                pd.isna(ystats.get("EV/EBITDA", np.nan))
+        ):
+            yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
+    # ❌ REMOVE yfinance (too slow)
     info = {}
-    try:
-        tk = yf.Ticker(sym)
-        info = tk.info or {}
-    except Exception:
-        info = {}
 
     # ---------------------------
     # Basic info
     # ---------------------------
     company = (
-        _clean_text(yh.get("Company"))
-        or _clean_text(info.get("longName") or info.get("shortName"))
-        or fallback_company
-        or sym
+            _clean_text(yh.get("Company"))
+            or fallback_company
+            or sym
     )
     exchange = (
-        _clean_text(yh.get("Exchange"))
-        or _clean_text(info.get("exchange"))
-        or fallback_exchange
+            _clean_text(yh.get("Exchange"))
+            or fallback_exchange
     )
     country = (
-        _clean_text(yh.get("Country"))
-        or _clean_text(info.get("country"))
-        or fallback_country
+            _clean_text(yh.get("Country"))
+            or fallback_country
     )
     sector = (
-        _clean_text(yh.get("Sector"))
-        or _clean_text(info.get("sector"))
-        or fallback_sector
+            _clean_text(yh.get("Sector"))
+            or fallback_sector
     )
     industry = (
-        _clean_text(yh.get("Industry"))
-        or _clean_text(info.get("industry"))
-        or fallback_industry
+            _clean_text(yh.get("Industry"))
+            or fallback_industry
     )
 
     # ---------------------------
@@ -1345,21 +1353,17 @@ def get_live_peer_row(
         ev_ebitda = yh.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
         ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
-
     has_yahoo_ratio = not (
-        pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
+            pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
 
-    # ---------------------------
-    # Only call Investing if Yahoo failed
-    # ---------------------------
+    # ✅ ONLY fallback if needed
     if not has_yahoo_ratio:
         inv = retry_fetch(investing_ratios, sym)
 
         pe = inv.get("P/E", pe)
         pb = inv.get("P/B", pb)
         ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
-
     # ---------------------------
     # Determine availability
     # ---------------------------
@@ -1519,7 +1523,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
     # 1) first use precomputed target peers
     strict_df = get_precomputed_target_peers(
         target_profile,
-        max_peers=max_peers * 3
+        max_peers=max_peers + 2
     )
 
     peer_source = "TARGET_PEER_MATCHES"
@@ -1528,7 +1532,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
     if strict_df is None or strict_df.empty:
         strict_df = strict_universe_filter(
             target_profile,
-            max_peers=max_peers * 3
+            max_peers=max_peers + 2
         )
         peer_source = "Africa universe Excel"
 
@@ -1543,8 +1547,11 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
             "peer_source": peer_source,
         }
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     rows = []
-    for _, r in strict_df.iterrows():
+
+    def fetch_one(r):
         live = get_live_peer_row(
             symbol=r.get("ticker", ""),
             fallback_company=r.get("company", ""),
@@ -1564,8 +1571,17 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
         live["YahooStatus"] = _clean_text(r.get("yahoo_status"))
         live["MatchPriority"] = _clean_text(r.get("match_priority"))
 
-        rows.append(live)
+        return live
 
+    # 🚀 Parallel execution
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(fetch_one, r) for _, r in strict_df.iterrows()]
+
+        for future in as_completed(futures):
+            try:
+                rows.append(future.result())
+            except Exception:
+                pass
     df = pd.DataFrame(rows).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
 
     if df.empty:
