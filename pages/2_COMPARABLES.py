@@ -1255,7 +1255,8 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-
+    # REMOVE COMPLETELY OR REDUCE
+    time.sleep(0.1)
 
     sym = normalize_peer_ticker(symbol)
     st.write("Fetching:", sym)
@@ -1573,7 +1574,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
         return live
 
     # 🚀 Parallel execution
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(fetch_one, r) for _, r in strict_df.iterrows()]
 
         for future in as_completed(futures):
@@ -1850,22 +1851,6 @@ if run_live_comps:
             S["peer_picker_selected_map"] = {}
             S["live_comps_df_selected"] = pd.DataFrame()
 
-            df_live, meta = build_live_comps_from_target(
-                target_company,
-                max_peers=live_peer_limit,
-                manual_sector_override=manual_sector
-            )
-
-            S["live_comps_df"] = df_live
-            S["live_comps_meta"] = meta
-            if not S["live_comps_df"].empty:
-                st.success(f"{len(S['live_comps_df'])} peers found")
-
-                selected_df = render_peer_picker_table(S["live_comps_df"])
-
-                if auto_apply and not selected_df.empty:
-                    apply_live_comps_to_session(selected_df)
-                    st.success("Selected peers applied to Step 1")
             live_df, meta = build_live_comps_from_target(
                 target_query=target_company,
                 max_peers=int(live_peer_limit),
