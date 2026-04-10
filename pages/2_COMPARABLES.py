@@ -1258,7 +1258,7 @@ def get_live_peer_row(
 
 
     sym = normalize_peer_ticker(symbol)
-    st.write(sym, yh.get("P/E"), yh.get("P/B"), yh.get("EV/EBITDA"))
+
 
     out = {
         "Company": fallback_company or sym,
