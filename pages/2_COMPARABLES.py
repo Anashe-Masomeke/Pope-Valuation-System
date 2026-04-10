@@ -703,16 +703,7 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
 
     return combined.head(max_peers).reset_index(drop=True)
 
-def retry_fetch(func, *args, retries=3):
-    for _ in range(retries):
-        try:
-            result = func(*args)
-            if result:
-                return result
-        except:
-            pass
-        time.sleep(0.5)
-    return {}
+
 # =========================================================
 # LIVE RATIOS
 # =========================================================
@@ -1240,7 +1231,6 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-    time.sleep(0.25)
     sym = normalize_peer_ticker(symbol)
 
     out = {
@@ -1263,10 +1253,10 @@ def get_live_peer_row(
     if not sym:
         return out
 
-    yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    yh = yahoo_profile_and_metrics(sym)
     ystats = yahoo_stats_table_fallback(sym)
     yhtml = yahoo_html_ratio_fallback(sym)
-    inv = retry_fetch(investing_ratios, sym)
+    inv = {}
 
     info = {}
     try:
