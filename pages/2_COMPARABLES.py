@@ -1288,29 +1288,25 @@ def get_live_peer_row(
     # ---------------------------
     # Fetch data
     # ---------------------------
-    # ✅ Only ONE Yahoo call first (fastest + structured)
+    # ✅ ALWAYS fetch Yahoo Statistics FIRST (matches Yahoo UI)
+    ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+
+    # ✅ Then fetch quoteSummary as secondary source
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
 
-    # ❌ Skip expensive fallbacks initially
-    ystats = {}
+    # ✅ HTML fallback only if both above fail
     yhtml = {}
-    inv = {}
-    # Only fallback if Yahoo failed completely
     if (
+            pd.isna(ystats.get("P/E", np.nan)) and
+            pd.isna(ystats.get("P/B", np.nan)) and
+            pd.isna(ystats.get("EV/EBITDA", np.nan)) and
             pd.isna(yh.get("P/E", np.nan)) and
             pd.isna(yh.get("P/B", np.nan)) and
             pd.isna(yh.get("EV/EBITDA", np.nan))
     ):
-        ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+        yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
 
-        if (
-                pd.isna(ystats.get("P/E", np.nan)) and
-                pd.isna(ystats.get("P/B", np.nan)) and
-                pd.isna(ystats.get("EV/EBITDA", np.nan))
-        ):
-            yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
-    # ❌ REMOVE yfinance (too slow)
-    info = {}
+    inv = {}
 
     # ---------------------------
     # Basic info
@@ -1804,7 +1800,7 @@ S.setdefault("peer_picker_selected_map", {})
 cA, cB, cC = st.columns([2.2, 1, 1.2])
 with cA:
     target_company = st.text_input(
-        "Company you are valuing (Zimbabwe / VFEX / JSE / any ticker in your universe)",
+        "Company you are valuing (ZSE / VFEX )",
         value=S["target_company"],
         key="target_company_input",
         placeholder="e.g. econet, padenga, cbz, delta, innscor ...",
