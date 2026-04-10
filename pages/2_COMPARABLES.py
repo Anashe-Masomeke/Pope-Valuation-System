@@ -728,7 +728,6 @@ def retry_fetch(func, *args, retries=2):
 # =========================================================
 # LIVE RATIOS
 # =========================================================
-@st.cache_resource
 def get_session():
     s = requests.Session()
     s.headers.update(HEADERS)
