@@ -98,9 +98,8 @@ h1, h2, h3, h4, h5, h6 {
 """, unsafe_allow_html=True)
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 st.markdown("All values + inputs are **saved in session_state**, so switching pages keeps your work.")
-if st.button("🔄 Hard Refresh (Clear All Data)"):
+if st.button("🔄 Refresh ratios (fix missing data)"):
     st.cache_data.clear()
-    st.session_state.clear()
     st.rerun()
 S = st.session_state
 
@@ -137,38 +136,13 @@ def _tokenize_text(x: str) -> list:
 
 def _clean_num(x):
     try:
-        if x is None:
+        if x is None or x == "":
             return np.nan
-
-        if isinstance(x, str):
-            x = x.replace(",", "").strip()
-            if x == "":
-                return np.nan
-
-        val = float(x)
-
-        if np.isnan(val) or np.isinf(val):
-            return np.nan
-
-        return val
-
-    except:
+        return float(x)
+    except Exception:
         return np.nan
 
-def validate_ratio(value, ratio_type):
-        v = _clean_num(value)
 
-        if pd.isna(v):
-            return np.nan
-
-        if ratio_type == "P/E" and (v < 0 or v > 100):
-            return np.nan
-        if ratio_type == "P/B" and (v < 0 or v > 20):
-            return np.nan
-        if ratio_type == "EV/EBITDA" and (v < 0 or v > 50):
-            return np.nan
-
-        return v
 def _num_input_default(x, fallback=0.0):
     try:
         if x is None or pd.isna(x):
@@ -536,9 +510,7 @@ def strict_peer_score(peer_row: dict, target_profile: dict) -> int:
     peer_keywords = _clean_text(peer_row.get("sector_keywords")).lower()
     peer_company = _clean_text(peer_row.get("company")).lower()
     peer_country = _clean_text(peer_row.get("country")).lower()
-    peer_priority = _clean_num(peer_row.get("match_priority", 0))
-    if pd.isna(peer_priority):
-        peer_priority = 0
+    peer_priority = _clean_num(peer_row.get("match_priority"))
 
     tgt_sector = _clean_text(target_profile.get("preferred_sector")).lower()
     tgt_industry = _clean_text(target_profile.get("preferred_industry")).lower()
@@ -707,7 +679,7 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
     )
 
     if "match_priority" not in combined.columns:
-        combined["match_priority"] = 0
+        combined["match_priority"] = ""
 
     combined["match_priority_num"] = pd.to_numeric(
         combined["match_priority"], errors="coerce"
@@ -880,7 +852,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -1004,7 +976,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -1075,20 +1047,9 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
         evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
 
-        # ✅ STRICT Yahoo definitions (match UI)
-
-        # P/E → Yahoo UI shows TRAILING P/E
-        pe = trailing_pe
-
-        # P/B → direct
-        pb_val = pb
-
-        # EV/EBITDA → direct
-        ev_val = evebitda
-
-        out["P/E"] = _clean_num(pe)
-        out["P/B"] = _clean_num(pb_val)
-        out["EV/EBITDA"] = _clean_num(ev_val)
+        out["P/E"] = _clean_num(forward_pe) if not pd.isna(_clean_num(forward_pe)) else _clean_num(trailing_pe)
+        out["P/B"] = _clean_num(pb)
+        out["EV/EBITDA"] = _clean_num(evebitda)
 
         if not _all_nan_ratio_dict(out):
             out["ratio_source"] = "Yahoo quoteSummary"
@@ -1102,7 +1063,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1227,7 +1188,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1285,7 +1246,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1375,21 +1336,11 @@ def get_live_peer_row(
     # ---------------------------
     # Yahoo-only ratio priority
     # ---------------------------
-    # ✅ STRICT SOURCE PRIORITY (match Yahoo UI)
-    pe = yh.get("P/E", np.nan)
-    pb = yh.get("P/B", np.nan)
-    ev_ebitda = yh.get("EV/EBITDA", np.nan)
-
-    # fallback ONLY if Yahoo API failed
-    if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
-        pe = ystats.get("P/E", np.nan)
-        pb = ystats.get("P/B", np.nan)
-        ev_ebitda = ystats.get("EV/EBITDA", np.nan)
-
-        if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
-            pe = yhtml.get("P/E", np.nan)
-            pb = yhtml.get("P/B", np.nan)
-            ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
+    pe = ystats.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yh.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yhtml.get("P/E", np.nan)
 
     pb = ystats.get("P/B", np.nan)
     if pd.isna(pb):
@@ -1468,21 +1419,14 @@ def get_live_peer_row(
         "Industry": industry,
         "EV/EBITDA": _clean_num(ev_ebitda),
         "P/B": _clean_num(pb),
-        "P/E": round(_clean_num(pe), 2) if not pd.isna(pe) else np.nan,
-        "P/B": round(_clean_num(pb), 2) if not pd.isna(pb) else np.nan,
-        "EV/EBITDA": round(_clean_num(ev_ebitda), 2) if not pd.isna(ev_ebitda) else np.nan,
+        "P/E": _clean_num(pe),
         "Source": source,
         "RatioNote": ratio_note,
         "YahooProfile": profile_url,
         "YahooStats": stats_url,
         "NeedsManualInvesting": needs_manual_investing,
     })
-    st.write({
-        "Ticker": sym,
-        "P/E": yh.get("P/E"),
-        "P/B": yh.get("P/B"),
-        "EV/EBITDA": yh.get("EV/EBITDA"),
-    })
+
     return out
 
 
@@ -1630,7 +1574,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
         return live
 
     # 🚀 Parallel execution
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(fetch_one, r) for _, r in strict_df.iterrows()]
 
         for future in as_completed(futures):
