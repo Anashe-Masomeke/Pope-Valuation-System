@@ -710,14 +710,19 @@ def retry_fetch(func, *args, retries=2):
         try:
             result = func(*args)
 
-            # ✅ Accept ANY result dictionary
-            if isinstance(result, dict) and len(result) > 0:
+            # ✅ Only accept GOOD results (not empty ratios)
+            if result and not (
+                pd.isna(result.get("P/E", np.nan)) and
+                pd.isna(result.get("P/B", np.nan)) and
+                pd.isna(result.get("EV/EBITDA", np.nan))
+            ):
                 return result
 
         except Exception:
             pass
 
-        time.sleep(1.5 * (i + 1))
+        # ✅ exponential backoff (prevents blocking)
+        time.sleep(1.5 * (i + 1) + random.random())
 
     return {}
 # =========================================================
@@ -847,7 +852,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -971,7 +976,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -1039,17 +1044,10 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
 
         forward_pe = _raw(summary.get("forwardPE")) or _raw(dks.get("forwardPE")) or _raw(fin.get("forwardPE"))
         trailing_pe = _raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")) or _raw(fin.get("trailingPE"))
-        # ✅ Prefer Statistics tab P/B first (handled later), keep quoteSummary as fallback
-        pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook"))
-        # ✅ Yahoo JSON values (match Yahoo UI)
-        evebitda = _raw(fin.get("enterpriseToEbitda"))
-        pb = _raw(dks.get("priceToBook"))
-        trailing_pe = _raw(dks.get("trailingPE"))
-        out["P/E"] = (
-            _clean_num(trailing_pe)
-            if not pd.isna(_clean_num(trailing_pe))
-            else _clean_num(forward_pe)
-        )
+        pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
+        evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
+
+        out["P/E"] = _clean_num(forward_pe) if not pd.isna(_clean_num(forward_pe)) else _clean_num(trailing_pe)
         out["P/B"] = _clean_num(pb)
         out["EV/EBITDA"] = _clean_num(evebitda)
 
@@ -1065,7 +1063,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1168,11 +1166,10 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
                 elif label == "enterprise value/ebitda" and pd.isna(best_hits["evebitda"]):
                     best_hits["evebitda"] = parse_ratio_value(value)
 
-        # ✅ Yahoo UI logic: Trailing P/E is the primary metric
         out["P/E"] = (
-            best_hits["trailing_pe"]
-            if not pd.isna(best_hits["trailing_pe"])
-            else best_hits["forward_pe"]
+            best_hits["forward_pe"]
+            if not pd.isna(best_hits["forward_pe"])
+            else best_hits["trailing_pe"]
         )
         out["P/B"] = best_hits["pb"]
         out["EV/EBITDA"] = best_hits["evebitda"]
@@ -1190,7 +1187,8 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
 
     return out
 
-@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1248,7 +1246,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1257,11 +1255,11 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-
+    # REMOVE COMPLETELY OR REDUCE
+    time.sleep(0.1)
 
     sym = normalize_peer_ticker(symbol)
-    if False:
-        st.write("Fetching:", sym)
+    st.write("Fetching:", sym)
 
     out = {
         "Company": fallback_company or sym,
@@ -1286,25 +1284,29 @@ def get_live_peer_row(
     # ---------------------------
     # Fetch data
     # ---------------------------
-    # ✅ Single reliable source
+    # ✅ Only ONE Yahoo call first (fastest + structured)
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
-    ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+
+    # ❌ Skip expensive fallbacks initially
+    ystats = {}
     yhtml = {}
     inv = {}
-
-    # ✅ HTML fallback only if both above fail
-    yhtml = {}
+    # Only fallback if Yahoo failed completely
     if (
-            pd.isna(ystats.get("P/E", np.nan)) and
-            pd.isna(ystats.get("P/B", np.nan)) and
-            pd.isna(ystats.get("EV/EBITDA", np.nan)) and
             pd.isna(yh.get("P/E", np.nan)) and
             pd.isna(yh.get("P/B", np.nan)) and
             pd.isna(yh.get("EV/EBITDA", np.nan))
     ):
-        yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
+        ystats = retry_fetch(yahoo_stats_table_fallback, sym)
 
-    inv = {}
+        if (
+                pd.isna(ystats.get("P/E", np.nan)) and
+                pd.isna(ystats.get("P/B", np.nan)) and
+                pd.isna(ystats.get("EV/EBITDA", np.nan))
+        ):
+            yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
+    # ❌ REMOVE yfinance (too slow)
+    info = {}
 
     # ---------------------------
     # Basic info
@@ -1334,24 +1336,34 @@ def get_live_peer_row(
     # ---------------------------
     # Yahoo-only ratio priority
     # ---------------------------
+    pe = ystats.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yh.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yhtml.get("P/E", np.nan)
 
-    pe = yh.get("P/E", np.nan)
-    pb = yh.get("P/B", np.nan)
-    ev_ebitda = yh.get("EV/EBITDA", np.nan)
+    pb = ystats.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yh.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yhtml.get("P/B", np.nan)
 
+    ev_ebitda = ystats.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yh.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
     has_yahoo_ratio = not (
             pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
 
-    # ✅ ONLY fallback to Investing if Yahoo COMPLETELY FAILED
-    # ✅ Only use Investing.com if Yahoo returned NOTHING at all
-    if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
+    # ✅ ONLY fallback if needed
+    if not has_yahoo_ratio:
         inv = retry_fetch(investing_ratios, sym)
 
         pe = inv.get("P/E", pe)
         pb = inv.get("P/B", pb)
         ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
-
     # ---------------------------
     # Determine availability
     # ---------------------------
@@ -1599,9 +1611,9 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
     )
 
     df = df.sort_values(
-        by=["SimilarityScore", "Company"],
-        ascending=[False, True]
-    ).head(max_peers)
+        by=["SimilarityScore", "RatioCount", "Company"],
+        ascending=[False, False, True]
+    ).head(max_peers).reset_index(drop=True)
 
     meta = {
         "target": target_profile,
@@ -1785,7 +1797,7 @@ S.setdefault("peer_picker_selected_map", {})
 cA, cB, cC = st.columns([2.2, 1, 1.2])
 with cA:
     target_company = st.text_input(
-        "Company you are valuing (ZSE / VFEX )",
+        "Company you are valuing (Zimbabwe / VFEX / JSE / any ticker in your universe)",
         value=S["target_company"],
         key="target_company_input",
         placeholder="e.g. econet, padenga, cbz, delta, innscor ...",
