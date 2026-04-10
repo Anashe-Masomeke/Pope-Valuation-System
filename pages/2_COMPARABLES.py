@@ -137,35 +137,38 @@ def _tokenize_text(x: str) -> list:
 
 def _clean_num(x):
     try:
-        if x is None or x == "":
-            return np.nan
-        return float(x)
-    except Exception:
-        return np.nan
-
-def _clean_num(value, ratio_type):
-    try:
-        v = float(value)
-
-        if pd.isna(v) or np.isinf(v):
+        if x is None:
             return np.nan
 
-        if ratio_type == "P/E":
-            if v < 0 or v > 100:
+        if isinstance(x, str):
+            x = x.replace(",", "").strip()
+            if x == "":
                 return np.nan
 
-        elif ratio_type == "P/B":
-            if v < 0 or v > 20:
-                return np.nan
+        val = float(x)
 
-        elif ratio_type == "EV/EBITDA":
-            if v < 0 or v > 50:
-                return np.nan
+        if np.isnan(val) or np.isinf(val):
+            return np.nan
 
-        return v
+        return val
 
     except:
         return np.nan
+
+def validate_ratio(value, ratio_type):
+        v = _clean_num(value)
+
+        if pd.isna(v):
+            return np.nan
+
+        if ratio_type == "P/E" and (v < 0 or v > 100):
+            return np.nan
+        if ratio_type == "P/B" and (v < 0 or v > 20):
+            return np.nan
+        if ratio_type == "EV/EBITDA" and (v < 0 or v > 50):
+            return np.nan
+
+        return v
 def _num_input_default(x, fallback=0.0):
     try:
         if x is None or pd.isna(x):
@@ -533,7 +536,9 @@ def strict_peer_score(peer_row: dict, target_profile: dict) -> int:
     peer_keywords = _clean_text(peer_row.get("sector_keywords")).lower()
     peer_company = _clean_text(peer_row.get("company")).lower()
     peer_country = _clean_text(peer_row.get("country")).lower()
-    peer_priority = _clean_num(peer_row.get("match_priority"))
+    peer_priority = _clean_num(peer_row.get("match_priority", 0))
+    if pd.isna(peer_priority):
+        peer_priority = 0
 
     tgt_sector = _clean_text(target_profile.get("preferred_sector")).lower()
     tgt_industry = _clean_text(target_profile.get("preferred_industry")).lower()
@@ -702,7 +707,7 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
     )
 
     if "match_priority" not in combined.columns:
-        combined["match_priority"] = ""
+        combined["match_priority"] = 0
 
     combined["match_priority_num"] = pd.to_numeric(
         combined["match_priority"], errors="coerce"
