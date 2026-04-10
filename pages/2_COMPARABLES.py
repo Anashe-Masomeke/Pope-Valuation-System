@@ -143,7 +143,7 @@ def _clean_num(x):
     except Exception:
         return np.nan
 
-def validate_ratio(value, ratio_type):
+def _clean_num(value, ratio_type):
     try:
         v = float(value)
 
@@ -875,7 +875,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -999,7 +999,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -1070,9 +1070,20 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
         evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
 
-        out["P/E"] = validate_ratio(_clean_num(...), "P/E")
-        out["P/B"] = validate_ratio(_clean_num(...), "P/B")
-        out["EV/EBITDA"] = validate_ratio(_clean_num(...), "EV/EBITDA")
+        # ✅ STRICT Yahoo definitions (match UI)
+
+        # P/E → Yahoo UI shows TRAILING P/E
+        pe = trailing_pe
+
+        # P/B → direct
+        pb_val = pb
+
+        # EV/EBITDA → direct
+        ev_val = evebitda
+
+        out["P/E"] = _clean_num(pe)
+        out["P/B"] = _clean_num(pb_val)
+        out["EV/EBITDA"] = _clean_num(ev_val)
 
         if not _all_nan_ratio_dict(out):
             out["ratio_source"] = "Yahoo quoteSummary"
@@ -1086,7 +1097,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1211,7 +1222,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1269,7 +1280,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=0)  # 6 hours  # 30 minutes
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1359,11 +1370,21 @@ def get_live_peer_row(
     # ---------------------------
     # Yahoo-only ratio priority
     # ---------------------------
-    pe = ystats.get("P/E", np.nan)
-    if pd.isna(pe):
-        pe = yh.get("P/E", np.nan)
-    if pd.isna(pe):
-        pe = yhtml.get("P/E", np.nan)
+    # ✅ STRICT SOURCE PRIORITY (match Yahoo UI)
+    pe = yh.get("P/E", np.nan)
+    pb = yh.get("P/B", np.nan)
+    ev_ebitda = yh.get("EV/EBITDA", np.nan)
+
+    # fallback ONLY if Yahoo API failed
+    if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
+        pe = ystats.get("P/E", np.nan)
+        pb = ystats.get("P/B", np.nan)
+        ev_ebitda = ystats.get("EV/EBITDA", np.nan)
+
+        if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
+            pe = yhtml.get("P/E", np.nan)
+            pb = yhtml.get("P/B", np.nan)
+            ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
 
     pb = ystats.get("P/B", np.nan)
     if pd.isna(pb):
@@ -1442,7 +1463,9 @@ def get_live_peer_row(
         "Industry": industry,
         "EV/EBITDA": _clean_num(ev_ebitda),
         "P/B": _clean_num(pb),
-        "P/E": _clean_num(pe),
+        "P/E": round(_clean_num(pe), 2) if not pd.isna(pe) else np.nan,
+        "P/B": round(_clean_num(pb), 2) if not pd.isna(pb) else np.nan,
+        "EV/EBITDA": round(_clean_num(ev_ebitda), 2) if not pd.isna(ev_ebitda) else np.nan,
         "Source": source,
         "RatioNote": ratio_note,
         "YahooProfile": profile_url,
