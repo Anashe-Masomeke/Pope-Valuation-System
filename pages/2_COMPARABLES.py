@@ -760,22 +760,37 @@ def get_live_peer_row(
     try:
         t = yf.Ticker(sym)
 
-        # ✅ CLOUD-SAFE DATA
+        # ✅ STEP 1: FAST INFO (SAFE)
         fast = t.fast_info
 
         pe = fast.get("trailing_pe", np.nan)
         pb = fast.get("price_to_book", np.nan)
         ev = fast.get("enterprise_value", np.nan)
-
-        # ✅ EV/EBITDA calculation
         ebitda = fast.get("ebitda", np.nan)
+
         if pd.notna(ev) and pd.notna(ebitda) and ebitda != 0:
             ev_ebitda = ev / ebitda
         else:
             ev_ebitda = np.nan
 
+        # ✅ STEP 2: FALLBACK TO INFO IF MISSING
+        if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
+            try:
+                info = t.info  # slower but richer
+
+                pe = info.get("trailingPE", pe)
+                pb = info.get("priceToBook", pb)
+                ev_ebitda = info.get("enterpriseToEbitda", ev_ebitda)
+
+                source = "yfinance.info (fallback)"
+
+            except Exception:
+                source = "fast_info only (fallback failed)"
+        else:
+            source = "fast_info"
+
         out.update({
-            "Company": fallback_company or sym,   # ⚠️ no info anymore
+            "Company": fallback_company or sym,
             "Exchange": fallback_exchange,
             "Country": fallback_country,
             "Sector": fallback_sector,
@@ -783,11 +798,11 @@ def get_live_peer_row(
             "P/E": pe,
             "P/B": pb,
             "EV/EBITDA": ev_ebitda,
-            "Source": "yfinance.fast_info",
-            "RatioNote": "Cloud-safe fast_info",
+            "Source": source,
+            "RatioNote": "Hybrid fast_info + fallback",
         })
 
-        # ✅ ADD LINKS (CORRECT PLACE)
+        # ✅ LINKS
         out["YahooProfile"] = f"https://finance.yahoo.com/quote/{sym}/profile/"
         out["YahooStats"] = f"https://finance.yahoo.com/quote/{sym}/key-statistics/"
 
