@@ -726,7 +726,6 @@ def retry_fetch(func, *args, retries=2):
     return {}
 
 import yfinance as yf
-
 @st.cache_data(ttl=3600)
 def get_live_peer_row(
     symbol: str,
@@ -760,34 +759,42 @@ def get_live_peer_row(
 
     try:
         t = yf.Ticker(sym)
-        info = t.info
 
-        pe = info.get("trailingPE", np.nan)
-        pb = info.get("priceToBook", np.nan)
-        ev = info.get("enterpriseToEbitda", np.nan)
+        # ✅ CLOUD-SAFE DATA
+        fast = t.fast_info
 
-        # fallback to forward PE
-        if pd.isna(pe):
-            pe = info.get("forwardPE", np.nan)
+        pe = fast.get("trailing_pe", np.nan)
+        pb = fast.get("price_to_book", np.nan)
+        ev = fast.get("enterprise_value", np.nan)
+
+        # ✅ EV/EBITDA calculation
+        ebitda = fast.get("ebitda", np.nan)
+        if pd.notna(ev) and pd.notna(ebitda) and ebitda != 0:
+            ev_ebitda = ev / ebitda
+        else:
+            ev_ebitda = np.nan
 
         out.update({
-            "Company": info.get("shortName", fallback_company or sym),
-            "Exchange": info.get("exchange", fallback_exchange),
-            "Country": info.get("country", fallback_country),
-            "Sector": info.get("sector", fallback_sector),
-            "Industry": info.get("industry", fallback_industry),
+            "Company": fallback_company or sym,   # ⚠️ no info anymore
+            "Exchange": fallback_exchange,
+            "Country": fallback_country,
+            "Sector": fallback_sector,
+            "Industry": fallback_industry,
             "P/E": pe,
             "P/B": pb,
-            "EV/EBITDA": ev,
-            "Source": "yfinance",
-            "RatioNote": "Fetched via yfinance.info",
+            "EV/EBITDA": ev_ebitda,
+            "Source": "yfinance.fast_info",
+            "RatioNote": "Cloud-safe fast_info",
         })
+
+        # ✅ ADD LINKS (CORRECT PLACE)
+        out["YahooProfile"] = f"https://finance.yahoo.com/quote/{sym}/profile/"
+        out["YahooStats"] = f"https://finance.yahoo.com/quote/{sym}/key-statistics/"
 
     except Exception as e:
         out["RatioNote"] = f"yfinance failed: {e}"
 
     return out
-
 def _is_yahoo_usable_status(x):
     if pd.isna(x):
         return False
@@ -932,7 +939,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
         return live
 
     # 🚀 Parallel execution
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(fetch_one, r) for _, r in strict_df.iterrows()]
 
         for future in as_completed(futures):
