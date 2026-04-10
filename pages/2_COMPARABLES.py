@@ -852,7 +852,7 @@ def _all_nan_ratio_dict(d: dict) -> bool:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
 def investing_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
@@ -976,7 +976,7 @@ def investing_ratios(symbol: str):
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
 def yahoo_profile_and_metrics(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     if not sym:
@@ -1044,10 +1044,15 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
 
         forward_pe = _raw(summary.get("forwardPE")) or _raw(dks.get("forwardPE")) or _raw(fin.get("forwardPE"))
         trailing_pe = _raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")) or _raw(fin.get("trailingPE"))
-        pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
+        # ✅ Prefer Statistics tab P/B first (handled later), keep quoteSummary as fallback
+        pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook"))
         evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
 
-        out["P/E"] = _clean_num(forward_pe) if not pd.isna(_clean_num(forward_pe)) else _clean_num(trailing_pe)
+        out["P/E"] = (
+            _clean_num(trailing_pe)
+            if not pd.isna(_clean_num(trailing_pe))
+            else _clean_num(forward_pe)
+        )
         out["P/B"] = _clean_num(pb)
         out["EV/EBITDA"] = _clean_num(evebitda)
 
@@ -1063,7 +1068,7 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
 def yahoo_stats_table_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
 
@@ -1187,8 +1192,7 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
 
     return out
 
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
 def yahoo_html_ratio_fallback(symbol: str) -> dict:
     sym = normalize_peer_ticker(symbol)
     out = {
@@ -1246,7 +1250,7 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
+@st.cache_data(show_spinner=False, ttl=60 * 15)  # 15 minutes while debugging  # 6 hours  # 30 minutes
 def get_live_peer_row(
         symbol: str,
         fallback_company: str = "",
@@ -1357,13 +1361,16 @@ def get_live_peer_row(
             pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
 
-    # ✅ ONLY fallback if needed
+    # ✅ ONLY fallback to Investing if Yahoo COMPLETELY FAILED
     if not has_yahoo_ratio:
         inv = retry_fetch(investing_ratios, sym)
 
-        pe = inv.get("P/E", pe)
-        pb = inv.get("P/B", pb)
-        ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
+        if pd.isna(pe):
+            pe = inv.get("P/E", pe)
+        if pd.isna(pb):
+            pb = inv.get("P/B", pb)
+        if pd.isna(ev_ebitda):
+            ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
     # ---------------------------
     # Determine availability
     # ---------------------------
