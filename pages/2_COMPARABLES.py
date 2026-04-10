@@ -1046,8 +1046,10 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         trailing_pe = _raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")) or _raw(fin.get("trailingPE"))
         # ✅ Prefer Statistics tab P/B first (handled later), keep quoteSummary as fallback
         pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook"))
-        evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
-
+        # ✅ Yahoo JSON values (match Yahoo UI)
+        evebitda = _raw(fin.get("enterpriseToEbitda"))
+        pb = _raw(dks.get("priceToBook"))
+        trailing_pe = _raw(dks.get("trailingPE"))
         out["P/E"] = (
             _clean_num(trailing_pe)
             if not pd.isna(_clean_num(trailing_pe))
@@ -1289,11 +1291,11 @@ def get_live_peer_row(
     # ---------------------------
     # Fetch data
     # ---------------------------
-    # ✅ ALWAYS fetch Yahoo Statistics FIRST (matches Yahoo UI)
-    ystats = retry_fetch(yahoo_stats_table_fallback, sym)
-
-    # ✅ Then fetch quoteSummary as secondary source
+    # ✅ Single reliable source
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    ystats = {}
+    yhtml = {}
+    inv = {}
 
     # ✅ HTML fallback only if both above fail
     yhtml = {}
@@ -1337,24 +1339,11 @@ def get_live_peer_row(
     # ---------------------------
     # Yahoo-only ratio priority
     # ---------------------------
-    pe = ystats.get("P/E", np.nan)
-    if pd.isna(pe):
-        pe = yh.get("P/E", np.nan)
-    if pd.isna(pe):
-        pe = yhtml.get("P/E", np.nan)
 
-    pb = ystats.get("P/B", np.nan)
-    if pd.isna(pb):
-        pb = yh.get("P/B", np.nan)
-    if pd.isna(pb):
-        pb = yhtml.get("P/B", np.nan)
+    pe = yh.get("P/E", np.nan)
+    pb = yh.get("P/B", np.nan)
+    ev_ebitda = yh.get("EV/EBITDA", np.nan)
 
-    ev_ebitda = ystats.get("EV/EBITDA", np.nan)
-    if pd.isna(ev_ebitda):
-        ev_ebitda = yh.get("EV/EBITDA", np.nan)
-    if pd.isna(ev_ebitda):
-        ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
-    # ✅ Yahoo usable if at least ONE valuation metric exists
     has_yahoo_ratio = not (
             pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
