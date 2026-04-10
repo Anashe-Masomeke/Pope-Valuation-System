@@ -98,8 +98,9 @@ h1, h2, h3, h4, h5, h6 {
 """, unsafe_allow_html=True)
 st.title("📊 Comparables Valuation – EV/EBITDA, P/B, P/E")
 st.markdown("All values + inputs are **saved in session_state**, so switching pages keeps your work.")
-if st.button("🔄 Refresh ratios (fix missing data)"):
+if st.button("🔄 Hard Refresh (Clear All Data)"):
     st.cache_data.clear()
+    st.session_state.clear()
     st.rerun()
 S = st.session_state
 
@@ -142,7 +143,29 @@ def _clean_num(x):
     except Exception:
         return np.nan
 
+def validate_ratio(value, ratio_type):
+    try:
+        v = float(value)
 
+        if pd.isna(v) or np.isinf(v):
+            return np.nan
+
+        if ratio_type == "P/E":
+            if v < 0 or v > 100:
+                return np.nan
+
+        elif ratio_type == "P/B":
+            if v < 0 or v > 20:
+                return np.nan
+
+        elif ratio_type == "EV/EBITDA":
+            if v < 0 or v > 50:
+                return np.nan
+
+        return v
+
+    except:
+        return np.nan
 def _num_input_default(x, fallback=0.0):
     try:
         if x is None or pd.isna(x):
@@ -1047,9 +1070,9 @@ def yahoo_profile_and_metrics(symbol: str) -> dict:
         pb = _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook")) or _raw(fin.get("priceToBook"))
         evebitda = _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
 
-        out["P/E"] = _clean_num(forward_pe) if not pd.isna(_clean_num(forward_pe)) else _clean_num(trailing_pe)
-        out["P/B"] = _clean_num(pb)
-        out["EV/EBITDA"] = _clean_num(evebitda)
+        out["P/E"] = validate_ratio(_clean_num(...), "P/E")
+        out["P/B"] = validate_ratio(_clean_num(...), "P/B")
+        out["EV/EBITDA"] = validate_ratio(_clean_num(...), "EV/EBITDA")
 
         if not _all_nan_ratio_dict(out):
             out["ratio_source"] = "Yahoo quoteSummary"
@@ -1426,7 +1449,12 @@ def get_live_peer_row(
         "YahooStats": stats_url,
         "NeedsManualInvesting": needs_manual_investing,
     })
-
+    st.write({
+        "Ticker": sym,
+        "P/E": yh.get("P/E"),
+        "P/B": yh.get("P/B"),
+        "EV/EBITDA": yh.get("EV/EBITDA"),
+    })
     return out
 
 
@@ -1574,7 +1602,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
         return live
 
     # 🚀 Parallel execution
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(fetch_one, r) for _, r in strict_df.iterrows()]
 
         for future in as_completed(futures):
