@@ -819,7 +819,7 @@ def yahoo_warmup():
         pass
 
 
-yahoo_warmup()
+
 
 
 def make_yahoo_statistics_url(symbol: str) -> str:
@@ -1284,18 +1284,14 @@ def get_live_peer_row(
     # Fetch data
     # ---------------------------
     # ✅ Only ONE Yahoo call first (fastest + structured)
-    yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    yh = {}
 
     # ❌ Skip expensive fallbacks initially
     ystats = {}
     yhtml = {}
     inv = {}
     # Only fallback if Yahoo failed completely
-    if (
-            pd.isna(yh.get("P/E", np.nan)) and
-            pd.isna(yh.get("P/B", np.nan)) and
-            pd.isna(yh.get("EV/EBITDA", np.nan))
-    ):
+    if True:
         ystats = retry_fetch(yahoo_stats_table_fallback, sym)
 
         if (
@@ -1424,7 +1420,8 @@ def get_live_peer_row(
         "YahooStats": stats_url,
         "NeedsManualInvesting": needs_manual_investing,
     })
-
+    st.write("SYMBOL:", sym)
+    st.write("YAHOO RAW:", yh)
     return out
 
 
