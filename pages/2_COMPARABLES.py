@@ -1255,11 +1255,10 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-    # REMOVE COMPLETELY OR REDUCE
-    time.sleep(0.1)
+
 
     sym = normalize_peer_ticker(symbol)
-    st.write("Fetching:", sym)
+    st.write(sym, yh.get("P/E"), yh.get("P/B"), yh.get("EV/EBITDA"))
 
     out = {
         "Company": fallback_company or sym,
@@ -1353,10 +1352,9 @@ def get_live_peer_row(
         ev_ebitda = yh.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
         ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
-    has_yahoo_ratio = not (
-            pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
+    has_yahoo_ratio = (
+            pd.notna(pe) or pd.notna(pb) or pd.notna(ev_ebitda)
     )
-
     # ✅ ONLY fallback if needed
     if not has_yahoo_ratio:
         inv = retry_fetch(investing_ratios, sym)
@@ -1417,9 +1415,9 @@ def get_live_peer_row(
         "Country": country,
         "Sector": sector,
         "Industry": industry,
-        "EV/EBITDA": _clean_num(ev_ebitda),
-        "P/B": _clean_num(pb),
-        "P/E": _clean_num(pe),
+        "EV/EBITDA": ev_ebitda if not pd.isna(ev_ebitda) else np.nan,
+        "P/B": pb if not pd.isna(pb) else np.nan,
+        "P/E": pe if not pd.isna(pe) else np.nan,
         "Source": source,
         "RatioNote": ratio_note,
         "YahooProfile": profile_url,
