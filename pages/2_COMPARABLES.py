@@ -710,19 +710,14 @@ def retry_fetch(func, *args, retries=2):
         try:
             result = func(*args)
 
-            # ✅ Only accept GOOD results (not empty ratios)
-            if result and not (
-                pd.isna(result.get("P/E", np.nan)) and
-                pd.isna(result.get("P/B", np.nan)) and
-                pd.isna(result.get("EV/EBITDA", np.nan))
-            ):
+            # ✅ Accept ANY result dictionary
+            if isinstance(result, dict) and len(result) > 0:
                 return result
 
         except Exception:
             pass
 
-        # ✅ exponential backoff (prevents blocking)
-        time.sleep(1.5 * (i + 1) + random.random())
+        time.sleep(1.5 * (i + 1))
 
     return {}
 # =========================================================
@@ -1262,11 +1257,11 @@ def get_live_peer_row(
         fallback_sector: str = "",
         fallback_industry: str = ""
 ):
-    # REMOVE COMPLETELY OR REDUCE
-    time.sleep(0.1)
+
 
     sym = normalize_peer_ticker(symbol)
-    st.write("Fetching:", sym)
+    if False:
+        st.write("Fetching:", sym)
 
     out = {
         "Company": fallback_company or sym,
@@ -1293,7 +1288,7 @@ def get_live_peer_row(
     # ---------------------------
     # ✅ Single reliable source
     yh = retry_fetch(yahoo_profile_and_metrics, sym)
-    ystats = {}
+    ystats = retry_fetch(yahoo_stats_table_fallback, sym)
     yhtml = {}
     inv = {}
 
