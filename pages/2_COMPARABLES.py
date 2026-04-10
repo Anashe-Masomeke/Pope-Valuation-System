@@ -1171,10 +1171,11 @@ def yahoo_stats_table_fallback(symbol: str) -> dict:
                 elif label == "enterprise value/ebitda" and pd.isna(best_hits["evebitda"]):
                     best_hits["evebitda"] = parse_ratio_value(value)
 
+        # ✅ Yahoo UI logic: Trailing P/E is the primary metric
         out["P/E"] = (
-            best_hits["forward_pe"]
-            if not pd.isna(best_hits["forward_pe"])
-            else best_hits["trailing_pe"]
+            best_hits["trailing_pe"]
+            if not pd.isna(best_hits["trailing_pe"])
+            else best_hits["forward_pe"]
         )
         out["P/B"] = best_hits["pb"]
         out["EV/EBITDA"] = best_hits["evebitda"]
@@ -1353,20 +1354,20 @@ def get_live_peer_row(
         ev_ebitda = yh.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
         ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
+    # ✅ Yahoo usable if at least ONE valuation metric exists
     has_yahoo_ratio = not (
             pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
     )
 
     # ✅ ONLY fallback to Investing if Yahoo COMPLETELY FAILED
-    if not has_yahoo_ratio:
+    # ✅ Only use Investing.com if Yahoo returned NOTHING at all
+    if pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda):
         inv = retry_fetch(investing_ratios, sym)
 
-        if pd.isna(pe):
-            pe = inv.get("P/E", pe)
-        if pd.isna(pb):
-            pb = inv.get("P/B", pb)
-        if pd.isna(ev_ebitda):
-            ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
+        pe = inv.get("P/E", pe)
+        pb = inv.get("P/B", pb)
+        ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
+
     # ---------------------------
     # Determine availability
     # ---------------------------
@@ -1614,9 +1615,9 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
     )
 
     df = df.sort_values(
-        by=["SimilarityScore", "RatioCount", "Company"],
-        ascending=[False, False, True]
-    ).head(max_peers).reset_index(drop=True)
+        by=["SimilarityScore", "Company"],
+        ascending=[False, True]
+    ).head(max_peers)
 
     meta = {
         "target": target_profile,
