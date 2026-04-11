@@ -1864,18 +1864,46 @@ if live_df is not None and not live_df.empty:
         "Source",
         "RatioNote",
     ]
+    # -------------------------------------------------
+    # SAFE COLUMN SELECTION (prevents KeyError crash)
+    # -------------------------------------------------
+    safe_cols = [c for c in display_cols if c in df_show.columns]
+    df_display = df_show[safe_cols].copy()
+
+    # -------------------------------------------------
+    # STREAMLIT TABLE
+    # -------------------------------------------------
     st.dataframe(
-        df_show[display_cols],
-        width='stretch',
+        df_display,
+        width="stretch",
         column_config={
-            "YahooStats": st.column_config.LinkColumn("Stats Page", display_text="Open Stats"),
-            "YahooProfile": st.column_config.LinkColumn("Profile Page", display_text="Open"),
-            "SimilarityScore": st.column_config.NumberColumn("SimilarityScore", format="%d"),
-            "EV/EBITDA": st.column_config.NumberColumn("EV/EBITDA", format="%.2f"),
-            "P/B": st.column_config.NumberColumn("P/B", format="%.2f"),
-            "P/E": st.column_config.NumberColumn("P/E", format="%.2f"),
+            "YahooStats": st.column_config.LinkColumn(
+                "Stats Page",
+                display_text="Open Stats"
+            ),
+            "YahooProfile": st.column_config.LinkColumn(
+                "Profile Page",
+                display_text="Open"
+            ),
+            "SimilarityScore": st.column_config.NumberColumn(
+                "SimilarityScore",
+                format="%d"
+            ),
+            "EV/EBITDA": st.column_config.NumberColumn(
+                "EV/EBITDA",
+                format="%.2f"
+            ),
+            "P/B": st.column_config.NumberColumn(
+                "P/B",
+                format="%.2f"
+            ),
+            "P/E": st.column_config.NumberColumn(
+                "P/E",
+                format="%.2f"
+            ),
         }
     )
+
     st.markdown("---")
 
     selected_live_df = render_peer_picker_table(df_show)
