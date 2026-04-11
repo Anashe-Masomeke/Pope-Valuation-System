@@ -771,15 +771,12 @@ def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
 
     for attempt in range(int(tries)):
         try:
-            session = requests.Session()
-
-            # 🔥 Inject headers at session level (this is what fixes Streamlit Cloud blocking)
-            session.headers.update(use_headers)
-
+            session = get_session()
             r = session.get(
                 url,
                 params=params,
                 timeout=timeout,
+                headers=use_headers,
                 allow_redirects=True,
             )
 
@@ -1259,7 +1256,7 @@ def get_live_peer_row(
         fallback_industry: str = ""
 ):
     # REMOVE COMPLETELY OR REDUCE
-    time.sleep(0.4)
+    time.sleep(0.1)
 
     sym = normalize_peer_ticker(symbol)
     st.write("Fetching:", sym)
