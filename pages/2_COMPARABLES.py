@@ -4,6 +4,7 @@ import numpy as np
 import yfinance as yf
 from pathlib import Path
 import re
+from yahooquery import Ticker
 from bs4 import BeautifulSoup
 from io import StringIO
 import requests
@@ -771,12 +772,15 @@ def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
 
     for attempt in range(int(tries)):
         try:
-            session = get_session()
+            session = requests.Session()
+
+            # 🔥 Inject headers at session level (this is what fixes Streamlit Cloud blocking)
+            session.headers.update(use_headers)
+
             r = session.get(
                 url,
                 params=params,
                 timeout=timeout,
-                headers=use_headers,
                 allow_redirects=True,
             )
 
@@ -1256,7 +1260,7 @@ def get_live_peer_row(
         fallback_industry: str = ""
 ):
     # REMOVE COMPLETELY OR REDUCE
-    time.sleep(0.1)
+    time.sleep(0.4)
 
     sym = normalize_peer_ticker(symbol)
     st.write("Fetching:", sym)
