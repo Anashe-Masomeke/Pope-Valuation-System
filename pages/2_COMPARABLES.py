@@ -1254,7 +1254,7 @@ def yahooquery_get_ratios(symbol: str):
     sym = normalize_peer_ticker(symbol)
 
     out = {
-        "Company": "",
+        "Company": sym,
         "Exchange": "",
         "Country": "",
         "Sector": "",
@@ -1267,25 +1267,51 @@ def yahooquery_get_ratios(symbol: str):
     try:
         t = Ticker(sym)
 
-        price = t.price.get(sym, {})
-        summary = t.summary_detail.get(sym, {})
-        key_stats = t.key_stats.get(sym, {})
-        financial = t.financial_data.get(sym, {})
-        profile = t.asset_profile.get(sym, {})
+        price = (t.price or {}).get(sym, {}) or {}
+        summary = (t.summary_detail or {}).get(sym, {}) or {}
+        stats = (t.key_stats or {}).get(sym, {}) or {}
+        fin = (t.financial_data or {}).get(sym, {}) or {}
+        profile = (t.asset_profile or {}).get(sym, {}) or {}
 
+        # -------------------------
+        # COMPANY INFO
+        # -------------------------
         out["Company"] = price.get("longName") or price.get("shortName") or sym
-        out["Exchange"] = price.get("exchangeName", "")
-        out["Country"] = profile.get("country", "")
-        out["Sector"] = profile.get("sector", "")
-        out["Industry"] = profile.get("industry", "")
+        out["Exchange"] = price.get("exchangeName") or ""
+        out["Country"] = profile.get("country") or ""
+        out["Sector"] = profile.get("sector") or ""
+        out["Industry"] = profile.get("industry") or ""
 
-        # Ratios
-        out["P/E"] = summary.get("forwardPE") or summary.get("trailingPE")
-        out["P/B"] = key_stats.get("priceToBook")
-        out["EV/EBITDA"] = financial.get("enterpriseToEbitda")
+        # -------------------------
+        # RATIOS (FIXED LOGIC)
+        # -------------------------
 
-    except Exception:
-        pass
+        # P/E (try multiple sources)
+        pe = (
+            summary.get("forwardPE")
+            or summary.get("trailingPE")
+            or fin.get("forwardPE")
+        )
+
+        # P/B
+        pb = (
+            stats.get("priceToBook")
+            or summary.get("priceToBook")
+            or fin.get("priceToBook")
+        )
+
+        # EV/EBITDA
+        ev = (
+            fin.get("enterpriseToEbitda")
+            or stats.get("enterpriseToEbitda")
+        )
+
+        out["P/E"] = pe
+        out["P/B"] = pb
+        out["EV/EBITDA"] = ev
+
+    except Exception as e:
+        print(f"yahooquery failed for {sym}: {e}")
 
     return out
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
