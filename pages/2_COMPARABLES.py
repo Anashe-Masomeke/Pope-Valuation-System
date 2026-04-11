@@ -4,6 +4,7 @@ import numpy as np
 import yfinance as yf
 from pathlib import Path
 import re
+from yahooquery import Ticker
 from bs4 import BeautifulSoup
 from io import StringIO
 import requests
@@ -771,12 +772,15 @@ def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
 
     for attempt in range(int(tries)):
         try:
-            session = get_session()
+            session = requests.Session()
+
+            # 🔥 Inject headers at session level (this is what fixes Streamlit Cloud blocking)
+            session.headers.update(use_headers)
+
             r = session.get(
                 url,
                 params=params,
                 timeout=timeout,
-                headers=use_headers,
                 allow_redirects=True,
             )
 
@@ -1246,20 +1250,79 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
+def yahooquery_get_ratios(symbol: str):
+    sym = normalize_peer_ticker(symbol)
+
+    out = {
+        "Company": sym,
+        "Exchange": "",
+        "Country": "",
+        "Sector": "",
+        "Industry": "",
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+    }
+
+    try:
+        t = Ticker(sym)
+
+        price = (t.price or {}).get(sym, {}) or {}
+        summary = (t.summary_detail or {}).get(sym, {}) or {}
+        stats = (t.key_stats or {}).get(sym, {}) or {}
+        fin = (t.financial_data or {}).get(sym, {}) or {}
+        profile = (t.asset_profile or {}).get(sym, {}) or {}
+
+        # -------------------------
+        # COMPANY INFO
+        # -------------------------
+        out["Company"] = price.get("longName") or price.get("shortName") or sym
+        out["Exchange"] = price.get("exchangeName") or ""
+        out["Country"] = profile.get("country") or ""
+        out["Sector"] = profile.get("sector") or ""
+        out["Industry"] = profile.get("industry") or ""
+
+        # -------------------------
+        # RATIOS (FIXED LOGIC)
+        # -------------------------
+
+        # P/E (try multiple sources)
+        pe = (
+            summary.get("forwardPE")
+            or summary.get("trailingPE")
+            or fin.get("forwardPE")
+        )
+
+        # P/B
+        pb = (
+            stats.get("priceToBook")
+            or summary.get("priceToBook")
+            or fin.get("priceToBook")
+        )
+
+        # EV/EBITDA
+        ev = (
+            fin.get("enterpriseToEbitda")
+            or stats.get("enterpriseToEbitda")
+        )
+
+        out["P/E"] = pe
+        out["P/B"] = pb
+        out["EV/EBITDA"] = ev
+
+    except Exception as e:
+        print(f"yahooquery failed for {sym}: {e}")
+
+    return out
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)  # 6 hours  # 30 minutes
-def get_live_peer_row(
-        symbol: str,
-        fallback_company: str = "",
-        fallback_country: str = "",
-        fallback_exchange: str = "",
-        fallback_sector: str = "",
-        fallback_industry: str = ""
-):
-    # REMOVE COMPLETELY OR REDUCE
-    time.sleep(0.1)
+def get_live_peer_row_cloud(symbol: str,
+                           fallback_company: str = "",
+                           fallback_country: str = "",
+                           fallback_exchange: str = "",
+                           fallback_sector: str = "",
+                           fallback_industry: str = ""):
 
     sym = normalize_peer_ticker(symbol)
-    st.write("Fetching:", sym)
 
     out = {
         "Company": fallback_company or sym,
@@ -1273,158 +1336,73 @@ def get_live_peer_row(
         "P/E": np.nan,
         "Source": "",
         "RatioNote": "",
-        "YahooProfile": make_yahoo_profile_url(sym),
-        "YahooStats": make_yahoo_statistics_url(sym),
-        "NeedsManualInvesting": False,
     }
 
     if not sym:
         return out
 
-    # ---------------------------
-    # Fetch data
-    # ---------------------------
-    # ✅ Only ONE Yahoo call first (fastest + structured)
-    yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    # 🌐 small jitter delay (anti-block)
+    time.sleep(0.3 + random.random() * 0.5)
 
-    # ❌ Skip expensive fallbacks initially
-    ystats = {}
-    yhtml = {}
-    inv = {}
-    # Only fallback if Yahoo failed completely
-    if (
-            pd.isna(yh.get("P/E", np.nan)) and
-            pd.isna(yh.get("P/B", np.nan)) and
-            pd.isna(yh.get("EV/EBITDA", np.nan))
-    ):
-        ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+    # =====================================================
+    # 1️⃣ PRIMARY: yahooquery (BEST FOR CLOUD)
+    # =====================================================
+    yq = yahooquery_get_ratios(sym)
 
-        if (
-                pd.isna(ystats.get("P/E", np.nan)) and
-                pd.isna(ystats.get("P/B", np.nan)) and
-                pd.isna(ystats.get("EV/EBITDA", np.nan))
-        ):
-            yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
-    # ❌ REMOVE yfinance (too slow)
-    info = {}
+    pe = _clean_num(yq.get("P/E"))
+    pb = _clean_num(yq.get("P/B"))
+    ev = _clean_num(yq.get("EV/EBITDA"))
+    # =====================================================
+    # 2️⃣ SECONDARY: Yahoo quote endpoint (LIGHTWEIGHT)
+    # =====================================================
+    if pd.isna(pe) and pd.isna(pb) and pd.isna(ev):
+        try:
+            r = _safe_get(
+                YAHOO_QUOTE_URL,
+                params={"symbols": sym},
+                timeout=10,
+                tries=2
+            )
+            data = r.json()
+            res = data.get("quoteResponse", {}).get("result", [])
 
-    # ---------------------------
-    # Basic info
-    # ---------------------------
-    company = (
-            _clean_text(yh.get("Company"))
-            or fallback_company
-            or sym
-    )
-    exchange = (
-            _clean_text(yh.get("Exchange"))
-            or fallback_exchange
-    )
-    country = (
-            _clean_text(yh.get("Country"))
-            or fallback_country
-    )
-    sector = (
-            _clean_text(yh.get("Sector"))
-            or fallback_sector
-    )
-    industry = (
-            _clean_text(yh.get("Industry"))
-            or fallback_industry
-    )
+            if res:
+                q = res[0]
+                pe = q.get("trailingPE", pe)
+                pb = q.get("priceToBook", pb)
 
-    # ---------------------------
-    # Yahoo-only ratio priority
-    # ---------------------------
-    pe = ystats.get("P/E", np.nan)
-    if pd.isna(pe):
-        pe = yh.get("P/E", np.nan)
-    if pd.isna(pe):
-        pe = yhtml.get("P/E", np.nan)
+        except Exception:
+            pass
 
-    pb = ystats.get("P/B", np.nan)
-    if pd.isna(pb):
-        pb = yh.get("P/B", np.nan)
-    if pd.isna(pb):
-        pb = yhtml.get("P/B", np.nan)
-
-    ev_ebitda = ystats.get("EV/EBITDA", np.nan)
-    if pd.isna(ev_ebitda):
-        ev_ebitda = yh.get("EV/EBITDA", np.nan)
-    if pd.isna(ev_ebitda):
-        ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
-    has_yahoo_ratio = not (
-            pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda)
-    )
-
-    # ✅ ONLY fallback if needed
-    if not has_yahoo_ratio:
+    # =====================================================
+    # 3️⃣ LAST RESORT: Investing (LIMITED USAGE)
+    # =====================================================
+    if pd.isna(pe) and pd.isna(pb) and pd.isna(ev):
         inv = retry_fetch(investing_ratios, sym)
-
         pe = inv.get("P/E", pe)
         pb = inv.get("P/B", pb)
-        ev_ebitda = inv.get("EV/EBITDA", ev_ebitda)
-    # ---------------------------
-    # Determine availability
-    # ---------------------------
-    yahoo_quote_exists = bool(yh.get("quote_exists", False))
-    yahoo_stats_exists = bool(ystats.get("page_exists", False))
-    yahoo_html_exists = bool(yhtml.get("page_exists", False))
-    yahoo_exists = yahoo_quote_exists or yahoo_stats_exists or yahoo_html_exists
+        ev = inv.get("EV/EBITDA", ev)
 
-    source = ""
-    ratio_note = ""
-    profile_url = make_yahoo_profile_url(sym)
-    stats_url = make_yahoo_statistics_url(sym)
-    needs_manual_investing = False
+        if not (pd.isna(pe) and pd.isna(pb) and pd.isna(ev)):
+            out["Source"] = "Investing (fallback)"
+            out["RatioNote"] = "Yahoo failed → used Investing fallback"
 
-    # ---------------------------
-    # Source + notes
-    # ---------------------------
-    if has_yahoo_ratio:
-        source = (
-            ystats.get("ratio_source")
-            or yh.get("ratio_source")
-            or yhtml.get("ratio_source")
-            or "Yahoo Finance"
-        )
-        ratio_note = (
-            ystats.get("ratio_note")
-            if ystats.get("ratio_source")
-            else yh.get("ratio_note")
-            if yh.get("ratio_source")
-            else yhtml.get("ratio_note")
-            if yhtml.get("ratio_source")
-            else "Yahoo ratios fetched."
-        )
     else:
-        if yahoo_exists:
-            ratio_note = (
-                ystats.get("ratio_note")
-                or yh.get("ratio_note")
-                or yhtml.get("ratio_note")
-                or "Yahoo page exists, but ratios were not found."
-            )
-        else:
-            ratio_note = "Yahoo Finance returned no usable ratios."
+        out["Source"] = "Yahoo API"
+        out["RatioNote"] = "Fetched from Yahoo (cloud-optimized)"
 
-    # ---------------------------
-    # Final output
-    # ---------------------------
+    # =====================================================
+    # FINAL CLEAN
+    # =====================================================
     out.update({
-        "Company": company,
-        "Exchange": exchange,
-        "Country": country,
-        "Sector": sector,
-        "Industry": industry,
-        "EV/EBITDA": _clean_num(ev_ebitda),
+        "Company": yq.get("Company") or fallback_company or sym,
+        "Exchange": yq.get("Exchange") or fallback_exchange,
+        "Country": yq.get("Country") or fallback_country,
+        "Sector": yq.get("Sector") or fallback_sector,
+        "Industry": yq.get("Industry") or fallback_industry,
+        "EV/EBITDA": _clean_num(ev),
         "P/B": _clean_num(pb),
         "P/E": _clean_num(pe),
-        "Source": source,
-        "RatioNote": ratio_note,
-        "YahooProfile": profile_url,
-        "YahooStats": stats_url,
-        "NeedsManualInvesting": needs_manual_investing,
     })
 
     return out
@@ -1549,10 +1527,8 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    rows = []
-
     def fetch_one(r):
-        live = get_live_peer_row(
+        live = get_live_peer_row_cloud(
             symbol=r.get("ticker", ""),
             fallback_company=r.get("company", ""),
             fallback_country=r.get("country", ""),
@@ -1573,15 +1549,29 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
 
         return live
 
-    # 🚀 Parallel execution
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(fetch_one, r) for _, r in strict_df.iterrows()]
+    # 🚀 CLEAN CLOUD-OPTIMIZED EXECUTION
+    rows = []
+    batch_size = 2
 
-        for future in as_completed(futures):
-            try:
-                rows.append(future.result())
-            except Exception:
-                pass
+    for i in range(0, len(strict_df), batch_size):
+        batch = strict_df.iloc[i:i + batch_size]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(fetch_one, r) for _, r in batch.iterrows()]
+
+            for f in as_completed(futures):
+                try:
+                    result = f.result()
+                    if result:
+                        rows.append(result)
+                except Exception:
+                    pass
+
+        time.sleep(1.2)  # 🔥 cooldown between batches
+
+    # ==============================
+    # BUILD DATAFRAME
+    # ==============================
     df = pd.DataFrame(rows).drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
 
     if df.empty:
@@ -1591,11 +1581,12 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
             "peer_source": peer_source,
         }
 
-    # HARD RULE AGAIN: never allow Zimbabwe peers through
+    # ==============================
+    # FILTER OUT ZIMBABWE
+    # ==============================
     df["Country_l"] = df["Country"].map(lambda x: _clean_text(x).lower())
     df = df[df["Country_l"] != "zimbabwe"].copy()
 
-    # optional extra protection against Zimbabwe tickers
     df["Ticker_l"] = df["Ticker"].map(lambda x: _clean_text(x).lower())
     df = df[
         ~df["Ticker_l"].str.endswith(".zw", na=False) &
@@ -1604,6 +1595,9 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
 
     df = df.drop(columns=["Country_l", "Ticker_l"], errors="ignore")
 
+    # ==============================
+    # RATIO COUNT + SORT
+    # ==============================
     df["RatioCount"] = (
             df["EV/EBITDA"].notna().astype(int)
             + df["P/B"].notna().astype(int)
@@ -1615,6 +1609,9 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
         ascending=[False, False, True]
     ).head(max_peers).reset_index(drop=True)
 
+    # ==============================
+    # META OUTPUT
+    # ==============================
     meta = {
         "target": target_profile,
         "peer_source": peer_source,
@@ -1624,8 +1621,6 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 5, manual_s
     }
 
     return df, meta
-
-
 def apply_live_comps_to_session(df_live: pd.DataFrame):
     if df_live is None or df_live.empty:
         return
@@ -1895,18 +1890,46 @@ if live_df is not None and not live_df.empty:
         "Source",
         "RatioNote",
     ]
+    # -------------------------------------------------
+    # SAFE COLUMN SELECTION (prevents KeyError crash)
+    # -------------------------------------------------
+    safe_cols = [c for c in display_cols if c in df_show.columns]
+    df_display = df_show[safe_cols].copy()
+
+    # -------------------------------------------------
+    # STREAMLIT TABLE
+    # -------------------------------------------------
     st.dataframe(
-        df_show[display_cols],
-        width='stretch',
+        df_display,
+        width="stretch",
         column_config={
-            "YahooStats": st.column_config.LinkColumn("Stats Page", display_text="Open Stats"),
-            "YahooProfile": st.column_config.LinkColumn("Profile Page", display_text="Open"),
-            "SimilarityScore": st.column_config.NumberColumn("SimilarityScore", format="%d"),
-            "EV/EBITDA": st.column_config.NumberColumn("EV/EBITDA", format="%.2f"),
-            "P/B": st.column_config.NumberColumn("P/B", format="%.2f"),
-            "P/E": st.column_config.NumberColumn("P/E", format="%.2f"),
+            "YahooStats": st.column_config.LinkColumn(
+                "Stats Page",
+                display_text="Open Stats"
+            ),
+            "YahooProfile": st.column_config.LinkColumn(
+                "Profile Page",
+                display_text="Open"
+            ),
+            "SimilarityScore": st.column_config.NumberColumn(
+                "SimilarityScore",
+                format="%d"
+            ),
+            "EV/EBITDA": st.column_config.NumberColumn(
+                "EV/EBITDA",
+                format="%.2f"
+            ),
+            "P/B": st.column_config.NumberColumn(
+                "P/B",
+                format="%.2f"
+            ),
+            "P/E": st.column_config.NumberColumn(
+                "P/E",
+                format="%.2f"
+            ),
         }
     )
+
     st.markdown("---")
 
     selected_live_df = render_peer_picker_table(df_show)
