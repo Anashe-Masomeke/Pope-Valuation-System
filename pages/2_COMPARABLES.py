@@ -1078,13 +1078,19 @@ def get_live_peer_row(
     if not sym:
         return out
 
-    # 🔥 NEW Layer 1: FMP API (PRIMARY)
+    # 🔥 Always fetch both
     fmp = retry_fetch(fmp_ratios, sym)
+    yh = retry_fetch(yahoo_profile_and_metrics, sym)
 
-    # Layer 2: Yahoo (fallback)
-    yh = {}
-    if _all_nan_ratio_dict(fmp):
-        yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    # Only fetch deeper Yahoo layers if needed
+    ystats = {}
+    yhtml = {}
+
+    if _all_nan_ratio_dict(yh):
+        ystats = retry_fetch(yahoo_stats_table_fallback, sym)
+
+    if _all_nan_ratio_dict(yh) and _all_nan_ratio_dict(ystats):
+        yhtml = retry_fetch(yahoo_html_ratio_fallback, sym)
 
     # Layer 2: Yahoo Stats table (only if layer 1 failed)
     ystats = {}
@@ -1103,7 +1109,7 @@ def get_live_peer_row(
     sector = _clean_text(yh.get("Sector")) or fallback_sector
     industry = _clean_text(yh.get("Industry")) or fallback_industry
 
-    # Priority: FMP → Yahoo → Stats → HTML
+    # Best available value wins
 
     pe = fmp.get("P/E", np.nan)
     if pd.isna(pe):
