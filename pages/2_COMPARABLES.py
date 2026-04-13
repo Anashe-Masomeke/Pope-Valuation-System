@@ -25,8 +25,8 @@ def add_watermark():
         .stApp::before {{
             content: "";
             position: fixed;
-            top: 40;
-            left: 50;
+            top: 40px;
+            left: 50px;
             width: 100%;
             height: 100%;
             background-image: url("data:image/png;base64,{logo_base64}");
@@ -635,7 +635,7 @@ def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
             return r
         except Exception as e:
             last_err = e
-            time.sleep(2.0 + attempt * 1.5 + random.random())
+            time.sleep(4.0 + attempt * 2.5 + random.random())
     raise last_err
 
 
@@ -740,14 +740,14 @@ def investing_ratios(symbol: str) -> dict:
     out["stats_url"] = investing_url
 
     try:
-        html_headers = {
-            "User-Agent": HEADERS["User-Agent"],
+        HEADERS = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.investing.com/",
+            "Referer": "https://finance.yahoo.com/",
             "Connection": "keep-alive",
         }
-        r = _safe_get(investing_url, timeout=15, tries=3, headers=html_headers)
+        r = _safe_get(investing_url, timeout=15, tries=3, headers=HEADERS)
         html = r.text or ""
         soup = BeautifulSoup(html, "html.parser")
 
@@ -1062,22 +1062,22 @@ def get_live_peer_row(
     sector = _clean_text(yh.get("Sector")) or fallback_sector
     industry = _clean_text(yh.get("Industry")) or fallback_industry
 
-    # Ratio priority: Stats > quoteSummary > HTML
-    pe = ystats.get("P/E", np.nan)
+    # Ratio priority: quoteSummary > Stats > HTML
+    pe = yh.get("P/E", np.nan)
     if pd.isna(pe):
-        pe = yh.get("P/E", np.nan)
+        pe = ystats.get("P/E", np.nan)
     if pd.isna(pe):
         pe = yhtml.get("P/E", np.nan)
 
-    pb = ystats.get("P/B", np.nan)
+    pb = yh.get("P/B", np.nan)
     if pd.isna(pb):
-        pb = yh.get("P/B", np.nan)
+        pb = ystats.get("P/B", np.nan)
     if pd.isna(pb):
         pb = yhtml.get("P/B", np.nan)
 
-    ev_ebitda = ystats.get("EV/EBITDA", np.nan)
+    ev_ebitda = yh.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
-        ev_ebitda = yh.get("EV/EBITDA", np.nan)
+        ev_ebitda = ystats.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
         ev_ebitda = yhtml.get("EV/EBITDA", np.nan)
 
