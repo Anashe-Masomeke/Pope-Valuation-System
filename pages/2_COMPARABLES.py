@@ -9,7 +9,7 @@ import requests
 import time
 import random
 import base64
-
+FMP_API_KEY = st.secrets["FMP_API_KEY"]
 st.set_page_config(page_title="Comparables Valuation", layout="wide")
 
 # ---------------------------------------------------------
@@ -92,6 +92,42 @@ S = st.session_state
 # =========================================================
 # HELPERS
 # =========================================================
+@st.cache_data(show_spinner=False, ttl=60*60*24)
+def fmp_ratios(symbol: str) -> dict:
+    sym = normalize_peer_ticker(symbol)
+
+    out = {
+        "Ticker": sym,
+        "P/E": np.nan,
+        "P/B": np.nan,
+        "EV/EBITDA": np.nan,
+        "ratio_source": "",
+        "ratio_note": ""
+    }
+
+    if not sym:
+        return out
+
+    try:
+        url = f"https://financialmodelingprep.com/api/v3/ratios/{sym}?apikey={FMP_API_KEY}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+
+        if isinstance(data, list) and len(data) > 0:
+            d = data[0]
+
+            out["P/E"] = _clean_num(d.get("priceEarningsRatio"))
+            out["P/B"] = _clean_num(d.get("priceToBookRatio"))
+            out["EV/EBITDA"] = _clean_num(d.get("enterpriseValueMultiple"))
+
+            if not _all_nan_ratio_dict(out):
+                out["ratio_source"] = "FMP API"
+                out["ratio_note"] = "Fetched from Financial Modeling Prep API"
+
+    except Exception as e:
+        out["ratio_note"] = f"FMP failed: {repr(e)}"
+
+    return out
 def format_numeric_columns(df):
     fmt = {}
     for col in df.columns:
@@ -1042,8 +1078,13 @@ def get_live_peer_row(
     if not sym:
         return out
 
-    # Layer 1: Yahoo quoteSummary (fastest, structured)
-    yh = retry_fetch(yahoo_profile_and_metrics, sym)
+    # 🔥 NEW Layer 1: FMP API (PRIMARY)
+    fmp = retry_fetch(fmp_ratios, sym)
+
+    # Layer 2: Yahoo (fallback)
+    yh = {}
+    if _all_nan_ratio_dict(fmp):
+        yh = retry_fetch(yahoo_profile_and_metrics, sym)
 
     # Layer 2: Yahoo Stats table (only if layer 1 failed)
     ystats = {}
@@ -1062,20 +1103,27 @@ def get_live_peer_row(
     sector = _clean_text(yh.get("Sector")) or fallback_sector
     industry = _clean_text(yh.get("Industry")) or fallback_industry
 
-    # Ratio priority: quoteSummary > Stats > HTML
-    pe = yh.get("P/E", np.nan)
+    # Priority: FMP → Yahoo → Stats → HTML
+
+    pe = fmp.get("P/E", np.nan)
+    if pd.isna(pe):
+        pe = yh.get("P/E", np.nan)
     if pd.isna(pe):
         pe = ystats.get("P/E", np.nan)
     if pd.isna(pe):
         pe = yhtml.get("P/E", np.nan)
 
-    pb = yh.get("P/B", np.nan)
+    pb = fmp.get("P/B", np.nan)
+    if pd.isna(pb):
+        pb = yh.get("P/B", np.nan)
     if pd.isna(pb):
         pb = ystats.get("P/B", np.nan)
     if pd.isna(pb):
         pb = yhtml.get("P/B", np.nan)
 
-    ev_ebitda = yh.get("EV/EBITDA", np.nan)
+    ev_ebitda = fmp.get("EV/EBITDA", np.nan)
+    if pd.isna(ev_ebitda):
+        ev_ebitda = yh.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
         ev_ebitda = ystats.get("EV/EBITDA", np.nan)
     if pd.isna(ev_ebitda):
@@ -1093,19 +1141,25 @@ def get_live_peer_row(
 
     # Source label
     yahoo_exists = bool(yh.get("quote_exists")) or bool(ystats.get("page_exists")) or bool(yhtml.get("page_exists"))
+    has_fmp_ratio = not _all_nan_ratio_dict(fmp)
+    has_yahoo_ratio = not (pd.isna(pe) and pd.isna(pb) and pd.isna(ev_ebitda))
 
-    if has_yahoo_ratio:
+    if has_fmp_ratio:
+        source = "FMP API"
+        ratio_note = fmp.get("ratio_note")
+
+    elif has_yahoo_ratio:
         source = (
-            ystats.get("ratio_source") or
-            yh.get("ratio_source") or
-            yhtml.get("ratio_source") or
-            "Yahoo Finance"
+                ystats.get("ratio_source") or
+                yh.get("ratio_source") or
+                yhtml.get("ratio_source") or
+                "Yahoo Finance"
         )
         ratio_note = (
-            ystats.get("ratio_note") if ystats.get("ratio_source") else
-            yh.get("ratio_note") if yh.get("ratio_source") else
-            yhtml.get("ratio_note") if yhtml.get("ratio_source") else
-            "Yahoo ratios fetched."
+                ystats.get("ratio_note") or
+                yh.get("ratio_note") or
+                yhtml.get("ratio_note") or
+                "Yahoo ratios fetched."
         )
     elif inv.get("ratio_source"):
         source = inv["ratio_source"]
