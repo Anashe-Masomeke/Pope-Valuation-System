@@ -6,7 +6,7 @@ requests
 reportlab 
 python-docx 
 scikit-learn
-yfinance>=0.2.40
+yfinance
 lxml
 html5lib
 beautifulsoup4
