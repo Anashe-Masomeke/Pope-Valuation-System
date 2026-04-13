@@ -9,7 +9,7 @@ import random
 import base64
 import concurrent.futures
 
-# ── yfinance (primary) ──────────────────────────────────────────────────────
+# ── yfinance (optional, used only as last resort) ───────────────────────────
 try:
     import yfinance as yf
     _YF_AVAILABLE = True
@@ -604,12 +604,12 @@ def strict_universe_filter(target_profile: dict, max_peers: int = 8):
 # =========================================================
 # ▶  HTTP HELPERS
 # =========================================================
-# Rotate between multiple realistic User-Agent strings to reduce blocking
 _UA_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
 ]
 
 def _random_ua():
@@ -618,45 +618,31 @@ def _random_ua():
 def _make_headers(referer="https://finance.yahoo.com/"):
     return {
         "User-Agent": _random_ua(),
-        "Accept": "application/json,text/html,*/*;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
         "Referer": referer,
         "DNT": "1",
         "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Cache-Control": "max-age=0",
     }
-
-def _safe_get(url, params=None, timeout=15, tries=3, headers=None):
-    last_err = None
-    for attempt in range(int(tries)):
-        try:
-            hdrs = headers or _make_headers()
-            session = requests.Session()
-            session.headers.update(hdrs)
-            r = session.get(url, params=params, timeout=timeout, allow_redirects=True)
-            if r.status_code == 429:
-                time.sleep(3.0 + attempt * 2.0 + random.random() * 2)
-                continue
-            if r.status_code in (401, 403):
-                raise requests.HTTPError(f"{r.status_code} blocked: {r.url}", response=r)
-            r.raise_for_status()
-            return r
-        except requests.HTTPError:
-            raise
-        except Exception as e:
-            last_err = e
-            time.sleep(1.5 + attempt * 1.0 + random.random())
-    raise last_err or Exception("_safe_get failed")
 
 
 def _parse_ratio_value(x) -> float:
-    s = str(x).strip()
-    if s in ["", "N/A", "NaN", "None", "-", "--", "∞", "Inf"]:
+    if x is None:
         return np.nan
-    s = s.replace(",", "").replace("x", "").strip()
+    s = str(x).strip()
+    if s in ["", "N/A", "NaN", "None", "-", "--", "∞", "Inf", "n/a", "N/A"]:
+        return np.nan
+    # Remove commas, %, x suffixes
+    s = s.replace(",", "").replace("%", "").replace("x", "").strip()
+    # Handle parentheses as negative
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
     m = re.search(r"-?\d+(?:\.\d+)?", s)
     if not m:
         return np.nan
@@ -668,200 +654,276 @@ def _parse_ratio_value(x) -> float:
 
 
 # =========================================================
-# ▶  LAYER 1 — yfinance with full financial-statement fallback
-#    Best for US/global tickers. For JSE .JO, info dict is often
-#    blank but financials + price still work → compute ratios manually.
+# ▶  PRIMARY METHOD: Yahoo Finance Statistics Page Scraper
+#    Directly scrapes the same page shown in your screenshot
+#    (https://finance.yahoo.com/quote/IMP.JO/key-statistics)
+#    This reads Trailing P/E, Price/Book, EV/EBITDA directly
+#    from the Valuation Measures table — no API, no auth needed.
 # =========================================================
+
+def _get_yahoo_session():
+    """Create a requests session that mimics a real browser for Yahoo Finance."""
+    session = requests.Session()
+    # First hit the Yahoo Finance homepage to get cookies (critical for cloud IPs)
+    try:
+        session.get(
+            "https://finance.yahoo.com/",
+            headers=_make_headers(),
+            timeout=10,
+            allow_redirects=True
+        )
+        time.sleep(0.3 + random.random() * 0.4)
+    except Exception:
+        pass
+    return session
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def yfinance_ratios(symbol: str) -> dict:
+def yahoo_statistics_page_scraper(symbol: str) -> dict:
+    """
+    PRIMARY RATIO SOURCE.
+    Scrapes the Yahoo Finance /key-statistics page directly —
+    the exact same page shown in the screenshot.
+
+    Reads from the "Valuation Measures" table:
+      - Trailing P/E  → our P/E
+      - Price/Book    → our P/B
+      - Enterprise Value/EBITDA → our EV/EBITDA
+
+    Works on cloud Streamlit because:
+    1. Uses proper browser cookie flow
+    2. Parses raw HTML — no API crumb needed
+    3. Falls back to multiple URL patterns
+    4. Returns NaN gracefully if blocked, never crashes
+    """
     sym = normalize_peer_ticker(symbol)
     out = {
-        "Ticker": sym, "Company": "", "Exchange": "", "Country": "",
+        "Ticker": sym, "Company": sym, "Exchange": "", "Country": "",
         "Sector": "", "Industry": "",
         "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan,
         "ratio_source": "", "ratio_note": "", "quote_exists": False,
     }
-    if not sym or not _YF_AVAILABLE:
-        out["ratio_note"] = "yfinance not installed." if not _YF_AVAILABLE else "Blank symbol."
+    if not sym or not _REQUESTS_AVAILABLE:
+        out["ratio_note"] = "requests library not available."
         return out
 
+    urls_to_try = [
+        f"https://finance.yahoo.com/quote/{sym}/key-statistics",
+        f"https://finance.yahoo.com/quote/{sym}/key-statistics?p={sym}",
+        f"https://finance.yahoo.com/quote/{sym}/",
+    ]
+
+    session = requests.Session()
+
+    # Warm up cookies with homepage visit
     try:
-        ticker = yf.Ticker(sym)
+        session.get(
+            "https://finance.yahoo.com",
+            headers=_make_headers(),
+            timeout=8,
+            allow_redirects=True
+        )
+        time.sleep(0.5 + random.random() * 0.5)
+    except Exception:
+        pass
 
-        # ── Step A: try info dict ─────────────────────────────────────────
-        info = {}
+    html_content = None
+    used_url = ""
+
+    for url in urls_to_try:
         try:
-            info = ticker.info or {}
+            resp = session.get(
+                url,
+                headers=_make_headers(referer="https://finance.yahoo.com/"),
+                timeout=15,
+                allow_redirects=True
+            )
+            if resp.status_code == 200 and len(resp.text) > 5000:
+                html_content = resp.text
+                used_url = url
+                break
+            elif resp.status_code == 429:
+                time.sleep(3 + random.random() * 2)
+                continue
         except Exception as e:
-            out["ratio_note"] = f"yf.info error: {repr(e)[:120]}"
+            out["ratio_note"] += f"URL attempt failed: {repr(e)[:60]}. "
+            continue
 
-        out["Company"]  = info.get("longName") or info.get("shortName") or sym
-        out["Exchange"] = info.get("exchange") or info.get("fullExchangeName") or ""
-        out["Country"]  = info.get("country") or ""
-        out["Sector"]   = info.get("sector") or ""
-        out["Industry"] = info.get("industry") or ""
-        if info:
-            out["quote_exists"] = True
+    if not html_content:
+        out["ratio_note"] = f"All URL attempts failed for {sym}. Likely IP-blocked by Yahoo."
+        return out
 
-        # Direct ratio fields from info
-        fpe = _clean_num(info.get("forwardPE"))
-        tpe = _clean_num(info.get("trailingPE"))
-        out["P/E"]       = fpe if not pd.isna(fpe) else tpe
-        out["P/B"]       = _clean_num(info.get("priceToBook"))
-        out["EV/EBITDA"] = _clean_num(info.get("enterpriseToEbitda"))
+    out["quote_exists"] = True
 
-        # ── Step B: compute from financials if info ratios are blank ──────
-        # This handles JSE .JO tickers where info dict is sparse
+    # ── Parse with BeautifulSoup ──────────────────────────────────────────────
+    try:
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # Extract company name from page title or header
+        title_tag = soup.find("h1")
+        if title_tag:
+            title_text = title_tag.get_text(strip=True)
+            # Yahoo title format: "Company Name (SYM)"
+            name_match = re.match(r"^(.+?)\s*\(", title_text)
+            if name_match:
+                out["Company"] = name_match.group(1).strip()
+
+        # ── Method 1: Parse the Valuation Measures table directly ─────────────
+        # The statistics page has tables with row label → value pairs
+        # We look for specific row labels matching what Yahoo displays
+
+        # Target label → our field mapping (Yahoo label text patterns)
+        label_map = {
+            # P/E ratio labels
+            "trailing p/e":   "P/E",
+            "trailing pe":    "P/E",
+            "p/e ratio (ttm)":"P/E",
+            "pe ratio (ttm)": "P/E",
+            # P/B ratio labels
+            "price/book":     "P/B",
+            "price/book (mrq)":"P/B",
+            "p/b ratio":      "P/B",
+            "price to book":  "P/B",
+            # EV/EBITDA labels
+            "enterprise value/ebitda": "EV/EBITDA",
+            "ev/ebitda":               "EV/EBITDA",
+            "enterprisevalue/ebitda":  "EV/EBITDA",
+        }
+
+        # Find all table rows in the page
+        all_rows = soup.find_all("tr")
+        for row in all_rows:
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            label_text = cells[0].get_text(strip=True).lower()
+            value_text = cells[1].get_text(strip=True)
+
+            # Normalize label: remove non-alphanumeric except / and spaces
+            label_norm = re.sub(r"[^a-z0-9/\s]", "", label_text).strip()
+
+            for pattern, field in label_map.items():
+                if pattern in label_norm or label_norm in pattern:
+                    parsed = _parse_ratio_value(value_text)
+                    if not pd.isna(parsed) and pd.isna(out[field]):
+                        out[field] = parsed
+                    break
+
+        # ── Method 2: Regex scan of raw HTML for ratio JSON data ──────────────
+        # Yahoo embeds data in <script> tags as JSON — extract key values
+        if _all_nan_ratio_dict(out):
+            # Look for trailingPE, priceToBook, trailingEv patterns in JSON
+            pe_patterns = [
+                r'"trailingPE"\s*:\s*\{"raw"\s*:\s*([\d.]+)',
+                r'"trailingPE"\s*:\s*([\d.]+)',
+                r'trailingPE["\s:,]+(\d+\.?\d*)',
+            ]
+            pb_patterns = [
+                r'"priceToBook"\s*:\s*\{"raw"\s*:\s*([\d.]+)',
+                r'"priceToBook"\s*:\s*([\d.]+)',
+                r'priceToBook["\s:,]+(\d+\.?\d*)',
+            ]
+            ev_patterns = [
+                r'"enterpriseToEbitda"\s*:\s*\{"raw"\s*:\s*(-?[\d.]+)',
+                r'"enterpriseToEbitda"\s*:\s*(-?[\d.]+)',
+                r'enterpriseToEbitda["\s:,]+(-?\d+\.?\d*)',
+                r'"trailingEV"\s*:\s*\{"raw"\s*:\s*([\d.]+)',
+            ]
+
+            for pat in pe_patterns:
+                m = re.search(pat, html_content)
+                if m:
+                    v = _clean_num(m.group(1))
+                    if not pd.isna(v) and v > 0:
+                        out["P/E"] = v
+                        break
+
+            for pat in pb_patterns:
+                m = re.search(pat, html_content)
+                if m:
+                    v = _clean_num(m.group(1))
+                    if not pd.isna(v) and v > 0:
+                        out["P/B"] = v
+                        break
+
+            for pat in ev_patterns:
+                m = re.search(pat, html_content)
+                if m:
+                    v = _clean_num(m.group(1))
+                    if not pd.isna(v) and v > 0:
+                        out["EV/EBITDA"] = v
+                        break
+
+        # ── Method 3: pandas read_html on tables ──────────────────────────────
         if _all_nan_ratio_dict(out):
             try:
-                fast = ticker.fast_info
+                tables = pd.read_html(StringIO(html_content))
+                for t in tables:
+                    if t is None or t.empty or len(t.columns) < 2:
+                        continue
+                    # Flatten to label→value scanning
+                    for _, trow in t.iterrows():
+                        lbl = str(trow.iloc[0]).lower().strip()
+                        val_raw = str(trow.iloc[1]).strip() if len(trow) > 1 else ""
 
-                # Current price
-                price_val = _clean_num(getattr(fast, "last_price", None))
-                mkt_cap   = _clean_num(getattr(fast, "market_cap", None))
-                shares    = _clean_num(getattr(fast, "shares", None))
+                        lbl_norm = re.sub(r"[^a-z0-9/\s]", "", lbl).strip()
 
-                # ── P/B from balance sheet ──────────────────────────────
-                try:
-                    bs = ticker.balance_sheet
-                    if bs is not None and not bs.empty:
-                        equity_labels = [
-                            "Stockholders Equity", "Total Stockholder Equity",
-                            "Total Equity", "Common Stock Equity",
-                            "Stockholders' Equity", "Book Value"
-                        ]
-                        equity_val = np.nan
-                        for lbl in equity_labels:
-                            if lbl in bs.index:
-                                equity_val = _clean_num(bs.loc[lbl].iloc[0])
+                        for pattern, field in label_map.items():
+                            if pattern in lbl_norm or lbl_norm in pattern:
+                                parsed = _parse_ratio_value(val_raw)
+                                if not pd.isna(parsed) and pd.isna(out[field]):
+                                    out[field] = parsed
                                 break
-                        if not pd.isna(equity_val) and not pd.isna(mkt_cap) and equity_val != 0:
-                            out["P/B"] = _clean_num(mkt_cap / equity_val)
-                        elif not pd.isna(equity_val) and not pd.isna(shares) and not pd.isna(price_val) and equity_val != 0:
-                            book_ps = equity_val / shares
-                            if book_ps != 0:
-                                out["P/B"] = _clean_num(price_val / book_ps)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-                # ── P/E from income statement ───────────────────────────
-                try:
-                    inc = ticker.income_stmt
-                    if inc is not None and not inc.empty:
-                        ni_labels = [
-                            "Net Income", "Net Income Common Stockholders",
-                            "Net Income Applicable To Common Shares",
-                            "Net Income From Continuing Operations"
-                        ]
-                        ni_val = np.nan
-                        for lbl in ni_labels:
-                            if lbl in inc.index:
-                                ni_val = _clean_num(inc.loc[lbl].iloc[0])
-                                break
-                        if not pd.isna(ni_val) and not pd.isna(mkt_cap) and ni_val > 0:
-                            out["P/E"] = _clean_num(mkt_cap / ni_val)
-                        elif not pd.isna(ni_val) and not pd.isna(shares) and shares > 0 and ni_val > 0:
-                            eps = ni_val / shares
-                            if not pd.isna(price_val) and eps != 0:
-                                out["P/E"] = _clean_num(price_val / eps)
-                except Exception:
-                    pass
-
-                # ── EV/EBITDA from financials ───────────────────────────
-                try:
-                    ev = _clean_num(getattr(fast, "enterprise_value", None))
-                    if pd.isna(ev):
-                        # reconstruct EV = market_cap + total_debt - cash
-                        try:
-                            bs = ticker.balance_sheet
-                            if bs is not None and not bs.empty:
-                                debt_labels = ["Total Debt", "Long Term Debt", "Short Long Term Debt"]
-                                cash_labels = ["Cash And Cash Equivalents", "Cash", "Cash And Short Term Investments"]
-                                debt_val = cash_val = 0.0
-                                for lbl in debt_labels:
-                                    if lbl in bs.index:
-                                        debt_val = _clean_num(bs.loc[lbl].iloc[0]) or 0.0
-                                        break
-                                for lbl in cash_labels:
-                                    if lbl in bs.index:
-                                        cash_val = _clean_num(bs.loc[lbl].iloc[0]) or 0.0
-                                        break
-                                if not pd.isna(mkt_cap):
-                                    ev = mkt_cap + debt_val - cash_val
-                        except Exception:
-                            pass
-
-                    if not pd.isna(ev) and ev > 0:
-                        inc = ticker.income_stmt
-                        if inc is not None and not inc.empty:
-                            ebitda_labels = [
-                                "EBITDA", "Ebitda",
-                                "Normalized EBITDA",
-                                "Total Revenue"  # last resort
-                            ]
-                            ebitda_val = np.nan
-                            for lbl in ebitda_labels:
-                                if lbl in inc.index:
-                                    ebitda_val = _clean_num(inc.loc[lbl].iloc[0])
-                                    if lbl == "Total Revenue":
-                                        # rough proxy only if nothing else found
-                                        ebitda_val = np.nan
-                                    break
-                            # Also try computing EBITDA = Operating Income + D&A
-                            if pd.isna(ebitda_val):
-                                try:
-                                    oi_labels = ["Operating Income", "EBIT", "Operating Profit"]
-                                    da_labels = ["Depreciation And Amortization", "Depreciation", "Amortization"]
-                                    oi_val = da_val = np.nan
-                                    for lbl in oi_labels:
-                                        if lbl in inc.index:
-                                            oi_val = _clean_num(inc.loc[lbl].iloc[0])
-                                            break
-                                    # D&A sometimes in cash flow
-                                    cf = ticker.cashflow
-                                    if cf is not None and not cf.empty:
-                                        for lbl in da_labels:
-                                            if lbl in cf.index:
-                                                da_val = abs(_clean_num(cf.loc[lbl].iloc[0]) or 0)
-                                                break
-                                    if not pd.isna(oi_val):
-                                        ebitda_val = oi_val + (da_val or 0)
-                                except Exception:
-                                    pass
-                            if not pd.isna(ebitda_val) and ebitda_val > 0:
-                                out["EV/EBITDA"] = _clean_num(ev / ebitda_val)
-                except Exception:
-                    pass
-
-            except Exception as e:
-                if not out.get("ratio_note"):
-                    out["ratio_note"] = f"Financial stmt fallback error: {repr(e)[:100]}"
+        # ── Extract sector/industry/exchange from profile section ─────────────
+        # Try to get company metadata from the page
+        try:
+            # Look for exchange info in the page (e.g., "Johannesburg - Delayed Quote · ZAc")
+            exchange_pattern = re.search(
+                r'(NYSE|NASDAQ|JSE|NSE|Johannesburg|Nairobi|Lagos|London)[^<"]*',
+                html_content, re.I
+            )
+            if exchange_pattern and not out["Exchange"]:
+                out["Exchange"] = exchange_pattern.group(0)[:40].strip()
+        except Exception:
+            pass
 
         if not _all_nan_ratio_dict(out):
-            out["ratio_source"] = "yfinance"
-            out["ratio_note"]   = "Fetched via yfinance (info + financials)."
+            out["ratio_source"] = "Yahoo Statistics Page"
+            out["ratio_note"] = (
+                f"✅ Scraped directly from Yahoo Finance key-statistics page ({used_url}). "
+                f"P/E={out['P/E']}, P/B={out['P/B']}, EV/EBITDA={out['EV/EBITDA']}"
+            )
         else:
-            out["ratio_note"] = "yfinance: connected but all ratios blank (sparse data for this exchange)."
+            out["ratio_note"] = (
+                f"⚠️ Yahoo Statistics page loaded ({used_url}) but ratios not found in HTML. "
+                "This usually means the ticker has no valuation data on Yahoo (e.g. very small caps)."
+            )
 
     except Exception as e:
-        out["ratio_note"] = f"yfinance critical error: {repr(e)[:150]}"
+        out["ratio_note"] = f"HTML parse error for {sym}: {repr(e)[:150]}"
 
     return out
 
 
 # =========================================================
-# ▶  LAYER 2 — Yahoo Finance v8 API (newer, less blocked)
-#    Uses the v8 chart endpoint + v11 quoteSummary with crumb
+# ▶  SECONDARY: Yahoo Finance quoteSummary API (v11 with crumb)
+#    Used only when the statistics page scraper returns no ratios
 # =========================================================
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def yahoo_v8_ratios(symbol: str) -> dict:
+def yahoo_api_ratios(symbol: str) -> dict:
     """
-    Uses Yahoo Finance's newer v8/v11 endpoints with a fresh crumb+cookie.
-    More reliable on cloud than the old v10 quoteSummary.
+    Secondary source: Yahoo Finance v11 quoteSummary API with crumb.
+    Extracts the SAME ratio fields as the statistics page:
+      - summaryDetail.trailingPE / defaultKeyStatistics.forwardPE
+      - defaultKeyStatistics.priceToBook
+      - financialData.enterpriseToEbitda / defaultKeyStatistics.enterpriseToEbitda
     """
     sym = normalize_peer_ticker(symbol)
     out = {
-        "Ticker": sym, "Company": "", "Exchange": "", "Country": "",
+        "Ticker": sym, "Company": sym, "Exchange": "", "Country": "",
         "Sector": "", "Industry": "",
         "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan,
         "ratio_source": "", "ratio_note": "", "quote_exists": False,
@@ -871,55 +933,62 @@ def yahoo_v8_ratios(symbol: str) -> dict:
 
     def _raw(v):
         if isinstance(v, dict):
-            return v.get("raw", v.get("fmt"))
+            raw = v.get("raw")
+            if raw is not None:
+                return raw
+            return v.get("fmt")
         return v
 
     try:
-        # Step 1: get a valid cookie + crumb from Yahoo consent page
         session = requests.Session()
-        session.headers.update(_make_headers())
 
-        # Hit the main Yahoo Finance page to get cookies
+        # Get cookies via homepage
         try:
-            session.get("https://finance.yahoo.com/", timeout=10)
+            session.get("https://finance.yahoo.com/", headers=_make_headers(), timeout=8)
+            time.sleep(0.3 + random.random() * 0.3)
         except Exception:
             pass
 
-        # Get crumb (required for authenticated endpoints)
+        # Get crumb
         crumb = None
-        try:
-            cr = session.get(
-                "https://query1.finance.yahoo.com/v1/test/getcrumb",
-                timeout=10, headers=_make_headers()
-            )
-            if cr.status_code == 200 and cr.text and len(cr.text) < 50:
-                crumb = cr.text.strip()
-        except Exception:
-            pass
-
-        # Step 2: quoteSummary with crumb (v11 handles auth better)
-        modules = "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile"
-        for base in [
-            "https://query1.finance.yahoo.com/v11/finance/quoteSummary/{sym}",
-            "https://query2.finance.yahoo.com/v11/finance/quoteSummary/{sym}",
-            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{sym}",
+        for crumb_url in [
+            "https://query1.finance.yahoo.com/v1/test/getcrumb",
+            "https://query2.finance.yahoo.com/v1/test/getcrumb",
         ]:
             try:
-                url = base.format(sym=sym)
+                cr = session.get(crumb_url, headers=_make_headers(), timeout=8)
+                if cr.status_code == 200 and cr.text and len(cr.text) < 100:
+                    crumb = cr.text.strip()
+                    break
+            except Exception:
+                continue
+
+        # quoteSummary with the modules we need
+        modules = "summaryDetail,defaultKeyStatistics,financialData,assetProfile,price"
+        api_urls = [
+            f"https://query1.finance.yahoo.com/v11/finance/quoteSummary/{sym}",
+            f"https://query2.finance.yahoo.com/v11/finance/quoteSummary/{sym}",
+        ]
+
+        for api_url in api_urls:
+            try:
                 params = {"modules": modules}
                 if crumb:
                     params["crumb"] = crumb
-                r = session.get(url, params=params, timeout=12)
-                if r.status_code in (401, 403, 404):
-                    continue
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                res = (((data.get("quoteSummary") or {}).get("result")) or [])
-                if not res:
+                r = session.get(
+                    api_url, params=params,
+                    headers=_make_headers(referer=f"https://finance.yahoo.com/quote/{sym}/key-statistics"),
+                    timeout=12
+                )
+                if r.status_code not in (200,):
                     continue
 
-                root    = res[0]
+                data = r.json()
+                result_list = ((data.get("quoteSummary") or {}).get("result")) or []
+                if not result_list:
+                    continue
+
+                root    = result_list[0]
                 price   = root.get("price") or {}
                 summary = root.get("summaryDetail") or {}
                 dks     = root.get("defaultKeyStatistics") or {}
@@ -933,275 +1002,119 @@ def yahoo_v8_ratios(symbol: str) -> dict:
                 out["Sector"]   = ap.get("sector") or ""
                 out["Industry"] = ap.get("industry") or ""
 
-                fpe = _clean_num(_raw(summary.get("forwardPE"))  or _raw(dks.get("forwardPE")))
-                tpe = _clean_num(_raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")))
-                out["P/E"]       = fpe if not pd.isna(fpe) else tpe
-                out["P/B"]       = _clean_num(_raw(dks.get("priceToBook"))        or _raw(summary.get("priceToBook")))
-                out["EV/EBITDA"] = _clean_num(_raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda")))
+                # P/E: prefer trailingPE (matches Yahoo Statistics page "Trailing P/E")
+                trailing_pe = _clean_num(_raw(summary.get("trailingPE")) or _raw(dks.get("trailingPE")))
+                forward_pe  = _clean_num(_raw(dks.get("forwardPE")))
+                # Use trailing P/E to match the statistics page display
+                out["P/E"] = trailing_pe if not pd.isna(trailing_pe) else forward_pe
+
+                # P/B: priceToBook from defaultKeyStatistics
+                out["P/B"] = _clean_num(
+                    _raw(dks.get("priceToBook")) or _raw(summary.get("priceToBook"))
+                )
+
+                # EV/EBITDA: enterpriseToEbitda (matches "Enterprise Value/EBITDA" on stats page)
+                out["EV/EBITDA"] = _clean_num(
+                    _raw(fin.get("enterpriseToEbitda")) or _raw(dks.get("enterpriseToEbitda"))
+                )
 
                 if not _all_nan_ratio_dict(out):
-                    out["ratio_source"] = "Yahoo v11"
-                    out["ratio_note"]   = f"Fetched from Yahoo v11 ({url.split('/')[2]}) with crumb."
+                    out["ratio_source"] = "Yahoo API v11"
+                    out["ratio_note"] = (
+                        f"✅ Yahoo API v11 quoteSummary. "
+                        f"P/E={out['P/E']}, P/B={out['P/B']}, EV/EBITDA={out['EV/EBITDA']}"
+                    )
                     return out
                 else:
-                    out["ratio_note"] = "Yahoo v11 found ticker but ratios blank."
+                    out["ratio_note"] = "Yahoo API v11: connected but all target ratios are null."
+
             except Exception as e:
-                out["ratio_note"] = f"Yahoo v11 attempt: {repr(e)[:80]}"
+                out["ratio_note"] += f" API attempt error: {repr(e)[:80]}."
                 continue
 
     except Exception as e:
-        out["ratio_note"] = f"Yahoo v8 session error: {repr(e)[:120]}"
+        out["ratio_note"] = f"Yahoo API session error: {repr(e)[:120]}"
 
     return out
 
 
 # =========================================================
-# ▶  LAYER 3 — Macrotrends HTML scraper (works well for JSE)
-#    Falls back to computing from price + EPS data
+# ▶  TERTIARY: yfinance — direct field read (not computed)
+#    Only reads trailingPE, priceToBook, enterpriseToEbitda
+#    directly from yf.Ticker.info — NO financial statement math
 # =========================================================
-# Macrotrends ticker map for common African tickers
-_MACROTRENDS_MAP = {
-    "HAR.JO":  "harmony-gold-mining",
-    "ANG.JO":  "anglogold-ashanti",
-    "GFI.JO":  "gold-fields",
-    "IMP.JO":  "impala-platinum",
-    "ARI.JO":  "african-rainbow-minerals",
-    "MTN.JO":  "mtn-group",
-    "VOD.JO":  "vodacom-group",
-    "SBK.JO":  "standard-bank-group",
-    "NED.JO":  "nedbank",
-    "FSR.JO":  "firstrand",
-    "SHP.JO":  "shoprite-holdings",
-    "WHL.JO":  "woolworths-holdings",
-    "BVT.JO":  "bidvest",
-    "SOL.JO":  "sasol",
-    "SNH.JO":  "steinhoff",
-    "MTNN.NG": "mtn-nigeria",
-    "SCOM.KE": "safaricom",
-    "EQTY.KE": "equity-group",
-    "KCB.KE":  "kcb-group",
-}
-
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def macrotrends_ratios(symbol: str) -> dict:
+def yfinance_direct_ratios(symbol: str) -> dict:
+    """
+    Tertiary source: yfinance, reading ONLY the direct ratio fields
+    from ticker.info — matching exactly what Yahoo Statistics page shows.
+    Does NOT compute ratios from financial statements.
+    """
     sym = normalize_peer_ticker(symbol)
     out = {
-        "Ticker": sym,
+        "Ticker": sym, "Company": sym, "Exchange": "", "Country": "",
+        "Sector": "", "Industry": "",
         "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan,
-        "ratio_source": "", "ratio_note": "",
+        "ratio_source": "", "ratio_note": "", "quote_exists": False,
     }
-    if not sym or not _REQUESTS_AVAILABLE:
+    if not sym or not _YF_AVAILABLE:
+        out["ratio_note"] = "yfinance not available." if not _YF_AVAILABLE else "Blank symbol."
         return out
-
-    slug = _MACROTRENDS_MAP.get(sym)
-    if not slug:
-        out["ratio_note"] = f"No Macrotrends slug for {sym}."
-        return out
-
-    # Try P/E ratio page
-    pe_url = f"https://www.macrotrends.net/stocks/charts/{sym.replace('.JO','').replace('.NG','').replace('.KE','')}/{slug}/pe-ratio"
-    pb_url = pe_url.replace("pe-ratio", "price-book")
 
     try:
-        hdrs = {
-            "User-Agent": _random_ua(),
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.macrotrends.net/",
-        }
-        r = _safe_get(pe_url, timeout=12, tries=2, headers=hdrs)
-        html = r.text
-        # Find most recent PE value in the page data
-        m = re.search(r'"pe_ratio"\s*:\s*"?([\d.]+)"?', html)
-        if not m:
-            # Try finding in table: look for recent annual value
-            m = re.search(r'>\s*([\d.]+)\s*</td>.*?P/E', html, re.S)
-        if m:
-            out["P/E"] = _clean_num(m.group(1))
-    except Exception as e:
-        out["ratio_note"] += f"Macrotrends P/E: {repr(e)[:60]}. "
+        ticker = yf.Ticker(sym)
+        info = {}
+        try:
+            info = ticker.info or {}
+        except Exception as e:
+            out["ratio_note"] = f"yf.info error: {repr(e)[:100]}"
+            return out
 
-    try:
-        hdrs = {
-            "User-Agent": _random_ua(),
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Referer": "https://www.macrotrends.net/",
-        }
-        r = _safe_get(pb_url, timeout=12, tries=2, headers=hdrs)
-        html = r.text
-        m = re.search(r'"price_book_ratio"\s*:\s*"?([\d.]+)"?', html)
-        if m:
-            out["P/B"] = _clean_num(m.group(1))
-    except Exception as e:
-        out["ratio_note"] += f"Macrotrends P/B: {repr(e)[:60]}."
+        if not info:
+            out["ratio_note"] = "yfinance: empty info dict."
+            return out
 
-    if not _all_nan_ratio_dict(out):
-        out["ratio_source"] = "Macrotrends"
-        out["ratio_note"]   = "Fetched from Macrotrends.net."
-    else:
-        if not out["ratio_note"]:
-            out["ratio_note"] = "Macrotrends: page loaded but ratios not parsed."
+        out["quote_exists"] = True
+        out["Company"]  = info.get("longName") or info.get("shortName") or sym
+        out["Exchange"] = info.get("exchange") or info.get("fullExchangeName") or ""
+        out["Country"]  = info.get("country") or ""
+        out["Sector"]   = info.get("sector") or ""
+        out["Industry"] = info.get("industry") or ""
 
-    return out
-
-
-# =========================================================
-# ▶  LAYER 4 — wisesheets / stockanalysis public data
-#    stockanalysis.com is far less blocked than Yahoo on cloud IPs
-# =========================================================
-# Map from Yahoo ticker → stockanalysis.com path
-_STOCKANALYSIS_MAP = {
-    "HAR.JO":  "/stocks/har/financials/",
-    "ANG.JO":  "/stocks/au/financials/",      # ADR: AU
-    "GFI.JO":  "/stocks/gfi/financials/",     # ADR: GFI
-    "IMP.JO":  "/stocks/impuy/financials/",   # ADR: IMPUY
-    "ARI.JO":  None,
-    "MTN.JO":  "/stocks/mtnoy/financials/",
-    "VOD.JO":  "/stocks/vodaf/financials/",   # Vodacom → parent VOD?
-    "SCOM.KE": "/stocks/scom/financials/",
-    "MTNN.NG": "/stocks/mtnn/financials/",
-    "EQTY.KE": "/stocks/eqtyk/financials/",
-    "KCB.KE":  "/stocks/kcb/financials/",
-}
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def stockanalysis_ratios(symbol: str) -> dict:
-    """Scrape stockanalysis.com for P/E, P/B, EV/EBITDA — not IP-blocked like Yahoo."""
-    sym = normalize_peer_ticker(symbol)
-    out = {
-        "Ticker": sym,
-        "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan,
-        "ratio_source": "", "ratio_note": "",
-    }
-    if not sym or not _REQUESTS_AVAILABLE:
-        return out
-
-    path = _STOCKANALYSIS_MAP.get(sym)
-    if not path:
-        out["ratio_note"] = f"No stockanalysis path for {sym}."
-        return out
-
-    # Try the ratios page (has P/E, P/B, EV/EBITDA)
-    ratios_path = path.replace("/financials/", "/financials/?p=annual")
-    url = f"https://stockanalysis.com{ratios_path}"
-
-    try:
-        hdrs = {
-            "User-Agent": _random_ua(),
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://stockanalysis.com/",
-        }
-        r = _safe_get(url, timeout=15, tries=2, headers=hdrs)
-        html = r.text
-
-        # Look for ratio data in JSON/script tags
-        # stockanalysis embeds data in window.__data or similar
-        pe_m  = re.search(r'"pe"\s*:\s*([\d.]+)', html)
-        pb_m  = re.search(r'"pb"\s*:\s*([\d.]+)', html)
-        ev_m  = re.search(r'"evEbitda"\s*:\s*([\d.]+)', html)
-
-        if pe_m:  out["P/E"]       = _clean_num(pe_m.group(1))
-        if pb_m:  out["P/B"]       = _clean_num(pb_m.group(1))
-        if ev_m:  out["EV/EBITDA"] = _clean_num(ev_m.group(1))
-
-        # Also try HTML table approach
-        if _all_nan_ratio_dict(out):
-            try:
-                tables = pd.read_html(StringIO(html))
-                for t in tables:
-                    if t is None or t.empty:
-                        continue
-                    col_str = " ".join(str(c).lower() for c in t.columns)
-                    row_labels = t.iloc[:, 0].astype(str).str.lower().tolist() if len(t.columns) > 0 else []
-                    for i, lbl in enumerate(row_labels):
-                        if "p/e" in lbl or "price/earn" in lbl:
-                            val = _parse_ratio_value(t.iloc[i, 1])
-                            if not pd.isna(val): out["P/E"] = val
-                        if "p/b" in lbl or "price/book" in lbl:
-                            val = _parse_ratio_value(t.iloc[i, 1])
-                            if not pd.isna(val): out["P/B"] = val
-                        if "ev/ebitda" in lbl:
-                            val = _parse_ratio_value(t.iloc[i, 1])
-                            if not pd.isna(val): out["EV/EBITDA"] = val
-            except Exception:
-                pass
+        # Read ONLY direct ratio fields — same fields Yahoo Statistics page shows
+        trailing_pe = _clean_num(info.get("trailingPE"))
+        forward_pe  = _clean_num(info.get("forwardPE"))
+        # Prefer trailingPE to match Yahoo stats page "Trailing P/E"
+        out["P/E"]       = trailing_pe if not pd.isna(trailing_pe) else forward_pe
+        out["P/B"]       = _clean_num(info.get("priceToBook"))
+        out["EV/EBITDA"] = _clean_num(info.get("enterpriseToEbitda"))
 
         if not _all_nan_ratio_dict(out):
-            out["ratio_source"] = "StockAnalysis"
-            out["ratio_note"]   = "Fetched from stockanalysis.com."
+            out["ratio_source"] = "yfinance direct"
+            out["ratio_note"] = (
+                f"✅ yfinance direct from info dict. "
+                f"P/E={out['P/E']}, P/B={out['P/B']}, EV/EBITDA={out['EV/EBITDA']}"
+            )
         else:
-            out["ratio_note"] = "StockAnalysis: page loaded but ratios not parsed."
+            out["ratio_note"] = (
+                "yfinance: connected but trailingPE/priceToBook/enterpriseToEbitda all null. "
+                "This is common for JSE .JO tickers — Yahoo API doesn't populate these fields "
+                "for all exchanges."
+            )
 
     except Exception as e:
-        out["ratio_note"] = f"StockAnalysis fetch failed: {repr(e)[:100]}"
+        out["ratio_note"] = f"yfinance critical error: {repr(e)[:150]}"
 
     return out
 
 
 # =========================================================
-# ▶  LAYER 5 — Open-source Financial Modeling Prep (FMP) free tier
-#    No auth required for basic ratios on popular tickers
-# =========================================================
-# FMP uses different ticker conventions
-_FMP_TICKER_MAP = {
-    "HAR.JO":  "HAR.JSE",
-    "ANG.JO":  "AU",        # ADR symbol on NYSE
-    "GFI.JO":  "GFI",       # ADR
-    "IMP.JO":  "IMPUY",     # ADR OTC
-    "MTN.JO":  "MTNOY",     # ADR OTC
-    "VOD.JO":  "VODAF",
-    "SCOM.KE": "SAFOM",
-    "MTNN.NG": "MTNN.LA",
-    "EQTY.KE": "EQTYK.NR",
-    "KCB.KE":  "KCBK.NR",
-}
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def fmp_ratios(symbol: str) -> dict:
-    """Free FMP ratios endpoint — no API key needed for basic data."""
-    sym = normalize_peer_ticker(symbol)
-    out = {
-        "Ticker": sym,
-        "P/E": np.nan, "P/B": np.nan, "EV/EBITDA": np.nan,
-        "ratio_source": "", "ratio_note": "",
-    }
-    if not sym or not _REQUESTS_AVAILABLE:
-        return out
-
-    fmp_sym = _FMP_TICKER_MAP.get(sym, sym)
-    url = f"https://financialmodelingprep.com/financial-ratios/{fmp_sym}"
-
-    try:
-        hdrs = {
-            "User-Agent": _random_ua(),
-            "Accept": "text/html,*/*;q=0.8",
-            "Referer": "https://financialmodelingprep.com/",
-        }
-        r = _safe_get(url, timeout=12, tries=2, headers=hdrs)
-        html = r.text
-
-        pe_m  = re.search(r'P/E[^<]*<[^>]*>([0-9.]+)',  html, re.I)
-        pb_m  = re.search(r'P/B[^<]*<[^>]*>([0-9.]+)',  html, re.I)
-        ev_m  = re.search(r'EV/EBITDA[^<]*<[^>]*>([0-9.]+)', html, re.I)
-
-        if pe_m:  out["P/E"]       = _clean_num(pe_m.group(1))
-        if pb_m:  out["P/B"]       = _clean_num(pb_m.group(1))
-        if ev_m:  out["EV/EBITDA"] = _clean_num(ev_m.group(1))
-
-        if not _all_nan_ratio_dict(out):
-            out["ratio_source"] = "FMP"
-            out["ratio_note"]   = "Fetched from FMP."
-        else:
-            out["ratio_note"] = f"FMP: page loaded but ratios not parsed for {fmp_sym}."
-    except Exception as e:
-        out["ratio_note"] = f"FMP fetch failed: {repr(e)[:80]}"
-
-    return out
-
-
-# =========================================================
-# ▶  MASTER RATIO FETCHER — 5 layers, best-first
+# ▶  MASTER RATIO FETCHER
+#    3-layer waterfall, all reading the SAME ratio fields
+#    that appear on the Yahoo Finance Statistics page:
+#      Layer 1: Yahoo Statistics HTML page scraper (most reliable on cloud)
+#      Layer 2: Yahoo quoteSummary API v11 with crumb
+#      Layer 3: yfinance direct info fields (no computed ratios)
 # =========================================================
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def get_live_peer_row(
@@ -1234,105 +1147,113 @@ def get_live_peer_row(
     if not sym:
         return out
 
-    def _best(*values):
+    def _best_positive(*values):
+        """Return the first valid, positive numeric value."""
         for v in values:
             c = _clean_num(v)
             if not pd.isna(c) and c > 0:
                 return c
         return np.nan
 
-    layers = []   # list of (name, data_dict)
-
-    # ── Layer 1: yfinance (info + financial stmt computation) ────────────────
-    try:
-        d = yfinance_ratios(sym)
-        layers.append(("yfinance", d))
-    except Exception:
-        pass
-
-    # ── Layer 2: Yahoo v11 with crumb (if layer 1 blank) ────────────────────
-    if _all_nan_ratio_dict(layers[-1][1] if layers else {}):
-        try:
-            d = yahoo_v8_ratios(sym)
-            layers.append(("Yahoo v11", d))
-        except Exception:
-            pass
-
-    # ── Layer 3: StockAnalysis.com (if layers 1+2 blank) ────────────────────
-    if _all_nan_ratio_dict(layers[-1][1] if layers else {}):
-        try:
-            d = stockanalysis_ratios(sym)
-            layers.append(("StockAnalysis", d))
-        except Exception:
-            pass
-
-    # ── Layer 4: Macrotrends (if layers 1-3 blank) ──────────────────────────
-    if _all_nan_ratio_dict(layers[-1][1] if layers else {}):
-        try:
-            d = macrotrends_ratios(sym)
-            layers.append(("Macrotrends", d))
-        except Exception:
-            pass
-
-    # ── Layer 5: FMP (last resort) ───────────────────────────────────────────
-    if _all_nan_ratio_dict(layers[-1][1] if layers else {}):
-        try:
-            d = fmp_ratios(sym)
-            layers.append(("FMP", d))
-        except Exception:
-            pass
-
-    # ── Merge: take best non-null value across all layers ────────────────────
-    all_pe  = [d.get("P/E",       np.nan) for _, d in layers]
-    all_pb  = [d.get("P/B",       np.nan) for _, d in layers]
-    all_ev  = [d.get("EV/EBITDA", np.nan) for _, d in layers]
-
-    pe        = _best(*all_pe)
-    pb        = _best(*all_pb)
-    ev_ebitda = _best(*all_ev)
-
-    # ── Metadata from yfinance first, then fallbacks ─────────────────────────
-    yf_d = next((d for n, d in layers if n == "yfinance"), {})
-    v11_d = next((d for n, d in layers if n == "Yahoo v11"), {})
-
-    company  = (_clean_text(yf_d.get("Company"))  or _clean_text(v11_d.get("Company"))  or fallback_company or sym)
-    exchange = (_clean_text(yf_d.get("Exchange")) or _clean_text(v11_d.get("Exchange")) or fallback_exchange)
-    country  = (_clean_text(yf_d.get("Country"))  or _clean_text(v11_d.get("Country"))  or fallback_country)
-    sector   = (_clean_text(yf_d.get("Sector"))   or _clean_text(v11_d.get("Sector"))   or fallback_sector)
-    industry = (_clean_text(yf_d.get("Industry")) or _clean_text(v11_d.get("Industry")) or fallback_industry)
-
-    # ── Determine winning source ─────────────────────────────────────────────
+    collected_notes = []
     winning_source = ""
-    for name, d in layers:
-        if not _all_nan_ratio_dict(d):
-            winning_source = name
-            break
 
-    # Collate all notes for debug
-    all_notes = " | ".join(
-        f"[{n}]: {d.get('ratio_note','')}" for n, d in layers if d.get("ratio_note")
-    )
+    # ── Layer 1: Yahoo Finance Statistics page HTML scraper ──────────────────
+    try:
+        d1 = yahoo_statistics_page_scraper(sym)
+        collected_notes.append(f"[Stats Page]: {d1.get('ratio_note', '')}")
+
+        if not _all_nan_ratio_dict(d1):
+            # Good data from statistics page — use it
+            out["P/E"]       = _best_positive(d1.get("P/E"))
+            out["P/B"]       = _best_positive(d1.get("P/B"))
+            out["EV/EBITDA"] = _best_positive(d1.get("EV/EBITDA"))
+
+            # Fill metadata
+            out["Company"]  = _clean_text(d1.get("Company"))  or fallback_company or sym
+            out["Exchange"] = _clean_text(d1.get("Exchange")) or fallback_exchange
+            out["Country"]  = _clean_text(d1.get("Country"))  or fallback_country
+            out["Sector"]   = _clean_text(d1.get("Sector"))   or fallback_sector
+            out["Industry"] = _clean_text(d1.get("Industry")) or fallback_industry
+            winning_source = "Yahoo Statistics Page"
+    except Exception as e:
+        collected_notes.append(f"[Stats Page]: exception {repr(e)[:60]}")
+        d1 = {}
+
+    # ── Layer 2: Yahoo quoteSummary API (if Layer 1 had blanks) ─────────────
+    # Also used to fill in any missing metadata
+    if _all_nan_ratio_dict(out):
+        try:
+            d2 = yahoo_api_ratios(sym)
+            collected_notes.append(f"[API v11]: {d2.get('ratio_note', '')}")
+
+            if not _all_nan_ratio_dict(d2):
+                out["P/E"]       = _best_positive(d2.get("P/E"))
+                out["P/B"]       = _best_positive(d2.get("P/B"))
+                out["EV/EBITDA"] = _best_positive(d2.get("EV/EBITDA"))
+
+                out["Company"]  = _clean_text(d2.get("Company"))  or out["Company"]
+                out["Exchange"] = _clean_text(d2.get("Exchange")) or out["Exchange"]
+                out["Country"]  = _clean_text(d2.get("Country"))  or out["Country"]
+                out["Sector"]   = _clean_text(d2.get("Sector"))   or out["Sector"]
+                out["Industry"] = _clean_text(d2.get("Industry")) or out["Industry"]
+                winning_source = "Yahoo API v11"
+        except Exception as e:
+            collected_notes.append(f"[API v11]: exception {repr(e)[:60]}")
+
+    # ── Layer 3: yfinance direct info fields (last resort) ───────────────────
+    if _all_nan_ratio_dict(out):
+        try:
+            d3 = yfinance_direct_ratios(sym)
+            collected_notes.append(f"[yfinance]: {d3.get('ratio_note', '')}")
+
+            if not _all_nan_ratio_dict(d3):
+                out["P/E"]       = _best_positive(d3.get("P/E"))
+                out["P/B"]       = _best_positive(d3.get("P/B"))
+                out["EV/EBITDA"] = _best_positive(d3.get("EV/EBITDA"))
+
+                out["Company"]  = _clean_text(d3.get("Company"))  or out["Company"]
+                out["Exchange"] = _clean_text(d3.get("Exchange")) or out["Exchange"]
+                out["Country"]  = _clean_text(d3.get("Country"))  or out["Country"]
+                out["Sector"]   = _clean_text(d3.get("Sector"))   or out["Sector"]
+                out["Industry"] = _clean_text(d3.get("Industry")) or out["Industry"]
+                winning_source = "yfinance direct"
+        except Exception as e:
+            collected_notes.append(f"[yfinance]: exception {repr(e)[:60]}")
+
+    # ── Merge partial results: fill individual NaN fields from later layers ──
+    # e.g. Stats page gave P/E + P/B but not EV/EBITDA → try API for EV/EBITDA
+    if not pd.isna(out.get("P/E")) or not pd.isna(out.get("P/B")) or not pd.isna(out.get("EV/EBITDA")):
+        # We have some data — try to fill remaining NaNs from other sources
+        try:
+            if pd.isna(out.get("EV/EBITDA")) or pd.isna(out.get("P/B")) or pd.isna(out.get("P/E")):
+                d2_fill = yahoo_api_ratios(sym)
+                if pd.isna(out.get("P/E")):
+                    out["P/E"] = _best_positive(d2_fill.get("P/E"))
+                if pd.isna(out.get("P/B")):
+                    out["P/B"] = _best_positive(d2_fill.get("P/B"))
+                if pd.isna(out.get("EV/EBITDA")):
+                    out["EV/EBITDA"] = _best_positive(d2_fill.get("EV/EBITDA"))
+        except Exception:
+            pass
+
+    # ── Final status ─────────────────────────────────────────────────────────
+    out["Source"] = winning_source if winning_source else ""
 
     if winning_source:
-        ratio_note = f"✅ Source: {winning_source}. {all_notes}"
+        out["RatioNote"] = (
+            f"✅ Source: {winning_source} | "
+            f"P/E={out['P/E'] if not pd.isna(out['P/E']) else 'N/A'}, "
+            f"P/B={out['P/B'] if not pd.isna(out['P/B']) else 'N/A'}, "
+            f"EV/EBITDA={out['EV/EBITDA'] if not pd.isna(out['EV/EBITDA']) else 'N/A'}"
+        )
     else:
-        ratio_note = f"❌ All sources failed. {all_notes}"
-
-    out.update({
-        "Company":   company,
-        "Exchange":  exchange,
-        "Country":   country,
-        "Sector":    sector,
-        "Industry":  industry,
-        "EV/EBITDA": ev_ebitda,
-        "P/B":       pb,
-        "P/E":       pe,
-        "Source":    winning_source,
-        "RatioNote": ratio_note,
-        "YahooProfile": make_yahoo_profile_url(sym),
-        "YahooStats":   make_yahoo_statistics_url(sym),
-        "NeedsManualInvesting": False,
-    })
+        out["RatioNote"] = (
+            "❌ All sources returned no ratios. "
+            "Yahoo Finance may not carry valuation data for this ticker. "
+            "Enter manually below. | Debug: " + " | ".join(collected_notes[:2])
+        )
+        out["NeedsManualInvesting"] = True
 
     return out
 
@@ -1344,7 +1265,7 @@ def _is_yahoo_usable_status(x):
 
 
 # =========================================================
-# ▶  PARALLEL PEER FETCHER  (ThreadPoolExecutor — fast)
+# ▶  PARALLEL PEER FETCHER
 # =========================================================
 def _fetch_one_peer(args):
     """Worker for parallel fetch. Returns (idx, live_dict)."""
@@ -1481,18 +1402,17 @@ def build_live_comps_from_target(
     total = len(peer_rows)
 
     # ── PARALLEL fetch with progress bar ────────────────────────────────────
-    progress_bar = st.progress(0, text="⚡ Fetching peer ratios in parallel...")
+    progress_bar = st.progress(0, text="⚡ Fetching peer ratios from Yahoo Finance statistics pages...")
     results_map = {}
 
     args_list = [(idx, r, target_profile) for idx, (_, r) in enumerate(peer_rows)]
 
     completed = 0
-    # Use ThreadPoolExecutor; yfinance is thread-safe
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, total)) as executor:
         future_to_idx = {executor.submit(_fetch_one_peer, args): args[0] for args in args_list}
         for future in concurrent.futures.as_completed(future_to_idx):
             try:
-                idx, live = future.result(timeout=30)
+                idx, live = future.result(timeout=45)
                 results_map[idx] = live
             except Exception as e:
                 orig_idx = future_to_idx[future]
@@ -1500,7 +1420,7 @@ def build_live_comps_from_target(
             completed += 1
             progress_bar.progress(
                 int(completed / total * 100),
-                text=f"⚡ Fetched {completed} of {total} peers..."
+                text=f"⚡ Fetched {completed} of {total} peers from Yahoo Finance..."
             )
 
     progress_bar.empty()
@@ -1626,7 +1546,8 @@ def render_peer_picker_table(df_live: pd.DataFrame):
             st.checkbox("Use", key=widget_key, label_visibility="collapsed")
             S["peer_picker_selected_map"][ticker] = bool(S[widget_key])
         with c2:
-            st.markdown(f"**{company}**  \n{ticker} | {country} | {sector}")
+            source_tag = _clean_text(r.get("Source"))
+            st.markdown(f"**{company}**  \n{ticker} | {country} | {sector} | _{source_tag}_")
         with c3:
             st.markdown(f"""
             <div style="border-radius:12px;padding:12px 14px;background:#0a3554;
@@ -1658,14 +1579,38 @@ else:
              "e.g. data/africa_yahoo_peer_universe_strict_final.xlsx")
     st.stop()
 
-# Show library status
-with st.expander("ℹ️ Data source status (5-layer fallback chain)"):
-    st.write(f"**Layer 1 — yfinance (info + financial stmts):** {'✅ Available' if _YF_AVAILABLE else '❌ Not installed — add yfinance to requirements.txt'}")
-    st.write(f"**Layer 2 — Yahoo Finance v11 (crumb+cookie):** {'✅ Available' if _REQUESTS_AVAILABLE else '❌ requests not installed'}")
-    st.write(f"**Layer 3 — StockAnalysis.com:** {'✅ Available' if _REQUESTS_AVAILABLE else '❌ requests not installed'}")
-    st.write(f"**Layer 4 — Macrotrends.net:** {'✅ Available (mapped tickers only)' if _REQUESTS_AVAILABLE else '❌ requests not installed'}")
-    st.write(f"**Layer 5 — FMP (ADR tickers):** {'✅ Available (mapped tickers only)' if _REQUESTS_AVAILABLE else '❌ requests not installed'}")
-    st.caption("For JSE .JO tickers: Layer 1 computes ratios from balance sheet + income statement when info dict is sparse.")
+# Show source status
+with st.expander("ℹ️ Data source status (3-layer waterfall — all read directly from Yahoo Statistics page)"):
+    st.markdown("""
+    **How ratios are fetched (in order of priority):**
+
+    **Layer 1 — Yahoo Finance Statistics HTML page scraper** *(primary, cloud-friendly)*
+    - Directly scrapes `https://finance.yahoo.com/quote/TICKER/key-statistics`
+    - Reads the "Valuation Measures" table: **Trailing P/E**, **Price/Book**, **Enterprise Value/EBITDA**
+    - These are the exact same values shown on the Yahoo Finance Statistics page
+    - Uses browser cookie warm-up to work on cloud IPs
+    """)
+    st.write(f"  Status: {'✅ Available' if _REQUESTS_AVAILABLE else '❌ requests/BeautifulSoup not installed'}")
+
+    st.markdown("""
+    **Layer 2 — Yahoo Finance quoteSummary API v11** *(secondary)*
+    - Reads `trailingPE`, `priceToBook`, `enterpriseToEbitda` from the API
+    - Same fields as the statistics page — no computed ratios from financials
+    """)
+    st.write(f"  Status: {'✅ Available' if _REQUESTS_AVAILABLE else '❌ requests not installed'}")
+
+    st.markdown("""
+    **Layer 3 — yfinance direct** *(last resort)*
+    - Reads ONLY `trailingPE`, `priceToBook`, `enterpriseToEbitda` from `ticker.info`
+    - Does NOT compute ratios from balance sheet / income statement
+    """)
+    st.write(f"  Status: {'✅ Available' if _YF_AVAILABLE else '❌ yfinance not installed'}")
+
+    st.info(
+        "**Note on JSE .JO tickers:** Yahoo Finance sometimes doesn't populate valuation "
+        "ratios for JSE-listed companies. When that happens, the scraper will show N/A "
+        "and you can enter the values manually from the Yahoo Statistics page link provided."
+    )
 
 S.setdefault("target_company", "")
 S.setdefault("auto_peer_count", 8)
@@ -1707,8 +1652,9 @@ S["manual_sector_override"] = manual_sector
 
 st.subheader("Live peer search and ratio fill")
 st.caption(
-    "Peers come from your Africa universe Excel first, then ratios are fetched **in parallel** "
-    "via yfinance (primary) → Yahoo quoteSummary → Yahoo Stats HTML."
+    "Ratios are scraped **directly from the Yahoo Finance Statistics page** "
+    "(Trailing P/E, Price/Book, Enterprise Value/EBITDA) — the same values you see "
+    "when you open the Yahoo Finance key-statistics tab for any ticker."
 )
 
 col_slider, col_workers = st.columns([2, 1])
@@ -1722,9 +1668,9 @@ with col_slider:
 with col_workers:
     max_workers = st.number_input(
         "Parallel workers",
-        min_value=1, max_value=10,
-        value=6, step=1, key="max_workers_input",
-        help="Higher = faster but may hit rate limits. 4-6 is recommended."
+        min_value=1, max_value=8,
+        value=4, step=1, key="max_workers_input",
+        help="Higher = faster but may hit Yahoo rate limits. 3-4 recommended for cloud."
     )
 
 run_live_comps = st.button("⚡ Auto-search live peers and ratios")
@@ -1740,7 +1686,7 @@ if run_live_comps:
         S["peer_picker_selected_map"] = {}
         S["live_comps_df_selected"] = pd.DataFrame()
         live_df, meta = build_live_comps_from_target(
-            target_query=target_query if False else target_company,
+            target_query=target_company,
             max_peers=int(live_peer_limit),
             manual_sector_override=manual_sector,
             max_workers=int(max_workers),
@@ -1748,7 +1694,8 @@ if run_live_comps:
         S["live_comps_df"]   = live_df
         S["live_comps_meta"] = meta
         if live_df is not None and not live_df.empty:
-            st.success(f"{len(live_df)} peers found. Select which ones to use below.")
+            ratio_count = (live_df["EV/EBITDA"].notna() | live_df["P/B"].notna() | live_df["P/E"].notna()).sum()
+            st.success(f"{len(live_df)} peers found, {ratio_count} have at least one ratio from Yahoo Statistics page.")
 
 live_df   = S.get("live_comps_df", pd.DataFrame())
 live_meta = S.get("live_comps_meta", {})
@@ -1804,10 +1751,11 @@ if live_df is not None and not live_df.empty:
 
     missing_all = df_show[ratio_cols].isna().all(axis=1)
     if missing_all.any():
+        missing_tickers = df_show.loc[missing_all, "Ticker"].tolist()
         st.warning(
-            "Some peers have no ratios. This usually means Yahoo Finance doesn't carry "
-            "data for those tickers (common for smaller African exchanges). "
-            "You can enter them manually in Step 1 below."
+            f"⚠️ {missing_all.sum()} peers have no ratios: **{', '.join(missing_tickers)}**. "
+            "Click 'Open Stats' next to each to check the Yahoo Finance statistics page manually. "
+            "If values exist there, enter them in Step 1 below."
         )
 
 with st.expander("Debug peer search"):
@@ -1892,10 +1840,16 @@ for i in range(int(num_comps)):
     ticker_val  = S.get(f"comp_ticker_{i}", "")
     source_val  = S.get(f"comp_source_{i}", "")
     profile_val = S.get(f"comp_profile_{i}", "")
+    stats_val   = make_yahoo_statistics_url(ticker_val) if ticker_val else ""
     if ticker_val or source_val:
         st.caption(f"Ticker: {ticker_val} | Ratio source: {source_val}")
+        link_parts = []
+        if stats_val:
+            link_parts.append(f"[Open Yahoo Statistics for {name}]({stats_val})")
         if profile_val:
-            st.markdown(f"[Open Yahoo profile for {name}]({profile_val})")
+            link_parts.append(f"[Open Profile]({profile_val})")
+        if link_parts:
+            st.markdown(" | ".join(link_parts))
 
     inc_ev = bool(S[ev_key])
     inc_pb = bool(S[pb_key])
