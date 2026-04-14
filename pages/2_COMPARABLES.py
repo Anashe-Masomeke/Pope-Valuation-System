@@ -10,6 +10,7 @@ import requests
 import time
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 st.set_page_config(page_title="Comparables Valuation", layout="wide")
 # ---------------------------------------------------------
 # GLOBAL STYLING (MATCH DDM)
@@ -1221,7 +1222,8 @@ def yahoo_html_ratio_fallback(symbol: str) -> dict:
 
     return out
 
-
+PEER_RATIO_CACHE = {}
+YF_INFO_CACHE = {}
 @st.cache_data(show_spinner=False, ttl=60 * 20)
 def get_live_peer_row(
         symbol: str,
@@ -1232,7 +1234,8 @@ def get_live_peer_row(
         fallback_industry: str = ""
 ):
     sym = normalize_peer_ticker(symbol)
-
+    if sym in PEER_RATIO_CACHE:
+        return PEER_RATIO_CACHE[sym]
     out = {
         "Company": fallback_company or sym,
         "Ticker": sym,
@@ -1251,17 +1254,34 @@ def get_live_peer_row(
     }
 
     if not sym:
+        PEER_RATIO_CACHE[sym] = out
         return out
 
     yh = yahoo_profile_and_metrics(sym)
-    ystats = yahoo_stats_table_fallback(sym)
-    yhtml = yahoo_html_ratio_fallback(sym)
-    inv = {}
+
+    ystats = {}
+    yhtml = {}
+
+    # ONLY fallback if ALL ratios missing (not partial checks)
+    if _all_nan_ratio_dict(yh):
+        ystats = yahoo_stats_table_fallback(sym)
+
+    if _all_nan_ratio_dict(yh) and _all_nan_ratio_dict(ystats):
+        yhtml = yahoo_html_ratio_fallback(sym)
 
     info = {}
+
     try:
         tk = yf.Ticker(sym)
-        info = tk.info or {}
+        if sym in YF_INFO_CACHE:
+            info = YF_INFO_CACHE[sym]
+        else:
+            try:
+                tk = yf.Ticker(sym)
+                info = tk.info or {}
+                YF_INFO_CACHE[sym] = info
+            except Exception:
+                info = {}
     except Exception:
         info = {}
 
@@ -1488,7 +1508,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_s
     # 1) first use precomputed target peers
     strict_df = get_precomputed_target_peers(
         target_profile,
-        max_peers=max_peers * 3
+        max_peers=max_peers * 2
     )
 
     peer_source = "TARGET_PEER_MATCHES"
@@ -1497,7 +1517,7 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_s
     if strict_df is None or strict_df.empty:
         strict_df = strict_universe_filter(
             target_profile,
-            max_peers=max_peers * 3
+            max_peers=max_peers * 2
         )
         peer_source = "Africa universe Excel"
 
@@ -1516,20 +1536,20 @@ def build_live_comps_from_target(target_query: str, max_peers: int = 9, manual_s
     progress = st.progress(0)
     status = st.empty()
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = [
             executor.submit(fetch_peer_row_parallel, r, target_profile)
             for _, r in strict_df.iterrows()
         ]
 
-        for i, future in enumerate(as_completed(futures)):
+        for i, future in enumerate(as_completed(futures), start=1):
             try:
                 result = future.result()
                 rows.append(result)
             except Exception:
                 continue
 
-            pct = int((i + 1) / len(futures) * 100)
+            pct = int(i / len(futures) * 100)
             progress.progress(pct)
 
             status.markdown(f"""
