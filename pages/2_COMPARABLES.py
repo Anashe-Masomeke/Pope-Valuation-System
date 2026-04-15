@@ -3073,7 +3073,7 @@ def fancy_loader(text="Processing...", steps=5):
 # =========================================================
 
 step("Average & Implied Multiples",2)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # Compute series based on selected comparables
 ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
 pb_series = df_comps.loc[df_comps["Include_PB"] == True, "P/B"]
@@ -3123,7 +3123,7 @@ st.session_state["implied_pe"] = float(implied_pe) if not pd.isna(implied_pe) el
 # TIMING SOURCE (from DCF) — BASE USED BY BOTH EBITDA & EARNINGS
 # =========================================================
 step("Timing Source (from DCF)",3)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 dcf_timing_list = S.get("dcf_discount_periods_n", [])
 default_base = float(S.get("comp_timing_base", 0.0))
 
@@ -3173,7 +3173,7 @@ st.success(f"Timing base for comparables = **{base_timing:.4f}**")
 # STEP 3 — MAINTAINABLE EBITDA (with locked timing)
 # =========================================================
 step("Maintainable EBITDA",4)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 dcf_eb_all = S.get("dcf_ebitda_all", None)
 if dcf_eb_all is None:
     dcf_eb_all = S.get("dcf_ebitda_forecast", {})
@@ -3316,7 +3316,7 @@ else:
 # STEP 4 — MAINTAINABLE EARNINGS (with locked timing)
 # =========================================================
 step("Maintainable Earnings",5)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 dcf_np_all = S.get("dcf_profit_all", None)
 if dcf_np_all is None:
     dcf_np_all = S.get("dcf_profit_forecast", {})
@@ -3503,6 +3503,7 @@ else:
 # STEP 5 — BOOK VALUE & NET DEBT
 # =========================================================
 step("Book Value & Net Debt",6)
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # ✅ Pull Beginning Book Value from Banking page (Totals / BV)
 bank_outputs = (S.get("bank", {}) or {}).get("outputs", {}) or {}
 bank_book_equity = bank_outputs.get("book_equity_0", None)  # Beginning Book Value (Total Equity)
@@ -3544,7 +3545,7 @@ st.caption(f"💳 Net Debt: **{net_debt:,.2f} USD**")
 # STEP 6 — FINAL EQUITY VALUES
 # =========================================================
 step("Computed Equity Values",7)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 maintainable_ebitda = S.get("maintainable_ebitda", np.nan)
 maintainable_earnings = S.get("maintainable_earnings", np.nan)
 
