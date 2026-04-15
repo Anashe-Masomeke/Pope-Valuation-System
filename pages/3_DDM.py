@@ -889,7 +889,7 @@ def init(key, value):
 # STEP 1 — DIVIDEND HISTORY
 # ---------------------------------------------------------
 step("Dividend History", 1)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # Initialise once if missing
 init("ddm_start_year", 2021)
 init("ddm_end_year", 2025)
@@ -929,7 +929,7 @@ for y in years:
         st.session_state[f"ddm_div_{y}"] = 0.01  # default once
 
 step("Enter Dividends",2)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 dividends = []
 for y in years:
     div = st.number_input(
@@ -955,7 +955,7 @@ st.dataframe(df_history, width='stretch')
 # STEP 2 — GROWTH CALCULATION RANGE
 # ---------------------------------------------------------
 step("Growth Calculation Range", 3)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 init("ddm_g_start", years[0])
 init("ddm_g_end", years[-1])
 
@@ -976,7 +976,7 @@ D_end = dividends[years.index(g_end)]
 # STEP 3 — DIVIDEND GROWTH RATE (g)
 # ---------------------------------------------------------
 step("Dividend Growth", 4)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 if g_start == g_end:
     g = 0.0
 elif D_start > 0:
@@ -995,7 +995,7 @@ st.metric("Next year's dividend (D₁)", f"{D1:,.5f}")
 # STEP 4 — COST OF EQUITY (Re)
 # ---------------------------------------------------------
 step("Cost of Equity Inputs", 5)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # Pull live values from DCF page where possible
 rf = st.session_state.get("dcf_rf_pct", st.session_state.get("rf", 0.0)) / 100
 mrp = st.session_state.get("dcf_mrp_pct", st.session_state.get("erp", 0.0)) / 100
@@ -1093,7 +1093,7 @@ st.metric("Cost of Equity (Re)", f"{Re * 100:.2f}%")
 # STEP 5 — VALUE PER SHARE
 # ---------------------------------------------------------
 step("Equity Value per Share", 6)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 if Re <= g:
     st.error("❌ Re must be greater than g for the Gordon Growth DDM to work.")
     P0 = np.nan
@@ -1110,7 +1110,7 @@ st.session_state["ddm_P0"] = None if np.isnan(P0) else float(P0)
 # STEP 6 — TOTAL EQUITY VALUE
 # ---------------------------------------------------------
 step("Total Equity Value", 7)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 init("num_shares", 0.0)
 st.markdown("""
 <div class="fbc-forecast-label">
@@ -1363,7 +1363,7 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
 
 st.markdown("---")
 step("⬇️ Download FULL DDM Excel Model (All Steps + Formulas)",8)
-
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 if "ddm_excel_bytes" not in st.session_state:
     st.session_state["ddm_excel_bytes"] = None
 
