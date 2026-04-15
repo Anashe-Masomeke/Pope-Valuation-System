@@ -727,7 +727,86 @@ i.material-icons {
 }
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
 
+/* =========================================================
+   FBC CLEAN SECTION HEADER (NO SUBTITLE, NO STEPS)
+   ========================================================= */
+
+.fbc-section {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 22px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.08),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+/* Left indicator (circle like your UI) */
+.fbc-section {
+    display: block;
+    padding: 16px 0;
+    margin: 28px 0 18px 0;
+    border-bottom: 2px solid rgba(0,51,153,0.15);
+    transition: all 0.25s ease;
+}
+
+.fbc-section-title {
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c;
+    position: relative;
+}
+
+/* animated underline */
+.fbc-section-title::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -6px;
+    width: 40px;
+    height: 3px;
+    background: #003399;
+    transition: width 0.3s ease;
+}
+
+.fbc-section:hover .fbc-section-title::after {
+    width: 100%;
+}
+
+/* Title only */
+.fbc-section-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c !important;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
+def section(title: str):
+    st.markdown(
+        f"""
+        <div class="fbc-section">
+            <div class="fbc-section-dot"></div>
+            <div class="fbc-section-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -1360,8 +1439,8 @@ with col_reset_left:
 # -------------------------------------------------------
 
 
-st.subheader("📂 Upload Financial Statements")
-
+section("Upload Financial Statements")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # --- Persist uploaded file bytes so the app doesn't "forget" after inactivity/rerun ---
 if "dcf_file_bytes" not in st.session_state:
     st.session_state["dcf_file_bytes"] = None
@@ -1433,7 +1512,8 @@ year_cols_cf = get_year_cols(cf_df)
 
 # FX SECTION — EXCEL-BASED (ZWG → USD) — FINAL & CORRECT
 # ---------------------------------------------------------
-st.markdown("### 💱 Currency & Exchange Rates")
+section("💱 Currency & Exchange Rates")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # ✅ Persist conversion method across tabs/pages
 # conversion_method can be: "NO_FX" or "FX_EXCEL"
 if "dcf_conversion_method" not in st.session_state:
@@ -1843,13 +1923,16 @@ else:
 # ---------------------------------------------------------
 # SHOW CLEANED STATEMENTS
 # ---------------------------------------------------------
-st.subheader("Income Statement (cleaned, in USD)")
+section("Income Statement (cleaned, in USD)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 st.dataframe(is_df, width='stretch')
 
-st.subheader("Balance Sheet (cleaned, in USD)")
+section("Balance Sheet (cleaned, in USD)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 st.dataframe(bs_df, width='stretch')
 
-st.subheader("Cash Flow Statement (cleaned, in USD)")
+section("Cash Flow Statement (cleaned, in USD)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 st.dataframe(cf_df, width='stretch')
 
 # Re-detect year columns (as strings)
@@ -1864,29 +1947,7 @@ if len(year_cols_is) < 2:
 # Prepare year ints/labels
 last_hist_label = year_cols_is[-1]           # string label e.g. "2025"
 last_hist_year = int(str(last_hist_label))   # int 2025
-# ---------------------------------------------------------
-# FORECAST HORIZON (USER-DEFINED)
-# ---------------------------------------------------------
-if "dcf_forecast_years" not in st.session_state:
-    st.session_state["dcf_forecast_years"] = 5
 
-forecast_horizon = st.number_input(
-    "Number of years to forecast",
-    min_value=1,
-    max_value=15,
-    value=int(st.session_state["dcf_forecast_years"]),
-    step=1,
-    key="dcf_forecast_years_input"
-)
-
-st.session_state["dcf_forecast_years"] = forecast_horizon
-
-forecast_years_int = [
-    last_hist_year + i
-    for i in range(1, forecast_horizon + 1)
-]
-
-forecast_cols = [str(y) for y in forecast_years_int]
 
 # --- Persistent dictionary for DCF row mappings ---
 if "dcf_mapping" not in st.session_state:
@@ -1920,8 +1981,8 @@ BS_LINES = [
 ]
 
 def map_bs_wizard(bs_df, year_cols_bs):
-    st.markdown("### 🟩 Balance Sheet — Mapping")
-
+    section("Balance Sheet — Mapping")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     bs_items = list(bs_df["Item"].astype(str))
     bs_labels = option_labels_from_items(bs_items)
 
@@ -2040,8 +2101,8 @@ CF_LINES = [
 ]
 
 def map_cf_wizard(cf_df, year_cols_cf):
-    st.markdown("### 📄 Cash Flow — Mapping")
-
+    section("Cash Flow — Mapping")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     cf_items = list(cf_df["Item"].astype(str))
     cf_labels = option_labels_from_items(cf_items)
 
@@ -2168,8 +2229,8 @@ def _labels_from_items(items):
     return ["N/A (not in statement)"] + [f"{i+1}: {str(name)}" for i, name in enumerate(items)]
 
 def map_core_is_totals_wizard(is_df, year_cols_is):
-    st.markdown("### 🧾 Income Statement — Core Totals Mapping")
-
+    section("Income Statement — Core Totals Mapping")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     items = list(is_df["Item"].astype(str))
     options = _labels_from_items(items)
 
@@ -2252,7 +2313,6 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
 
     return idx_map
 
-
 # ✅ use this instead of your old mapping call
 core_idx = map_core_is_totals_wizard(is_df, year_cols_is)
 rev_idx    = core_idx["rev"]
@@ -2303,7 +2363,59 @@ revenue_row = is_df.iloc[[rev_idx]]
 
 # Calculate historical growth
 calculated_g = avg_revenue_growth(revenue_row, year_cols_is)
+# ---------------------------------------------------------
+# FORECAST HORIZON (USER-DEFINED)
+# ---------------------------------------------------------
+if "dcf_forecast_years" not in st.session_state:
+    st.session_state["dcf_forecast_years"] = 5
+st.markdown("""
+<div class="fbc-forecast-label">
+    Number of years to forecast
+</div>
 
+<style>
+.fbc-forecast-label {
+    font-family: "Playfair Display", serif;
+    font-size: 18px;
+    font-weight: 800;
+    color: #001a5c;
+
+    display: inline-block;
+    padding-left: 10px;
+    border-left: 4px solid #003399;
+
+    margin-bottom: 8px;
+}
+
+.fbc-forecast-label::after {
+    content: "";
+    display: block;
+    width: 60px;
+    height: 2px;
+    margin-top: 6px;
+    background: linear-gradient(90deg, #003399, transparent);
+    border-radius: 2px;
+}
+</style>
+""", unsafe_allow_html=True)
+forecast_horizon = st.number_input(
+    "Number of years to forecast",
+    min_value=1,
+    max_value=15,
+    value=int(st.session_state["dcf_forecast_years"]),
+    step=1,
+    key="dcf_forecast_years_input",
+    label_visibility="collapsed"
+)
+
+st.session_state["dcf_forecast_years"] = forecast_horizon
+
+forecast_years_int = [
+    last_hist_year + i
+    for i in range(1, forecast_horizon + 1)
+]
+
+forecast_cols = [str(y) for y in forecast_years_int]
 st.markdown(f"📌 **Calculated Avg Revenue Growth:** {calculated_g:.2%}")
 
 # --- Persistent revenue growth override ---
@@ -2379,8 +2491,8 @@ if isinstance(tax_idx, int) and isinstance(pbt_idx, int):
             avg_tax_ratio = float(np.mean(ratios))
 
 # --- UI choice: same growth vs year-by-year growth ---
-st.markdown("### 📈 Revenue Growth Method")
-
+section("📈 Revenue Growth Method")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 if "dcf_rev_growth_mode" not in st.session_state:
     st.session_state["dcf_rev_growth_mode"] = "Uniform (same % each year)"
 
@@ -2703,9 +2815,10 @@ def style_hist_vs_forecast(styler, hist_cols, forecast_cols):
         return styles
 
     return styler.apply(apply_colors, axis=None)
-st.subheader(
+section(
     f"📘 Forecasted Income Statement ({forecast_horizon} years, USD)"
 )
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 def style_forecast_headers(styler, forecast_cols, color="#1d4ed8"):
     """
     Color ONLY the column headers for forecast years.
@@ -2893,15 +3006,15 @@ st.session_state["de_ratio"] = float(de_ratio)
 # ---------------------------------------------------------
 # 🟦 WORKING CAPITAL MODULE (HISTORICAL → WC% → FORECAST → ΔWC)
 # ---------------------------------------------------------
-st.subheader("📘 Working Capital Calculation (Historical & Forecast)")
-
+section("📘 Working Capital Calculation (Historical & Forecast)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 delta_wc_forecast_vals = np.zeros(len(forecast_years_int))
 
 if ca_idx_list and cl_idx_list:
 
     # -------- 1️⃣ HISTORICAL WC (CA - CL)
-    st.markdown("### **Historical Working Capital (CA - CL)**")
-
+    section("Historical Working Capital (CA - CL)")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     ca_hist = bs_df.loc[ca_idx_list, year_cols_bs].sum(axis=0)
     cl_hist = bs_df.loc[cl_idx_list, year_cols_bs].sum(axis=0)
     wc_hist = ca_hist - cl_hist
@@ -2921,8 +3034,8 @@ if ca_idx_list and cl_idx_list:
         }),
         width='stretch'    )
     # 2️⃣ WC% OF SALES
-    st.markdown("### **Historical Working Capital as % of Sales**")
-
+    section("Historical Working Capital as % of Sales")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     common_hist = [c for c in year_cols_is if c in wc_hist.index]
 
     wc_vals_hist = wc_hist[common_hist].astype(float).values
@@ -3002,8 +3115,8 @@ if ca_idx_list and cl_idx_list:
         wc_percent_last = (last_wc / last_rev) if last_rev != 0 else 0.0
         st.warning("⚠️ You excluded all years. Using the last available year as fallback for 'Most recent'.")
 
-    st.markdown("### ✅ Working Capital Assumption (WC % of Sales)")
-
+    section("✅ Working Capital Assumption (WC % of Sales)")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     # ✅ INITIALIZE SESSION STATE ONCE
     if "dcf_wc_pct_method" not in st.session_state:
         st.session_state["dcf_wc_pct_method"] = "last"  # default = most recent
@@ -3029,8 +3142,8 @@ if ca_idx_list and cl_idx_list:
         st.info(f"📌 Using most recent WC% of Sales ({last_year}) = {wc_percent_avg:.2%}")
 
     # 4️⃣ FORECAST WC
-    st.markdown("### **Forecast Working Capital**")
-
+    section("Forecast Working Capital")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     wc_forecast_vals = np.array(
         [rev_forecast[y] * wc_percent_avg for y in forecast_years_int],
         dtype=float
@@ -3050,8 +3163,8 @@ if ca_idx_list and cl_idx_list:
         width='stretch'    )
 
     # 5️⃣ ΔWC = OLD – NEW
-    st.markdown("### **Change in Working Capital (ΔWC = Old – New)**")
-
+    section("Change in Working Capital (ΔWC = Old – New)")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     last_wc_hist_value = float(wc_hist[common_hist[-1]])
 
     prev_wc = last_wc_hist_value
@@ -3080,7 +3193,8 @@ else:
     st.warning("⚠️ Please select Current Assets and Current Liabilities rows first.")
 
 # Capital structure summary
-st.subheader("Capital Structure & Working Capital (from Balance Sheet)")
+section("Capital Structure & Working Capital (from Balance Sheet)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 c_cap1, c_cap2, c_cap3, c_cap4 = st.columns(4)
 with c_cap1:
     st.metric(f"Total Debt ({bs_year_used_label})", f"{total_debt:,.0f}")
@@ -3117,8 +3231,8 @@ rd_auto = cost_of_debt
 # DCF PARAMETERS — AUTO + OVERRIDE (WITH 2 OPTIONAL UPLOADS)
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("💰 DCF Parameters (Auto + Override)")
-
+section("💰 DCF Parameters (Auto + Override)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # =============== helpers ===============
 def _to_decimal(x):
     """Accepts 0.15 or 15; returns decimal 0.15"""
@@ -3167,8 +3281,8 @@ left, right = st.columns([1.15, 1.0], vertical_alignment="top")
 # LEFT: Country ERP + Default Spread upload toggle
 # =========================================================
 with left:
-    st.markdown("#### 🌍 Country ERP & Default Spread (Auto RF + MRP)")
-
+    section("🌍 Country ERP & Default Spread (Auto RF + MRP)")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     # init upload states
     st.session_state.setdefault("dcf_country_upload_enabled", False)
     st.session_state.setdefault("dcf_country_params_bytes", None)
@@ -3266,8 +3380,8 @@ with left:
 # RIGHT: Industry Betas upload toggle
 # =========================================================
 with right:
-    st.markdown("#### 🧩 Industry Unlevered Betas (βu)")
-
+    section(" 🧩 Industry Unlevered Betas (βu)")
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     st.session_state.setdefault("dcf_beta_upload_enabled", False)
     st.session_state.setdefault("dcf_beta_file_bytes", None)
     st.session_state.setdefault("dcf_beta_file_name", None)
@@ -3540,8 +3654,8 @@ if "dcf_rd_manual_mode" not in st.session_state:
 if "dcf_rd_manual_value" not in st.session_state:
     st.session_state["dcf_rd_manual_value"] = auto_rd_pct
 
-st.markdown("#### 🧮 Cost of Debt (Rd) — Auto + Override")
-
+section(" 🧮 Cost of Debt (Rd) — Auto + Override")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 rd_mode = st.radio(
     "Cost of Debt (Rd) mode:",
     ["Use Auto (Interest / Debt)", "Manual override (%)"],
@@ -3594,8 +3708,8 @@ st.session_state["wacc"] = float(wacc)
 # OUTPUT HEADER (STOP HERE)
 # =========================================================
 st.markdown('<div class="dcf-card">', unsafe_allow_html=True)
-st.markdown("### 📌 DCF Output")
-
+section(" 📌 DCF Output")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 k1, k2, k3, k4 = st.columns(4)
 
 with k1:
@@ -3636,7 +3750,8 @@ st.markdown('</div>', unsafe_allow_html=True)
 # ---------------------------------------------------------
 # DATE-BASED DISCOUNTING (FULLY PERSISTENT — NO RESETTING)
 # ---------------------------------------------------------
-st.markdown("### 📅 Valuation Timing & Mid-point")
+section("📅 Valuation Timing & Mid-point")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # 1️⃣ INITIALIZE DEFAULTS (only ONCE)
 if "dcf_timing_init" not in st.session_state:
 
@@ -3831,8 +3946,8 @@ st.session_state["equity_value_dcf"] = float(equity_value)      # explicit DCF k
 # ---------------------------------------------------------
 # DCF TABLE (UFCF style)
 # ---------------------------------------------------------
-st.subheader("📉 DCF Cashflows (UFCF) — Date-based Discounting")
-
+section("📉 DCF Cashflows (UFCF) — Date-based Discounting")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 df_dcf = pd.DataFrame(
     {
         "Year": [str(y) for y in forecast_years_int],
@@ -3856,8 +3971,8 @@ styled_dcf = df_dcf.style.format(fmt_dict, na_rep="")
 st.dataframe(styled_dcf, width='stretch')
 
 # Terminal summary
-st.write("**Terminal Value and Present Value:**")
-
+section("Terminal Value and Present Value:")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 df_term = pd.DataFrame(
     {
         "Terminal Value": [terminal_value],
@@ -3883,7 +3998,8 @@ st.session_state["rd"] = float(rd)  # so the download page can use Rd
 # ---------------------------------------------------------
 # SUMMARY (STYLED TABLE)
 # ---------------------------------------------------------
-st.subheader("📌 Valuation Summary")
+section("📌 Valuation Summary")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 summary_rows = [
     ("Enterprise Value (EV)", enterprise_value, "USD"),
     ("Net Debt", net_debt, "USD"),
@@ -3933,8 +4049,8 @@ st.dataframe(styled_summary, width="stretch", hide_index=True)
 # =========================================================
 import streamlit.components.v1 as components
 
-st.subheader("📊 Sensitivity of Equity Value to changes in WACC and Terminal Growth Rate")
-
+section("📊 Sensitivity of Equity Value to changes in WACC and Terminal Growth Rate")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # -------------------------
 # Persistent storage keys (NOT widget keys)
 # -------------------------
@@ -4908,8 +5024,8 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
     return bio.read()
 
 st.markdown("---")
-st.subheader("⬇️ Download FULL DCF Excel Model (Formulas + Sensitivity)")
-
+section("⬇️ Download FULL DCF Excel Model (Formulas + Sensitivity)")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # ✅ pull sensitivity settings from your NEW persistent store keys
 sens_wacc_points = int(st.session_state.get("sens_store_wacc_points", 5))
 sens_g_points = int(st.session_state.get("sens_store_g_points", 7))
