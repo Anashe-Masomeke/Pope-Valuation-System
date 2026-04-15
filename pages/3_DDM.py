@@ -928,7 +928,7 @@ for y in years:
     if f"ddm_div_{y}" not in st.session_state:
         st.session_state[f"ddm_div_{y}"] = 0.01  # default once
 
-st.subheader("Enter Dividends")
+step("Enter Dividends",2)
 
 dividends = []
 for y in years:
@@ -954,7 +954,7 @@ st.dataframe(df_history, width='stretch')
 # ---------------------------------------------------------
 # STEP 2 — GROWTH CALCULATION RANGE
 # ---------------------------------------------------------
-step("Growth Calculation Range", 2)
+step("Growth Calculation Range", 3)
 
 init("ddm_g_start", years[0])
 init("ddm_g_end", years[-1])
@@ -975,7 +975,7 @@ D_end = dividends[years.index(g_end)]
 # ---------------------------------------------------------
 # STEP 3 — DIVIDEND GROWTH RATE (g)
 # ---------------------------------------------------------
-step("Dividend Growth", 3)
+step("Dividend Growth", 4)
 
 if g_start == g_end:
     g = 0.0
@@ -994,7 +994,7 @@ st.metric("Next year's dividend (D₁)", f"{D1:,.5f}")
 # ---------------------------------------------------------
 # STEP 4 — COST OF EQUITY (Re)
 # ---------------------------------------------------------
-step("Cost of Equity Inputs", 4)
+step("Cost of Equity Inputs", 5)
 
 # Pull live values from DCF page where possible
 rf = st.session_state.get("dcf_rf_pct", st.session_state.get("rf", 0.0)) / 100
@@ -1092,7 +1092,7 @@ st.metric("Cost of Equity (Re)", f"{Re * 100:.2f}%")
 # ---------------------------------------------------------
 # STEP 5 — VALUE PER SHARE
 # ---------------------------------------------------------
-step("Equity Value per Share", 5)
+step("Equity Value per Share", 6)
 
 if Re <= g:
     st.error("❌ Re must be greater than g for the Gordon Growth DDM to work.")
@@ -1109,16 +1109,46 @@ st.session_state["ddm_P0"] = None if np.isnan(P0) else float(P0)
 # ---------------------------------------------------------
 # STEP 6 — TOTAL EQUITY VALUE
 # ---------------------------------------------------------
-step("Total Equity Value", 6)
+step("Total Equity Value", 7)
 
 init("num_shares", 0.0)
+st.markdown("""
+<div class="fbc-forecast-label">
+    Number Of Shares
+</div>
 
+<style>
+.fbc-forecast-label {
+    font-family: "Playfair Display", serif;
+    font-size: 18px;
+    font-weight: 800;
+    color: #001a5c;
+
+    display: inline-block;
+    padding-left: 10px;
+    border-left: 4px solid #003399;
+
+    margin-bottom: 8px;
+}
+
+.fbc-forecast-label::after {
+    content: "";
+    display: block;
+    width: 60px;
+    height: 2px;
+    margin-top: 6px;
+    background: linear-gradient(90deg, #003399, transparent);
+    border-radius: 2px;
+}
+</style>
+""", unsafe_allow_html=True)
 num_shares = st.number_input(
     "Number of Shares",
     value=float(st.session_state["num_shares"]),
     step=1000.0,
     format="%.0f",
     key="ddm_num_shares",
+    label_visibility="collapsed"
 )
 
 if num_shares > 0 and not np.isnan(P0):
@@ -1332,7 +1362,7 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
     return bio.read()
 
 st.markdown("---")
-st.subheader("⬇️ Download FULL DDM Excel Model (All Steps + Formulas)")
+step("⬇️ Download FULL DDM Excel Model (All Steps + Formulas)",8)
 
 if "ddm_excel_bytes" not in st.session_state:
     st.session_state["ddm_excel_bytes"] = None
