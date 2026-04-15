@@ -8,6 +8,16 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import base64
 
+def step(title: str, number: int):
+    st.markdown(
+        f"""
+        <div class="fbc-step">
+            <div class="fbc-step-badge">{number}</div>
+            <div class="fbc-step-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -799,7 +809,61 @@ li, ul, ol, a, small {
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
 
+/* =========================================================
+   FBC STEP COMPONENT — FINAL & RELIABLE
+   ========================================================= */
+
+.fbc-step {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 20px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.06),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+.fbc-step-badge {
+    min-width: 34px;
+    height: 34px;
+    border-radius: 50%;
+
+    background: linear-gradient(135deg, #003399, #0044cc);
+    color: white;
+
+    font-weight: 900;
+    font-size: 14px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    box-shadow: 0 3px 8px rgba(0, 51, 153, 0.35);
+}
+
+.fbc-step-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 20px;
+    font-weight: 800;
+    color: #001a5c;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
 st.markdown(
     """
 This module values equity using the Gordon Growth DDM:
@@ -824,7 +888,7 @@ def init(key, value):
 # ---------------------------------------------------------
 # STEP 1 — DIVIDEND HISTORY
 # ---------------------------------------------------------
-st.header("📘 Step 1 — Dividend History")
+step("Dividend History", 1)
 
 # Initialise once if missing
 init("ddm_start_year", 2021)
@@ -890,7 +954,7 @@ st.dataframe(df_history, width='stretch')
 # ---------------------------------------------------------
 # STEP 2 — GROWTH CALCULATION RANGE
 # ---------------------------------------------------------
-st.header("📘 Step 2 — Growth Calculation Range")
+step("Growth Calculation Range", 2)
 
 init("ddm_g_start", years[0])
 init("ddm_g_end", years[-1])
@@ -911,7 +975,7 @@ D_end = dividends[years.index(g_end)]
 # ---------------------------------------------------------
 # STEP 3 — DIVIDEND GROWTH RATE (g)
 # ---------------------------------------------------------
-st.header("📘 Step 3 — Dividend Growth")
+step("Dividend Growth", 3)
 
 if g_start == g_end:
     g = 0.0
@@ -930,7 +994,7 @@ st.metric("Next year's dividend (D₁)", f"{D1:,.5f}")
 # ---------------------------------------------------------
 # STEP 4 — COST OF EQUITY (Re)
 # ---------------------------------------------------------
-st.header("📘 Step 4 — Cost of Equity Inputs")
+step("Cost of Equity Inputs", 4)
 
 # Pull live values from DCF page where possible
 rf = st.session_state.get("dcf_rf_pct", st.session_state.get("rf", 0.0)) / 100
@@ -1028,7 +1092,7 @@ st.metric("Cost of Equity (Re)", f"{Re * 100:.2f}%")
 # ---------------------------------------------------------
 # STEP 5 — VALUE PER SHARE
 # ---------------------------------------------------------
-st.header("📘 Step 5 — Equity Value per Share")
+step("Equity Value per Share", 5)
 
 if Re <= g:
     st.error("❌ Re must be greater than g for the Gordon Growth DDM to work.")
@@ -1045,7 +1109,7 @@ st.session_state["ddm_P0"] = None if np.isnan(P0) else float(P0)
 # ---------------------------------------------------------
 # STEP 6 — TOTAL EQUITY VALUE
 # ---------------------------------------------------------
-st.header("📘 Step 6 — Total Equity Value")
+step("Total Equity Value", 6)
 
 init("num_shares", 0.0)
 
