@@ -925,7 +925,112 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
 
+/* =========================================
+   FORCE WHITE TEXT INSIDE ALL BLUE BOXES
+   ========================================= */
+
+/* 2️⃣ Navigation buttons (Back / Next) */
+.fbc-nav-btn button,
+.fbc-nav-btn button * {
+    color: #ffffff !important;
+}
+
+/* 3️⃣ Primary Streamlit buttons */
+.stButton > button,
+.stButton > button * {
+    color: #ffffff !important;
+}
+
+/* 4️⃣ Blue section headers / wizard headers */
+.fbc-section-heading,
+.fbc-section-heading *,
+.streamlit-expanderHeader,
+.streamlit-expanderHeader * {
+    color: #ffffff !important;
+}
+
+/* 5️⃣ Radio & checkbox labels when inside blue areas */
+.fbc-nav-btn label,
+.fbc-nav-btn span,
+.fbc-nav-btn p {
+    color: #ffffff !important;
+}
+
+/* 6️⃣ Progress bar text (if any overlays) */
+.stProgress * {
+    color: #ffffff !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* ✅ DCF KPI title — muted blue-gray */
+.dcf-kpi-title {
+    color: #475569 !important;
+    font-weight: 600;
+}
+
+/* ✅ DCF KPI values — strong finance blue */
+.dcf-kpi-value {
+    color: #1e3a8a !important;
+    font-weight: 800;
+}
+
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* =========================================
+   FILE UPLOADER — DCF STYLE
+   ========================================= */
+
+/* Uploader container */
+[data-testid="stFileUploader"] {
+    background: rgba(0, 51, 153, 0.04);
+    border: 1px dashed rgba(0, 51, 153, 0.25);
+    border-radius: 14px;
+    padding: 18px 20px;
+}
+
+/* Upload button */
+[data-testid="stFileUploader"] button {
+    background: linear-gradient(135deg, #003399, #1e3a8a) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    border-radius: 10px !important;
+    padding: 8px 18px !important;
+    border: none !important;
+    box-shadow: 0 4px 14px rgba(0, 51, 153, 0.35) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+/* Hover effect */
+[data-testid="stFileUploader"] button:hover {
+    background: linear-gradient(135deg, #1d4ed8, #003399) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(0, 51, 153, 0.45) !important;
+}
+
+/* Helper text (file size, type) */
+[data-testid="stFileUploader"] small {
+    color: #475569 !important;
+    font-style: italic;
+}
+
+/* Uploaded filename */
+[data-testid="stFileUploader"] span {
+    color: #1e3a8a !important;
+    font-weight: 600;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # RESET DCF SESSION STATE (SAFE & CONTROLLED)
