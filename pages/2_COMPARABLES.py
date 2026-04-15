@@ -768,7 +768,7 @@ st.markdown("""
     font-family: "Playfair Display", serif !important;
     font-size: 20px;
     font-weight: 800;
-    color: #001a5c;
+    color: #001a5c !important;
     letter-spacing: -0.01em;
 }
 
