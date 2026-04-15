@@ -774,6 +774,86 @@ st.markdown("""
 
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* =========================================================
+   FBC CLEAN SECTION HEADER (NO SUBTITLE, NO STEPS)
+   ========================================================= */
+
+.fbc-section {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 22px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.08),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+/* Left indicator (circle like your UI) */
+.fbc-section {
+    display: block;
+    padding: 16px 0;
+    margin: 28px 0 18px 0;
+    border-bottom: 2px solid rgba(0,51,153,0.15);
+    transition: all 0.25s ease;
+}
+
+.fbc-section-title {
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c;
+    position: relative;
+}
+
+/* animated underline */
+.fbc-section-title::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -6px;
+    width: 40px;
+    height: 3px;
+    background: #003399;
+    transition: width 0.3s ease;
+}
+
+.fbc-section:hover .fbc-section-title::after {
+    width: 100%;
+}
+
+/* Title only */
+.fbc-section-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c !important;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
+def section(title: str):
+    st.markdown(
+        f"""
+        <div class="fbc-section">
+            <div class="fbc-section-dot"></div>
+            <div class="fbc-section-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 # ────────────────────────────────────────────────────────────────
 
 # ---------------------------------------------------------
@@ -2939,7 +3019,8 @@ df_comps = pd.DataFrame(
     columns=["Company", "EV/EBITDA", "P/B", "P/E", "Include_EV", "Include_PB", "Include_PE"]
 )
 
-st.subheader("Entered Comparables")
+section("Entered Comparables")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 st.dataframe(df_comps, width='stretch')
 
 S["comps_num"] = int(num_comps)
