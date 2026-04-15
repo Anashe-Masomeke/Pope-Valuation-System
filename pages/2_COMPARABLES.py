@@ -672,6 +672,108 @@ st.markdown('''
     <div class="fbc-page-header-sub">Peer multiples benchmarking — EV/EBITDA, P/E, P/B across Africa & emerging markets.</div>
 </div>
 ''', unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* =========================================
+   FORCE WHITE TEXT INSIDE ALL BLUE BOXES
+   ========================================= */
+
+/* 1️⃣ DCF KPI cards */
+.dcf-kpi,
+.dcf-kpi * {
+    color: #ffffff !important;
+}
+
+/* 2️⃣ Navigation buttons (Back / Next) */
+.fbc-nav-btn button,
+.fbc-nav-btn button * {
+    color: #ffffff !important;
+}
+
+/* 3️⃣ Primary Streamlit buttons */
+.stButton > button,
+.stButton > button * {
+    color: #ffffff !important;
+}
+
+/* 4️⃣ Blue section headers / wizard headers */
+.fbc-section-heading,
+.fbc-section-heading *,
+.streamlit-expanderHeader,
+.streamlit-expanderHeader * {
+    color: #ffffff !important;
+}
+
+/* 5️⃣ Radio & checkbox labels when inside blue areas */
+.fbc-nav-btn label,
+.fbc-nav-btn span,
+.fbc-nav-btn p {
+    color: #ffffff !important;
+}
+
+/* 6️⃣ Progress bar text (if any overlays) */
+.stProgress * {
+    color: #ffffff !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* =========================================================
+   FBC STEP COMPONENT — FINAL & RELIABLE
+   ========================================================= */
+
+.fbc-step {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 20px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.06),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+.fbc-step-badge {
+    min-width: 34px;
+    height: 34px;
+    border-radius: 50%;
+
+    background: linear-gradient(135deg, #003399, #0044cc);
+    color: white;
+
+    font-weight: 900;
+    font-size: 14px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    box-shadow: 0 3px 8px rgba(0, 51, 153, 0.35);
+}
+
+.fbc-step-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 20px;
+    font-weight: 800;
+    color: #001a5c;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
 # ────────────────────────────────────────────────────────────────
 
 # ---------------------------------------------------------
@@ -679,7 +781,16 @@ st.markdown('''
 # ---------------------------------------------------------
 import base64
 
-
+def step(title: str, number: int):
+    st.markdown(
+        f"""
+        <div class="fbc-step">
+            <div class="fbc-step-badge">{number}</div>
+            <div class="fbc-step-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -2417,7 +2528,7 @@ def render_peer_picker_table(df_live: pd.DataFrame):
 # =========================================================
 # STEP 1 — INPUT COMPARABLE COMPANIES & MULTIPLES
 # =========================================================
-st.header("Step 1 — Input Comparable Companies & Multiples")
+step("Input Comparable Companies & Multiples",1)
 st.subheader("Auto Peer Suggestions from Strict Africa Universe Excel")
 
 if UNIVERSE_FILE:
@@ -2880,7 +2991,7 @@ def fancy_loader(text="Processing...", steps=5):
 # STEP 2 — AVERAGE & IMPLIED MULTIPLES
 # =========================================================
 
-st.header("Step 2 — Average & Implied Multiples")
+step("Average & Implied Multiples",2)
 
 # Compute series based on selected comparables
 ev_series = df_comps.loc[df_comps["Include_EV"] == True, "EV/EBITDA"]
@@ -2930,7 +3041,7 @@ st.session_state["implied_pe"] = float(implied_pe) if not pd.isna(implied_pe) el
 # =========================================================
 # TIMING SOURCE (from DCF) — BASE USED BY BOTH EBITDA & EARNINGS
 # =========================================================
-st.header("Timing Source (from DCF)")
+step("Timing Source (from DCF)",3)
 
 dcf_timing_list = S.get("dcf_discount_periods_n", [])
 default_base = float(S.get("comp_timing_base", 0.0))
@@ -2980,7 +3091,7 @@ st.success(f"Timing base for comparables = **{base_timing:.4f}**")
 # =========================================================
 # STEP 3 — MAINTAINABLE EBITDA (with locked timing)
 # =========================================================
-st.header("Step 3 — Maintainable EBITDA")
+step("Maintainable EBITDA",4)
 
 dcf_eb_all = S.get("dcf_ebitda_all", None)
 if dcf_eb_all is None:
@@ -3123,7 +3234,7 @@ else:
 # =========================================================
 # STEP 4 — MAINTAINABLE EARNINGS (with locked timing)
 # =========================================================
-st.header("Step 4 — Maintainable Earnings")
+step("Maintainable Earnings",5)
 
 dcf_np_all = S.get("dcf_profit_all", None)
 if dcf_np_all is None:
@@ -3310,7 +3421,7 @@ else:
 # =========================================================
 # STEP 5 — BOOK VALUE & NET DEBT
 # =========================================================
-st.header("Step 5 — Book Value & Net Debt")
+step("Book Value & Net Debt",6)
 # ✅ Pull Beginning Book Value from Banking page (Totals / BV)
 bank_outputs = (S.get("bank", {}) or {}).get("outputs", {}) or {}
 bank_book_equity = bank_outputs.get("book_equity_0", None)  # Beginning Book Value (Total Equity)
@@ -3351,7 +3462,7 @@ st.caption(f"💳 Net Debt: **{net_debt:,.2f} USD**")
 # =========================================================
 # STEP 6 — FINAL EQUITY VALUES
 # =========================================================
-st.header("Step 6 — Computed Equity Values")
+step("Computed Equity Values",7)
 
 maintainable_ebitda = S.get("maintainable_ebitda", np.nan)
 maintainable_earnings = S.get("maintainable_earnings", np.nan)
