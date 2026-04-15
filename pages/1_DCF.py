@@ -294,7 +294,24 @@ def reset_dcf_state():
     for k in keys_to_clear:
         if k in st.session_state:
             del st.session_state[k]
+def sort_year_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
+    # identify year columns (keep Item separate)
+    item_col = "Item"
+    year_cols = [c for c in df.columns if c != item_col]
+
+    # convert to int safely for sorting
+    def try_int(x):
+        try:
+            return int(str(x))
+        except:
+            return x
+
+    sorted_years = sorted(year_cols, key=try_int)
+
+    # reorder dataframe
+    return df[[item_col] + sorted_years]
 def clean_numeric_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c) for c in df.columns]
@@ -593,9 +610,17 @@ xls = pd.ExcelFile(file_like)
 if "dcf_is_df" not in st.session_state:
     xls = pd.ExcelFile(io.BytesIO(st.session_state["dcf_file_bytes"]))  # ✅ always valid
 
-    st.session_state["dcf_is_df"] = clean_numeric_cols(xls.parse(xls.sheet_names[0]))
-    st.session_state["dcf_bs_df"] = clean_numeric_cols(xls.parse(xls.sheet_names[1]))
-    st.session_state["dcf_cf_df"] = clean_numeric_cols(xls.parse(xls.sheet_names[2]))
+    st.session_state["dcf_is_df"] = sort_year_columns(
+        clean_numeric_cols(xls.parse(xls.sheet_names[0]))
+    )
+
+    st.session_state["dcf_bs_df"] = sort_year_columns(
+        clean_numeric_cols(xls.parse(xls.sheet_names[1]))
+    )
+
+    st.session_state["dcf_cf_df"] = sort_year_columns(
+        clean_numeric_cols(xls.parse(xls.sheet_names[2]))
+    )
 
 is_df = st.session_state["dcf_is_df"]
 bs_df = st.session_state["dcf_bs_df"]
