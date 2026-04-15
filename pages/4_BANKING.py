@@ -704,6 +704,7 @@ st.markdown('''
     <div class="fbc-page-header-sub">BVPS, residual income & terminal value — purpose-built for financial institutions.</div>
 </div>
 ''', unsafe_allow_html=True)
+
 # ────────────────────────────────────────────────────────────────
 
 # ---------------------------------------------------------
@@ -800,7 +801,81 @@ li, ul, ol, a, small {
 
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
 
+/* =========================================================
+   FILE UPLOADER — EXACT DCF STYLE (BANKING) ✅ FINAL
+   ========================================================= */
+
+/* Outer dashed box */
+[data-testid="stFileUploader"] label {
+    background: rgba(0, 51, 153, 0.04) !important;
+    border: 1.5px dashed rgba(29, 78, 216, 0.45) !important;
+    border-radius: 16px !important;
+    padding: 20px 24px !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+
+/* Hover */
+[data-testid="stFileUploader"] label:hover {
+    background: rgba(0, 51, 153, 0.08) !important;
+    border-color: #1d4ed8 !important;
+}
+
+/* Left text block */
+[data-testid="stFileUploader"] label div {
+    padding-left: 42px !important;
+    position: relative !important;
+}
+
+/* Cloud icon */
+[data-testid="stFileUploader"] label div::before {
+    content: "☁️";
+    position: absolute;
+    left: 0;
+    top: 2px;
+    font-size: 26px;
+    color: #1d4ed8;
+}
+
+/* Text */
+[data-testid="stFileUploader"] label div span {
+    font-weight: 700 !important;
+    color: #1e3a8a !important;
+}
+
+/* ✅✅✅ THIS IS THE REAL BROWSE FILES BUTTON */
+[data-testid="stFileUploader"] button {
+    background: linear-gradient(135deg, #003399, #1e3a8a) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+
+    border-radius: 10px !important;
+    padding: 8px 20px !important;
+    border: none !important;
+
+    box-shadow: 0 4px 14px rgba(0, 51, 153, 0.35) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+/* Hover on button */
+[data-testid="stFileUploader"] button:hover {
+    background: linear-gradient(135deg, #1d4ed8, #003399) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Uploaded filename */
+[data-testid="stFileUploader"] ul li {
+    color: #1e3a8a !important;
+    font-weight: 600;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # FX SESSION STATE (DCF-style)  ✅ (same approach as 1_DCF.py)
