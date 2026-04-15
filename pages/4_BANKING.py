@@ -848,24 +848,23 @@ st.markdown("""
     color: #1e3a8a !important;
 }
 
-/* ✅✅✅ THIS IS THE REAL BROWSE FILES BUTTON */
-[data-testid="stFileUploader"] button {
+/* ✅ Browse files button — BLUE BOX (EXACTLY LIKE DCF) */
+[data-testid="stFileUploader"] label > span {
     background: linear-gradient(135deg, #003399, #1e3a8a) !important;
     color: #ffffff !important;
     font-weight: 700 !important;
-
     border-radius: 10px !important;
     padding: 8px 20px !important;
-    border: none !important;
+    white-space: nowrap !important;
 
     box-shadow: 0 4px 14px rgba(0, 51, 153, 0.35) !important;
     transition: all 0.2s ease-in-out !important;
 }
 
-/* Hover on button */
-[data-testid="stFileUploader"] button:hover {
+/* Hover on Browse files */
+[data-testid="stFileUploader"] label > span:hover {
     background: linear-gradient(135deg, #1d4ed8, #003399) !important;
-    transform: translateY(-1px) !important;
+    transform: translateY(-1px);
 }
 
 /* Uploaded filename */
