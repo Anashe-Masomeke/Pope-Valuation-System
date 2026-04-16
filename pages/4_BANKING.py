@@ -876,7 +876,86 @@ st.markdown("""
 
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
 
+/* =========================================================
+   FBC CLEAN SECTION HEADER (NO SUBTITLE, NO STEPS)
+   ========================================================= */
+
+.fbc-section {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 22px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.08),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+/* Left indicator (circle like your UI) */
+.fbc-section {
+    display: block;
+    padding: 16px 0;
+    margin: 28px 0 18px 0;
+    border-bottom: 2px solid rgba(0,51,153,0.15);
+    transition: all 0.25s ease;
+}
+
+.fbc-section-title {
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c;
+    position: relative;
+}
+
+/* animated underline */
+.fbc-section-title::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -6px;
+    width: 40px;
+    height: 3px;
+    background: #003399;
+    transition: width 0.3s ease;
+}
+
+.fbc-section:hover .fbc-section-title::after {
+    width: 100%;
+}
+
+/* Title only */
+.fbc-section-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c !important;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
+def section(title: str):
+    st.markdown(
+        f"""
+        <div class="fbc-section">
+            <div class="fbc-section-dot"></div>
+            <div class="fbc-section-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 # ---------------------------------------------------------
 # FX SESSION STATE (DCF-style)  ✅ (same approach as 1_DCF.py)
 # ---------------------------------------------------------
@@ -1118,7 +1197,7 @@ def _md5_bytes(b: bytes) -> str:
 # =========================================================
 # STEP 0 — Upload Excel (PERSIST BYTES)
 # =========================================================
-st.markdown("### 📄 Upload Statements (Income Statement + Balance Sheet + SoCE)")
+section(" 📄 Upload Statements (Income Statement + Balance Sheet + SoCE)")
 
 uploaded = st.file_uploader("Upload Excel file", type=["xlsx"], key="bank_upload_box")
 
@@ -1213,7 +1292,7 @@ if not soce_years:
 # =========================================================
 # STEP 1 — Currency + FX Conversion (DCF-style Excel-based)
 # =========================================================
-st.markdown("### 💱 Currency & Exchange Rates")
+section("💱 Currency & Exchange Rates")
 
 # 1️⃣ Currency selector (persistent)
 currency = st.selectbox(
@@ -1312,7 +1391,7 @@ else:
     # -------------------------------------------------
     # 🪙 Apply conversion factor by selected Year(s) + Date Ranges (same as DCF)
     # -------------------------------------------------
-    st.markdown("### 🪙 Apply ZWG→ZiG factor by Year + Range")
+    section(" 🪙 Apply ZWG→ZiG factor by Year + Range")
 
     # years available from statements (use IS years as master like DCF)
     available_years = sorted({str(int(y)) for y in is_years})
@@ -1350,7 +1429,7 @@ else:
         for y in years_selected:
             st.session_state["bank_factor_year_ranges"].setdefault(y, [])
 
-            st.markdown(f"#### Ranges for {y}")
+            section(f"Ranges for {y}")
 
             if st.button(f"➕ Add range for {y}", key=f"bank_add_range_{y}"):
                 st.session_state["bank_factor_year_ranges"][y].append({
@@ -1413,14 +1492,14 @@ else:
     yearly_fx = {str(y): float(v) for y, v in yearly_fx.items()}
     st.session_state["bank_yearly_fx"] = yearly_fx
 
-    st.subheader("📊 Yearly FX averages (Income Statement + SoCE)")
+    section("📊 Yearly FX averages (Income Statement + SoCE)")
     st.dataframe(
         pd.DataFrame({"Year": list(yearly_fx.keys()), "FX Rate": list(yearly_fx.values())}),
         width='stretch'
     )
 
     # 8️⃣ Balance Sheet FX — PER-YEAR CLOSING DATES
-    st.markdown("### 📌 Balance Sheet FX — Closing Dates (per year)")
+    section("📌 Balance Sheet FX — Closing Dates (per year)")
 
     st.session_state.setdefault("bank_bs_closing_dates", {})
     st.session_state.setdefault("bank_bs_fx_dirty", False)
@@ -1528,7 +1607,7 @@ with st.expander("🔎 View cleaned SoCE (USD)", expanded=False):
 # =========================================================
 # STEP 2 — SoCE Mapping (USER SELECTS CLOSING BALANCE + TOTAL COLUMN)
 # =========================================================
-st.markdown("### 🟦 Statement of Changes in Equity (SoCE) Mapping")
+section(" 🟦 Statement of Changes in Equity (SoCE) Mapping")
 
 soce_items = soce_df["Item"].astype(str).tolist()
 soce_labels = [f"{i+1}: {x}" for i, x in enumerate(soce_items)]
@@ -1590,7 +1669,7 @@ st.dataframe(
 # =========================================================
 # STEP 3 — Balance Sheet Mapping (Equity) (PERSIST)
 # =========================================================
-st.markdown("### 🟩 Balance Sheet Mapping (Equity)")
+section("🟩 Balance Sheet Mapping (Equity)")
 
 bs_items = list(bs_df["Item"].astype(str))
 bs_labels = option_labels_from_items(bs_items)
@@ -1611,7 +1690,7 @@ if not equity_idx_list:
 # =========================================================
 # STEP 4 — Earnings line (defaults to Normalised profit) (PERSIST)
 # =========================================================
-st.markdown("### ✅ Income Statement Earnings (EPS)")
+section("✅ Income Statement Earnings (EPS)")
 
 items = is_df["Item"].astype(str).tolist()
 earn_opt = [f"{i+1}: {items[i]}" for i in range(len(items))]
@@ -1635,7 +1714,7 @@ earnings_idx = int(chosen_earn.split(":", 1)[0]) - 1
 # =========================================================
 # STEP 5 — Base year selection (actual years) (PERSIST)
 # =========================================================
-st.markdown("### 📅 Base Year (Actual Years)")
+section("📅 Base Year (Actual Years)")
 
 # intersection of IS/BS/SoCE years (clean years)
 # Base year options should be driven by IS + BS (SoCE may not have same columns)
@@ -1675,7 +1754,7 @@ if bs_base_col is None:
 book_equity_0 = float(bs_df.loc[equity_idx_list, bs_base_col].sum(skipna=True))
 
 
-st.markdown("### 📌 Base Inputs")
+section(" 📌 Base Inputs")
 c1, c2, c3 = st.columns(3)
 with c1:
     st.metric(f"Total Equity ({base_year})", f"{book_equity_0:,.0f}")
@@ -1687,7 +1766,7 @@ with c3:
 # =========================================================
 # STEP 7 — Assumptions (NO SHARES)
 # =========================================================
-st.markdown("### ⚙️ Assumptions")
+section(" ⚙️ Assumptions")
 
 # =========================================================
 # Ke MODULE — DCF-style Auto + Override + Uploads
@@ -1747,12 +1826,12 @@ def _load_unlevered_betas_any(file_or_path, file_mtime: float = 0.0) -> pd.DataF
 def _set_widget_value(widget_key: str, value: float):
     st.session_state[widget_key] = float(value)
 
-st.markdown("### 💰 Cost of Equity (Ke) — DCF-style Auto + Override")
+section(" 💰 Cost of Equity (Ke)")
 
 left, right = st.columns([1.2, 1.0], vertical_alignment="top")
 
 with left:
-    st.markdown("#### 🌍 Country ERP & Default Spread")
+    section("🌍 Country ERP & Default Spread")
 
     BANK.setdefault("bank_country_upload_enabled", False)
     BANK.setdefault("bank_country_params_bytes", None)
@@ -1845,7 +1924,7 @@ with left:
         st.info("Auto RF/MRP not ready (check file + selected country values).")
 
 with right:
-    st.markdown("#### 🧩 Industry Unlevered Betas (βu)")
+    section("🧩 Industry Unlevered Betas (βu)")
 
     BANK.setdefault("bank_beta_upload_enabled", False)
     BANK.setdefault("bank_beta_file_bytes", None)
@@ -1985,7 +2064,7 @@ with right:
     )
     BANK["bank_beta_manual_mode"] = beta_mode.startswith("Manual")
 
-st.markdown("#### ⚙️ CAPM Inputs")
+section("⚙️ CAPM Inputs")
 
 BANK.setdefault("bank_use_auto_params", True)
 use_auto = st.checkbox(
@@ -2079,7 +2158,7 @@ st.session_state["bank_mrp_pct"] = float(BANK["bank_mrp_pct"])
 st.session_state["bank_levered_beta"] = float(beta_levered)
 st.session_state["bank_ke_pct"] = float(ke * 100)
 
-st.markdown("#### ✅ Ke Output")
+section(" ✅ Ke Output")
 kA, kB, kC, kD = st.columns(4)
 with kA:
     st.metric("Rf", f"{rf*100:.2f}%")
@@ -2164,7 +2243,7 @@ if auto_from_bs and (last_actual_yoy is not None):
         st.session_state["bank_yoy_uniform_input"] = auto_pct  # 👈 this is the textbox key
         BANK["yoy_auto_sig"] = sig
 
-st.markdown("### 📈 Book Value Growth + Risk Discount")
+section("📈 Book Value Growth + Risk Discount")
 
 yoy_mode = st.radio(
     "Book Value YoY mode",
@@ -2234,7 +2313,7 @@ else:
         )
         disc[y] = float(v) / 100.0
 
-st.markdown("### 📊 Earnings Growth")
+section("📊 Earnings Growth")
 
 eps_mode = st.radio(
     "Earnings growth mode",
@@ -2287,7 +2366,7 @@ BANK["yoy"] = {y: float(yoy[y]) for y in forecast_years}
 BANK["disc"] = {y: float(disc[y]) for y in forecast_years}
 BANK["eps_g"] = {y: float(eps_g[y]) for y in forecast_years}
 
-st.markdown("### 🧠 YoY Forecast Rule (after Year 1)")
+section(" 🧠 YoY Forecast Rule (after Year 1)")
 
 BANK.setdefault("yoy_rule_after_y1", "Decay (carry Adjusted YoY forward)")
 
@@ -2303,7 +2382,7 @@ yoy_rule_after_y1 = st.radio(
 )
 BANK["yoy_rule_after_y1"] = yoy_rule_after_y1
 
-st.markdown("### ⏱ Discount Timing Convention")
+section(" ⏱ Discount Timing Convention")
 
 BANK.setdefault("discount_t_start", "Base year t = 0 (standard)")
 
@@ -2397,7 +2476,7 @@ pv_resid_sum = float(np.nansum([PV.get(y, np.nan) for y in ri_pv_years]))
 pv_total = pv_resid_sum + (0.0 if np.isnan(pv_terminal) else float(pv_terminal))
 equity_value_total = float(BV[str(base_year)]) + pv_total
 
-st.markdown("### 🧾 Residual Income Valuation Table (Totals)")
+section(" 🧾 Residual Income Valuation Table (Totals)")
 
 rows = [
     ("Beginning Book Value (Total Equity)", BV, "money"),
@@ -2448,7 +2527,7 @@ styled = styled.format({c: fmt_money for c in df_final.columns if c != "Item"}, 
 
 st.dataframe(styled, width='stretch')
 
-st.markdown("### ✅ Implied Equity Value — Residual Income Method (Totals)")
+section(" ✅ Implied Equity Value — Residual Income Method (Totals)")
 
 k1, k2, k3, k4 = st.columns(4)
 with k1:
