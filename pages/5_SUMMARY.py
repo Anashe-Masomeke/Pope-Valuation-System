@@ -4,7 +4,16 @@ import numpy as np
 import altair as alt
 from pathlib import Path
 import base64
-
+def step(title: str, number: int):
+    st.markdown(
+        f"""
+        <div class="fbc-step">
+            <div class="fbc-step-badge">{number}</div>
+            <div class="fbc-step-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -782,7 +791,86 @@ section[data-testid="stSidebar"] .block-container {
 }
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
 
+/* =========================================================
+   FBC CLEAN SECTION HEADER (NO SUBTITLE, NO STEPS)
+   ========================================================= */
+
+.fbc-section {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 22px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.08),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+/* Left indicator (circle like your UI) */
+.fbc-section {
+    display: block;
+    padding: 16px 0;
+    margin: 28px 0 18px 0;
+    border-bottom: 2px solid rgba(0,51,153,0.15);
+    transition: all 0.25s ease;
+}
+
+.fbc-section-title {
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c;
+    position: relative;
+}
+
+/* animated underline */
+.fbc-section-title::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -6px;
+    width: 40px;
+    height: 3px;
+    background: #003399;
+    transition: width 0.3s ease;
+}
+
+.fbc-section:hover .fbc-section-title::after {
+    width: 100%;
+}
+
+/* Title only */
+.fbc-section-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c !important;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
+def section(title: str):
+    st.markdown(
+        f"""
+        <div class="fbc-section">
+            <div class="fbc-section-dot"></div>
+            <div class="fbc-section-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 # ------------------------------------------------------------------------------
 # POWERBI DARK THEME (FBC TUNED)
 # ------------------------------------------------------------------------------
@@ -951,8 +1039,92 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True,
-)
 
+)
+st.markdown("""
+<style>
+
+/* ------------------------------------------------------
+   TITLE BANNER
+------------------------------------------------------ */
+.title-banner {
+    background: linear-gradient(90deg, #071426, #0a1b33 50%, #0d243f 100%);
+    border-radius: 16px;
+    padding: 1.2rem 1.5rem;
+    border: 1px solid rgba(255,255,255,0.12);
+    box-shadow: 0 12px 50px rgba(0,0,0,0.6);
+    margin-bottom: 20px;
+}
+
+.title-main {
+    font-size: 1.85rem;
+    font-weight: 700;
+    color: #ffffff !important;
+}
+
+.title-sub {
+    font-size: 0.95rem;
+    color: #d3e2f5 !important;
+    margin-top: 3px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* =========================================================
+   FBC STEP COMPONENT — FINAL & RELIABLE
+   ========================================================= */
+
+.fbc-step {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 20px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.06),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+.fbc-step-badge {
+    min-width: 34px;
+    height: 34px;
+    border-radius: 50%;
+
+    background: linear-gradient(135deg, #003399, #0044cc);
+    color: white;
+
+    font-weight: 900;
+    font-size: 14px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    box-shadow: 0 3px 8px rgba(0, 51, 153, 0.35);
+}
+
+.fbc-step-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 20px;
+    font-weight: 800;
+    color: #001a5c !important;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
 # ------------------------------------------------------------------------------
 # INITIALISE SESSION STATE (PERSISTENT)
 # ------------------------------------------------------------------------------
@@ -978,8 +1150,8 @@ if "current_price" not in st.session_state:
 # ------------------------------------------------------------------------------
 # MODEL SELECTION (PERSISTENT)
 # ------------------------------------------------------------------------------
-st.header("📌 Select Models to Include")
-
+step("📌 Select Models to Include",1)
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 all_models = ["DCF", "DDM", "EV/EBITDA", "PBV", "P/E", "BANKING"]
 
 selected_models = st.multiselect(
@@ -1009,8 +1181,8 @@ value_map = {
 # ------------------------------------------------------------------------------
 # WEIGHT ASSIGNMENT (PERSISTENT)
 # ------------------------------------------------------------------------------
-st.header("🧮 Assign Weights (%)")
-
+step("🧮 Assign Weights (%)",2)
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 cols = st.columns(len(all_models))
 weights_new = {}
 
@@ -1197,28 +1369,90 @@ with tab2:
 # ------------------------------------------------------------------------------
 # 📌 GENERAL VALUATION SUMMARY TABLE (DOWNLOADABLE)
 # ------------------------------------------------------------------------------
-st.header("📌 Valuation Summary")
-
+section("📌 Valuation Summary")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # ---- Inputs (unchanged logic) ----
 c1, c2 = st.columns(2)
 
 with c1:
+    st.markdown("""
+    <div class="fbc-forecast-label">
+        Number of Shares in Issue
+    </div>
+
+    <style>
+    .fbc-forecast-label {
+        font-family: "Playfair Display", serif;
+        font-size: 18px;
+        font-weight: 800;
+        color: #001a5c;
+
+        display: inline-block;
+        padding-left: 10px;
+        border-left: 4px solid #003399;
+
+        margin-bottom: 8px;
+    }
+
+    .fbc-forecast-label::after {
+        content: "";
+        display: block;
+        width: 60px;
+        height: 2px;
+        margin-top: 6px;
+        background: linear-gradient(90deg, #003399, transparent);
+        border-radius: 2px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     num_shares = st.number_input(
         "Number of Shares in Issue",
         value=float(st.session_state["num_shares"]),
         step=1000.0,
         format="%.0f",
         key="num_shares_input",
+    label_visibility="collapsed"
     )
     st.session_state["num_shares"] = num_shares
 
 with c2:
+    st.markdown("""
+    <div class="fbc-forecast-label">
+        Current Share Price (USD)
+    </div>
+
+    <style>
+    .fbc-forecast-label {
+        font-family: "Playfair Display", serif;
+        font-size: 18px;
+        font-weight: 800;
+        color: #001a5c;
+
+        display: inline-block;
+        padding-left: 10px;
+        border-left: 4px solid #003399;
+
+        margin-bottom: 8px;
+    }
+
+    .fbc-forecast-label::after {
+        content: "";
+        display: block;
+        width: 60px;
+        height: 2px;
+        margin-top: 6px;
+        background: linear-gradient(90deg, #003399, transparent);
+        border-radius: 2px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     current_price = st.number_input(
         "Current Share Price (USD)",
         value=float(st.session_state["current_price"]),
         step=0.01,
         format="%.2f",
         key="current_price_input",
+    label_visibility="collapsed"
     )
     st.session_state["current_price"] = current_price
 
