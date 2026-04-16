@@ -1,5 +1,15 @@
 import streamlit as st
 from pathlib import Path
+def section(title: str):
+    st.markdown(
+        f"""
+        <div class="fbc-section">
+            <div class="fbc-section-dot"></div>
+            <div class="fbc-section-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 # ------------------------------------------------------------
 # PAGE CONFIG
 # ------------------------------------------------------------
@@ -761,16 +771,7 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
-def section(title: str):
-    st.markdown(
-        f"""
-        <div class="fbc-section">
-            <div class="fbc-section-dot"></div>
-            <div class="fbc-section-title">{title}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+
 # ────────────────────────────────────────────────────────────────
 
 
