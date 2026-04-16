@@ -41,7 +41,7 @@ st.markdown('''
 
 /* ── 1. GLOBAL TYPOGRAPHY ─────────────────────────────────── */
 html, body, .stApp, .block-container,
-p, div, label, span,
+p, div, label,
 h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small,
 .stDataFrame, .stTable {
