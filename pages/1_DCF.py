@@ -139,6 +139,7 @@ section[data-testid="stSidebar"] hr {
     -webkit-font-feature-settings: 'liga' !important;
     -webkit-font-smoothing: antialiased !important;
 }
+
 [data-testid="stSidebarCollapseButton"] button {
     background: linear-gradient(135deg, #f5b400, #ffd040) !important;
     border: none !important;
@@ -155,6 +156,33 @@ section[data-testid="stSidebar"] hr {
     width: 22px !important; height: 22px !important;
     fill: #001a5c !important;
 }
+/* =========================================================
+   🔥 PREMIUM SIDEBAR COLLAPSE BUTTON (FBC STYLE)
+   ========================================================= */
+
+/* Button container */
+[data-testid="stSidebarCollapseButton"] {
+    position: relative;
+    margin-top: 10px;
+}
+
+/* Main button */
+[data-testid="stSidebarCollapseButton"] button {
+    background: linear-gradient(135deg, #003399, #0055ee) !important;
+    border: none !important;
+    border-radius: 50% !important;
+    width: 46px !important;
+    height: 46px !important;
+
+    box-shadow: 0 6px 18px rgba(0, 51, 153, 0.35) !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    transition: all 0.25s ease !important;
+}
+
 
 /* ── 5. PAGE HEADER BANNER ────────────────────────────────── */
 .fbc-page-header {
