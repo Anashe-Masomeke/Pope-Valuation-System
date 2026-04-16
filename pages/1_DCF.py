@@ -55,7 +55,7 @@ st.markdown('''
 
 /* ── 1. GLOBAL TYPOGRAPHY ─────────────────────────────────── */
 html, body, .stApp, .block-container,
-p, div, label, span,
+p, div, label,
 h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small,
 .stDataFrame, .stTable {
@@ -122,18 +122,19 @@ section[data-testid="stSidebar"] hr {
     margin: 12px 0 !important;
 }
 
-/* ── 4. SIDEBAR COLLAPSE BUTTON ───────────────────────────── */
+/* ✅ Ensure Material Icons render correctly */
 .material-icons,
-span.material-icons,
-i.material-icons,
+.material-icons-outlined,
 .material-symbols-outlined,
 [data-testid="stSidebarCollapseButton"] span,
 [data-testid="stSidebarCollapseButton"] i {
-    font-family: "Material Icons", "Material Symbols Outlined" !important;
+    font-family: 'Material Icons', 'Material Symbols Outlined' !important;
     font-weight: normal !important;
     font-style: normal !important;
     letter-spacing: normal !important;
     text-transform: none !important;
+    display: inline-block !important;
+    white-space: nowrap !important;
     direction: ltr !important;
     -webkit-font-feature-settings: 'liga' !important;
     -webkit-font-smoothing: antialiased !important;
