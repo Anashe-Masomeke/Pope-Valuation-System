@@ -904,7 +904,25 @@ st.markdown("""
     color: #1e3a8a !important;
     font-weight: 600;
 }
+/* ================================
+   FIX: FORCE TEXT COLOR (WORKING)
+   ================================ */
 
+/* Target the ACTUAL text container */
+[data-testid="stFileUploader"] section div div p {
+    color: #003399 !important;
+    font-weight: 700 !important;
+}
+
+/* Secondary text (file size etc.) */
+[data-testid="stFileUploader"] section div div small {
+    color: #003399 !important;
+}
+
+/* Ensure span text inside also changes */
+[data-testid="stFileUploader"] section div div span {
+    color: #003399 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 st.markdown("""
