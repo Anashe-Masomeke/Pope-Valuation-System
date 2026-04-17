@@ -1198,10 +1198,13 @@ def _md5_bytes(b: bytes) -> str:
 # =========================================================
 # STEP 0 — Upload Excel (PERSIST BYTES)
 # =========================================================
-section(" 📄 Upload Statements (Income Statement + Balance Sheet + SoCE)")
 
-uploaded = st.file_uploader("Upload Excel file", type=["xlsx"], key="bank_upload_box")
+st.markdown(
+    '<p style="color:#003399; font-weight:700; font-size:16px;">📄 Upload Statements (Income Statement + Balance Sheet + SoCE</p>',
+    unsafe_allow_html=True
+)
 
+uploaded= st.file_uploader("", type=["xlsx"])
 if uploaded is not None:
     BANK["file_bytes"] = uploaded.getvalue()
     BANK["file_name"] = uploaded.name
