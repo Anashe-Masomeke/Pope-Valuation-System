@@ -1215,25 +1215,34 @@ button[kind="primary"] svg {
 """, unsafe_allow_html=True)
 st.markdown("""
 <style>
-/* =========================================
-   FILE UPLOADER — FORCE ICON WHITE
-   ========================================= */
+/* =========================================================
+   FILE UPLOADER — FORCE UPLOAD ICON TO WHITE (HARD FIX)
+   ========================================================= */
 
-/* Upload icon (cloud / arrow) */
-[data-testid="stFileUploader"] svg {
-    fill: #ffffff !important;
-    color: #ffffff !important;
+/* Target the icon container */
+[data-testid="stFileUploader"] [role="img"],
+[data-testid="stFileUploader"] svg,
+[data-testid="stFileUploader"] span svg {
+    color: white !important;
+    fill: white !important;
 }
 
-/* Sometimes Streamlit wraps icon paths */
-[data-testid="stFileUploader"] svg path {
-    fill: #ffffff !important;
+/* 🔥 Streamlit masked icon fix */
+[data-testid="stFileUploader"] [class*="icon"],
+[data-testid="stFileUploader"] [class*="Icon"],
+[data-testid="stFileUploader"] div[style*="mask"],
+[data-testid="stFileUploader"] div[style*="-webkit-mask"] {
+    background-color: white !important;
+    color: white !important;
+
+    /* CRITICAL: force mask to render white */
+    filter: brightness(0) invert(1) !important;
 }
 
-/* Hover / focus consistency */
-[data-testid="stFileUploader"]:hover svg,
-[data-testid="stFileUploader"]:hover svg path {
-    fill: #ffffff !important;
+/* Hover state safety */
+[data-testid="stFileUploader"]:hover [class*="icon"],
+[data-testid="stFileUploader"]:hover div[style*="mask"] {
+    filter: brightness(0) invert(1) !important;
 }
 </style>
 """, unsafe_allow_html=True)
