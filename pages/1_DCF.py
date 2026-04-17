@@ -1201,7 +1201,12 @@ st.markdown("""
     fill: white !important;
     color: white !important;
 }
-
+/* FORCE white icon */
+button[kind="secondary"] svg,
+button[kind="primary"] svg {
+    fill: white !important;
+    color: white !important;
+}
 /* Ensure text is also white (just in case) */
 .stDownloadButton button {
     color: white !important;
