@@ -58,7 +58,7 @@ st.markdown('''
 
 /* ── 1. GLOBAL TYPOGRAPHY ─────────────────────────────────── */
 html, body, .stApp, .block-container,
-p, div, label,
+p, div, label, span,
 h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small,
 .stDataFrame, .stTable {
@@ -125,19 +125,18 @@ section[data-testid="stSidebar"] hr {
     margin: 12px 0 !important;
 }
 
-/* ✅ Ensure Material Icons render correctly */
+/* ── 4. SIDEBAR COLLAPSE BUTTON ───────────────────────────── */
 .material-icons,
-.material-icons-outlined,
+span.material-icons,
+i.material-icons,
 .material-symbols-outlined,
 [data-testid="stSidebarCollapseButton"] span,
 [data-testid="stSidebarCollapseButton"] i {
-    font-family: 'Material Icons', 'Material Symbols Outlined' !important;
+    font-family: "Material Icons", "Material Symbols Outlined" !important;
     font-weight: normal !important;
     font-style: normal !important;
     letter-spacing: normal !important;
     text-transform: none !important;
-    display: inline-block !important;
-    white-space: nowrap !important;
     direction: ltr !important;
     -webkit-font-feature-settings: 'liga' !important;
     -webkit-font-smoothing: antialiased !important;
@@ -880,11 +879,90 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+st.markdown("""
+<style>
 
+/* =========================================================
+   FBC CLEAN SECTION HEADER (NO SUBTITLE, NO STEPS)
+   ========================================================= */
+
+.fbc-section {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 22px;
+    margin: 28px 0 18px 0;
+
+    background: linear-gradient(
+        135deg,
+        rgba(0, 51, 153, 0.08),
+        rgba(245, 180, 0, 0.05)
+    );
+
+    border-left: 6px solid #003399;
+    border-radius: 14px;
+
+    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
+}
+
+/* Left indicator (circle like your UI) */
+.fbc-section {
+    display: block;
+    padding: 16px 0;
+    margin: 28px 0 18px 0;
+    border-bottom: 2px solid rgba(0,51,153,0.15);
+    transition: all 0.25s ease;
+}
+
+.fbc-section-title {
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c;
+    position: relative;
+}
+
+/* animated underline */
+.fbc-section-title::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -6px;
+    width: 40px;
+    height: 3px;
+    background: #003399;
+    transition: width 0.3s ease;
+}
+
+.fbc-section:hover .fbc-section-title::after {
+    width: 100%;
+}
+
+/* Title only */
+.fbc-section-title {
+    font-family: "Playfair Display", serif !important;
+    font-size: 21px;
+    font-weight: 800;
+    color: #001a5c !important;
+    letter-spacing: -0.01em;
+}
+
+</style>
+""", unsafe_allow_html=True)
+def section(title: str):
+    st.markdown(
+        f"""
+        <div class="fbc-section">
+            <div class="fbc-section-dot"></div>
+            <div class="fbc-section-title">{title}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 # ---------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------
-st.markdown('<div class="main-title">🧭 Help & User Guide</div>', unsafe_allow_html=True)
+section("🧭 Help & User Guide")
 st.markdown(
     "<p class='subtle'>Everything you need to use the valuation app smoothly — inputs, formulas, exports, and troubleshooting.</p>",
     unsafe_allow_html=True,
