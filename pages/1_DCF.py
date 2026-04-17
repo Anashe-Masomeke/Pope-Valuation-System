@@ -1216,33 +1216,65 @@ button[kind="primary"] svg {
 st.markdown("""
 <style>
 /* =========================================================
-   FILE UPLOADER — FORCE UPLOAD ICON TO WHITE (HARD FIX)
+   FILE UPLOADER — USE BANKING ICON METHOD (✅ FINAL)
    ========================================================= */
 
-/* Target the icon container */
-[data-testid="stFileUploader"] [role="img"],
-[data-testid="stFileUploader"] svg,
-[data-testid="stFileUploader"] span svg {
-    color: white !important;
-    fill: white !important;
+/* Outer uploader box */
+[data-testid="stFileUploader"] label {
+    background: rgba(0, 51, 153, 0.04) !important;
+    border: 1.5px dashed rgba(29, 78, 216, 0.45) !important;
+    border-radius: 16px !important;
+    padding: 20px 24px !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
 }
 
-/* 🔥 Streamlit masked icon fix */
-[data-testid="stFileUploader"] [class*="icon"],
-[data-testid="stFileUploader"] [class*="Icon"],
-[data-testid="stFileUploader"] div[style*="mask"],
-[data-testid="stFileUploader"] div[style*="-webkit-mask"] {
-    background-color: white !important;
-    color: white !important;
-
-    /* CRITICAL: force mask to render white */
-    filter: brightness(0) invert(1) !important;
+/* Hover */
+[data-testid="stFileUploader"] label:hover {
+    background: rgba(0, 51, 153, 0.08) !important;
+    border-color: #1d4ed8 !important;
 }
 
-/* Hover state safety */
-[data-testid="stFileUploader"]:hover [class*="icon"],
-[data-testid="stFileUploader"]:hover div[style*="mask"] {
-    filter: brightness(0) invert(1) !important;
+/* Left text block */
+[data-testid="stFileUploader"] label div {
+    padding-left: 44px !important;
+    position: relative !important;
+}
+
+/* ✅ REPLACE STREAMLIT ICON COMPLETELY */
+[data-testid="stFileUploader"] label div::before {
+    content: "⬆️";
+    position: absolute;
+    left: 0;
+    top: 2px;
+    font-size: 24px;
+    color: #ffffff;   /* 👈 ICON COLOR (WHITE) */
+}
+
+/* Text */
+[data-testid="stFileUploader"] label div span {
+    font-weight: 700 !important;
+    color: #f5b400 !important;
+}
+
+/* Browse button */
+[data-testid="stFileUploader"] button {
+    background: linear-gradient(135deg, #003399, #1e3a8a) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+
+    border-radius: 10px !important;
+    padding: 8px 20px !important;
+    border: none !important;
+
+    box-shadow: 0 4px 14px rgba(0, 51, 153, 0.35) !important;
+}
+
+/* Hide Streamlit’s original SVG icon completely */
+[data-testid="stFileUploader"] svg {
+    display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
