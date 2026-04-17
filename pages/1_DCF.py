@@ -1091,13 +1091,44 @@ st.markdown("""
 
 </style>
 """, unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 
 /* =========================================
    FILE UPLOADER — DCF STYLE
    ========================================= */
+/* =========================================
+   FILE UPLOADER — MAKE TEXT WHITE
+   ========================================= */
 
+/* Main uploader container text */
+[data-testid="stFileUploader"] {
+    color: white !important;
+}
+
+/* "Drag and drop file here" text */
+[data-testid="stFileUploader"] label,
+[data-testid="stFileUploader"] div,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] p {
+    color: white !important;
+}
+
+/* Uploaded filename */
+[data-testid="stFileUploaderFileName"] {
+    color: white !important;
+}
+
+/* Browse button text */
+[data-testid="stFileUploader"] button {
+    color: white !important;
+}
+
+/* Optional: make border visible on dark background */
+[data-testid="stFileUploader"] section {
+    border: 1px solid rgba(255,255,255,0.3) !important;
+}
 /* Uploader container */
 [data-testid="stFileUploader"] {
     background: rgba(0, 51, 153, 0.04);
