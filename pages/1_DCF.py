@@ -1092,72 +1092,128 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 st.markdown("""
 <style>
-/* =========================================================
-   FILE UPLOADER — USE BANKING ICON METHOD (✅ FINAL)
-   ========================================================= */
 
-/* Outer uploader box */
-[data-testid="stFileUploader"] label {
-    background: rgba(0, 51, 153, 0.04) !important;
-    border: 1.5px dashed rgba(29, 78, 216, 0.45) !important;
-    border-radius: 16px !important;
-    padding: 20px 24px !important;
+/* =========================================
+   FILE UPLOADER — DCF STYLE
+   ========================================= */
+/* =========================================
+   FILE UPLOADER — MAKE TEXT WHITE
+   ========================================= */
 
-    display: flex !important;
-    align-items: center !important;
-    justify-content: space-between !important;
+/* Main uploader container text */
+[data-testid="stFileUploader"] {
+    color: white !important;
 }
 
-/* Hover */
-[data-testid="stFileUploader"] label:hover {
-    background: rgba(0, 51, 153, 0.08) !important;
-    border-color: #1d4ed8 !important;
+/* "Drag and drop file here" text */
+[data-testid="stFileUploader"] label,
+[data-testid="stFileUploader"] div,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] p {
+    color: white !important;
 }
 
-/* Left text block */
-[data-testid="stFileUploader"] label div {
-    padding-left: 44px !important;
-    position: relative !important;
+/* Uploaded filename */
+[data-testid="stFileUploaderFileName"] {
+    color: white !important;
 }
 
-/* ✅ REPLACE STREAMLIT ICON COMPLETELY */
-[data-testid="stFileUploader"] label div::before {
-    content: "⬆️";
-    position: absolute;
-    left: 0;
-    top: 2px;
-    font-size: 24px;
-    color: #ffffff;   /* 👈 ICON COLOR (WHITE) */
+/* Browse button text */
+[data-testid="stFileUploader"] button {
+    color: white !important;
 }
 
-/* Text */
-[data-testid="stFileUploader"] label div span {
-    font-weight: 700 !important;
-    color: #f5b400 !important;
+/* Optional: make border visible on dark background */
+[data-testid="stFileUploader"] section {
+    border: 1px solid rgba(255,255,255,0.3) !important;
+}
+/* Uploader container */
+[data-testid="stFileUploader"] {
+    background: rgba(0, 51, 153, 0.04);
+    border: 1px dashed rgba(0, 51, 153, 0.25);
+    border-radius: 14px;
+    padding: 18px 20px;
 }
 
-/* Browse button */
+/* Upload button */
 [data-testid="stFileUploader"] button {
     background: linear-gradient(135deg, #003399, #1e3a8a) !important;
     color: #ffffff !important;
     font-weight: 700 !important;
-
     border-radius: 10px !important;
-    padding: 8px 20px !important;
+    padding: 8px 18px !important;
     border: none !important;
-
     box-shadow: 0 4px 14px rgba(0, 51, 153, 0.35) !important;
+    transition: all 0.2s ease-in-out !important;
 }
 
-/* Hide Streamlit’s original SVG icon completely */
-[data-testid="stFileUploader"] svg {
-    display: none !important;
+/* Hover effect */
+[data-testid="stFileUploader"] button:hover {
+    background: linear-gradient(135deg, #1d4ed8, #003399) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(0, 51, 153, 0.45) !important;
+}
+
+/* Helper text (file size, type) */
+[data-testid="stFileUploader"] small {
+    color: #475569 !important;
+    font-style: italic;
+}
+
+/* Uploaded filename */
+[data-testid="stFileUploader"] span {
+    color: #1e3a8a !important;
+    font-weight: 600;
+}
+/* =========================================
+   FILE UPLOADER — TEXT → GOLD/YELLOW
+   ========================================= */
+
+/* Main drag & drop text */
+[data-testid="stFileUploader"] section div div p {
+    color: #f5b400 !important;
+    font-weight: 700 !important;
+}
+
+/* Secondary text (file size etc.) */
+[data-testid="stFileUploader"] section div div small {
+    color: #f5b400 !important;
+}
+
+/* Any spans inside */
+[data-testid="stFileUploader"] section div div span {
+    color: #f5b400 !important;
+}
+
+/* Uploaded file name */
+[data-testid="stFileUploader"] ul li {
+    color: #f5b400 !important;
+    font-weight: 600 !important;
+}
+/* =========================================
+   DOWNLOAD BUTTON ICON → WHITE
+   ========================================= */
+
+/* Make icon white */
+.stDownloadButton button svg {
+    fill: white !important;
+    color: white !important;
+}
+/* FORCE white icon */
+button[kind="secondary"] svg,
+button[kind="primary"] svg {
+    fill: white !important;
+    color: white !important;
+}
+/* Ensure text is also white (just in case) */
+.stDownloadButton button {
+    color: white !important;
 }
 </style>
 """, unsafe_allow_html=True)
+
 # ---------------------------------------------------------
 # RESET DCF SESSION STATE (SAFE & CONTROLLED)
 # ---------------------------------------------------------
