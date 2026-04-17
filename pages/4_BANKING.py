@@ -868,7 +868,37 @@ st.markdown("""
     background: linear-gradient(135deg, #1d4ed8, #003399) !important;
     transform: translateY(-1px) !important;
 }
+/* =========================================
+   FILE UPLOADER — MAKE TEXT WHITE
+   ========================================= */
 
+/* Main uploader container text */
+[data-testid="stFileUploader"] {
+    color: white !important;
+}
+
+/* "Drag and drop file here" text */
+[data-testid="stFileUploader"] label,
+[data-testid="stFileUploader"] div,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] p {
+    color: white !important;
+}
+
+/* Uploaded filename */
+[data-testid="stFileUploaderFileName"] {
+    color: white !important;
+}
+
+/* Browse button text */
+[data-testid="stFileUploader"] button {
+    color: white !important;
+}
+
+/* Optional: make border visible on dark background */
+[data-testid="stFileUploader"] section {
+    border: 1px solid rgba(255,255,255,0.3) !important;
+}
 /* Uploaded filename */
 [data-testid="stFileUploader"] ul li {
     color: #1e3a8a !important;
