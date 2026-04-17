@@ -1192,6 +1192,20 @@ st.markdown("""
     color: #f5b400 !important;
     font-weight: 600 !important;
 }
+/* =========================================
+   DOWNLOAD BUTTON ICON → WHITE
+   ========================================= */
+
+/* Make icon white */
+.stDownloadButton button svg {
+    fill: white !important;
+    color: white !important;
+}
+
+/* Ensure text is also white (just in case) */
+.stDownloadButton button {
+    color: white !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
