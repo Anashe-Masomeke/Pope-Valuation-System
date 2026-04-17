@@ -904,24 +904,30 @@ st.markdown("""
     color: #1e3a8a !important;
     font-weight: 600;
 }
-/* ================================
-   FIX: FORCE TEXT COLOR (WORKING)
-   ================================ */
+/* =========================================
+   FILE UPLOADER — TEXT → GOLD/YELLOW
+   ========================================= */
 
-/* Target the ACTUAL text container */
+/* Main drag & drop text */
 [data-testid="stFileUploader"] section div div p {
-    color: #003399 !important;
+    color: #f5b400 !important;
     font-weight: 700 !important;
 }
 
 /* Secondary text (file size etc.) */
 [data-testid="stFileUploader"] section div div small {
-    color: #003399 !important;
+    color: #f5b400 !important;
 }
 
-/* Ensure span text inside also changes */
+/* Any spans inside */
 [data-testid="stFileUploader"] section div div span {
-    color: #003399 !important;
+    color: #f5b400 !important;
+}
+
+/* Uploaded file name */
+[data-testid="stFileUploader"] ul li {
+    color: #f5b400 !important;
+    font-weight: 600 !important;
 }
 </style>
 """, unsafe_allow_html=True)
