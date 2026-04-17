@@ -1511,11 +1511,12 @@ if "dcf_file_name" not in st.session_state:
 if "dcf_uploader_key" not in st.session_state:
     st.session_state["dcf_uploader_key"] = 0
 
-uploaded_file = st.file_uploader(
-    "Upload Excel with IS, BS, CF",
-    type=["xlsx"],
-    key=f"dcf_main_uploader_{st.session_state['dcf_uploader_key']}"
+st.markdown(
+    '<p style="color:#003399; font-weight:700; font-size:16px;">Upload Excel with IS, BS, CF</p>',
+    unsafe_allow_html=True
 )
+
+uploaded_file = st.file_uploader("", type=["xlsx"])
 
 
 # Save bytes once
