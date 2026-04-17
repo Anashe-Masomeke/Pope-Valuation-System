@@ -1167,7 +1167,31 @@ st.markdown("""
     color: #1e3a8a !important;
     font-weight: 600;
 }
+/* =========================================
+   FILE UPLOADER — TEXT → GOLD/YELLOW
+   ========================================= */
 
+/* Main drag & drop text */
+[data-testid="stFileUploader"] section div div p {
+    color: #f5b400 !important;
+    font-weight: 700 !important;
+}
+
+/* Secondary text (file size etc.) */
+[data-testid="stFileUploader"] section div div small {
+    color: #f5b400 !important;
+}
+
+/* Any spans inside */
+[data-testid="stFileUploader"] section div div span {
+    color: #f5b400 !important;
+}
+
+/* Uploaded file name */
+[data-testid="stFileUploader"] ul li {
+    color: #f5b400 !important;
+    font-weight: 600 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
