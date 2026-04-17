@@ -1213,7 +1213,30 @@ button[kind="primary"] svg {
 }
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+/* =========================================
+   FILE UPLOADER — FORCE ICON WHITE
+   ========================================= */
 
+/* Upload icon (cloud / arrow) */
+[data-testid="stFileUploader"] svg {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* Sometimes Streamlit wraps icon paths */
+[data-testid="stFileUploader"] svg path {
+    fill: #ffffff !important;
+}
+
+/* Hover / focus consistency */
+[data-testid="stFileUploader"]:hover svg,
+[data-testid="stFileUploader"]:hover svg path {
+    fill: #ffffff !important;
+}
+</style>
+""", unsafe_allow_html=True)
 # ---------------------------------------------------------
 # RESET DCF SESSION STATE (SAFE & CONTROLLED)
 # ---------------------------------------------------------
