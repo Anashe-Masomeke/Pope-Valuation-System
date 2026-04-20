@@ -3315,7 +3315,7 @@ with c_cap5:
 # ---------------------------------------------------------
 # COST OF DEBT (Interest / Debt)
 # ---------------------------------------------------------
-int_is_idx_list = find_row_indices(is_df, ["net finance costs","net finance cost", "finance costs", "interest expense", "interest paid"])
+int_is_idx_list = find_row_indices(is_df, ["net finance costs","net finance charges","net finance cost", "finance costs", "interest expense", "interest paid"])
 if int_is_idx_list:
     interest_last = float(is_df.loc[int_is_idx_list, last_hist_label].sum(skipna=True))
 else:
