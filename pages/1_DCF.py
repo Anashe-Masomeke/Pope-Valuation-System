@@ -4104,10 +4104,11 @@ st.session_state["rd"] = float(rd)  # so the download page can use Rd
 # ---------------------------------------------------------
 section("📌 Valuation Summary")
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
+final_equity_value = st.session_state.get("equity_value_dcf", float(equity_value))
 summary_rows = [
     ("Enterprise Value (EV)", enterprise_value, "USD"),
     ("Net Debt", net_debt, "USD"),
-    ("Equity Value", equity_value, "USD"),
+    ("Equity Value", final_equity_value, "USD"),
     ("WACC", wacc * 100, "%"),
     ("Terminal Growth Rate (g)", g * 100, "%"),
 ]
@@ -4395,6 +4396,9 @@ for i, r in enumerate(rows):
     html_parts.append("</tr>")
 
 html_parts.append("</tbody></table></div>")
+# ── Build a Streamlit-native clickable sensitivity picker ──────────────
+# We render the HTML table for display, then add a native picker below it
+
 components.html("".join(html_parts), height=460, scrolling=True)
 
 base_eq = np.nan
@@ -4414,6 +4418,119 @@ st.caption(
     f"Base case highlighted in blue (WACC={base_wacc*100:.2f}% , g={base_g*100:.2f}%). "
     f"Min highlighted in yellow, Max highlighted in orange."
 )
+
+# ── Sensitivity Cell Picker ─────────────────────────────────────────────
+st.markdown("""
+<div style="
+    border-left: 5px solid #f5b400;
+    background: linear-gradient(135deg, #f0f5ff, #fffdf0);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 18px 0 10px 0;
+    box-shadow: 0 4px 12px rgba(0,51,153,0.08);
+">
+    <div style="font-family:'Playfair Display',serif; font-size:17px; font-weight:800; color:#001a5c; margin-bottom:6px;">
+        📌 Use a Sensitivity Scenario for Valuation
+    </div>
+    <div style="font-size:13px; color:#475569; font-style:italic;">
+        Select a WACC and Terminal Growth Rate from the grid — the corresponding equity value will be used in the Summary.
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Init persistent selected scenario
+if "dcf_sens_selected_wacc" not in st.session_state:
+    st.session_state["dcf_sens_selected_wacc"] = base_row   # default = base case
+if "dcf_sens_selected_g" not in st.session_state:
+    st.session_state["dcf_sens_selected_g"] = base_col
+
+# Dropdowns to pick WACC row and g column
+pick_col1, pick_col2, pick_col3 = st.columns([1, 1, 2])
+
+with pick_col1:
+    wacc_options = list(sens_table.index)
+    wacc_default = st.session_state["dcf_sens_selected_wacc"]
+    if wacc_default not in wacc_options:
+        wacc_default = wacc_options[len(wacc_options)//2]  # fallback to middle
+    selected_wacc_label = st.selectbox(
+        "Select WACC (row):",
+        wacc_options,
+        index=wacc_options.index(wacc_default),
+        key="dcf_sens_wacc_picker"
+    )
+    st.session_state["dcf_sens_selected_wacc"] = selected_wacc_label
+
+with pick_col2:
+    g_options = list(sens_table.columns)
+    g_default = st.session_state["dcf_sens_selected_g"]
+    if g_default not in g_options:
+        g_default = g_options[len(g_options)//2]  # fallback to middle
+    selected_g_label = st.selectbox(
+        "Select Terminal Growth g (column):",
+        g_options,
+        index=g_options.index(g_default),
+        key="dcf_sens_g_picker"
+    )
+    st.session_state["dcf_sens_selected_g"] = selected_g_label
+
+# Read the equity value from the selected cell
+selected_eq_val = float(sens_table.loc[selected_wacc_label, selected_g_label])
+
+is_base_scenario = (selected_wacc_label == base_row and selected_g_label == base_col)
+scenario_tag = "🔵 Base Case" if is_base_scenario else "🟡 Custom Scenario"
+
+with pick_col3:
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #003399, #0044cc);
+        border-radius: 14px;
+        padding: 18px 20px;
+        text-align: center;
+        margin-top: 4px;
+        box-shadow: 0 6px 18px rgba(0,51,153,0.22);
+    ">
+        <div style="font-size:10px; font-weight:700; letter-spacing:0.10em; text-transform:uppercase; color:rgba(255,255,255,0.70); margin-bottom:4px;">
+            Selected Equity Value
+        </div>
+        <div style="font-family:'Playfair Display',serif; font-size:26px; font-weight:900; color:#ffffff; line-height:1.2;">
+            {selected_eq_val:,.0f}
+        </div>
+        <div style="font-size:11px; color:#f5b400; margin-top:6px; font-weight:700;">
+            WACC {selected_wacc_label} · g {selected_g_label}
+        </div>
+        <div style="font-size:11px; color:rgba(255,255,255,0.65); margin-top:3px;">
+            {scenario_tag}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Toggle: use sensitivity equity value vs DCF base equity value
+if "dcf_use_sens_equity" not in st.session_state:
+    st.session_state["dcf_use_sens_equity"] = False
+
+use_sens_equity = st.checkbox(
+    "✅ Use this scenario's Equity Value in the Summary (overrides DCF base equity value)",
+    value=st.session_state["dcf_use_sens_equity"],
+    key="dcf_use_sens_equity_ui"
+)
+st.session_state["dcf_use_sens_equity"] = use_sens_equity
+
+# ── Resolve the FINAL equity value to carry into Summary ───────────────
+if use_sens_equity and np.isfinite(selected_eq_val):
+    final_equity_value = selected_eq_val
+    final_eq_source = f"Sensitivity scenario (WACC={selected_wacc_label}, g={selected_g_label})"
+else:
+    final_equity_value = float(equity_value)
+    final_eq_source = "DCF base case"
+
+# Overwrite session_state so Summary page picks up the right value
+st.session_state["equity_value"] = float(final_equity_value)
+st.session_state["equity_value_dcf"] = float(final_equity_value)
+
+if use_sens_equity:
+    st.success(f"✅ Summary will use **{final_equity_value:,.0f}** from sensitivity scenario ({final_eq_source})")
+else:
+    st.info(f"ℹ️ Summary is using DCF base equity value: **{final_equity_value:,.0f}**")
 
 # =========================================================
 # ✅ FULL DCF EXCEL EXPORT (FULL INCOME STATEMENT + FORMULAS + SENSITIVITY)
