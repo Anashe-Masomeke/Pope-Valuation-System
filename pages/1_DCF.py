@@ -1315,7 +1315,7 @@ def avg_revenue_growth(revenue_row: pd.DataFrame, year_cols) -> float:
     for i in range(1, len(vals)):
         prev_, curr_ = vals[i - 1], vals[i]
         if curr_ != 0:
-            g = (curr_ - prev_) / curr_
+            g = (curr_ - prev_) / prev_
             if -0.5 < g < 0.5:
                 growth.append(g)
     return float(np.mean(growth)) if growth else 0.05
@@ -1559,7 +1559,11 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-uploaded_file = st.file_uploader("", type=["xlsx"])
+uploaded_file = st.file_uploader(
+    "Upload Excel file",
+    type=["xlsx"],
+    label_visibility="collapsed"  # hides it visually
+)
 
 
 # Save bytes once
