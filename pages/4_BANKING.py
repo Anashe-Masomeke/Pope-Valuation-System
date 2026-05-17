@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 import hashlib
 import base64
+# ── Autosave active project (every 30 s) ─────────────────────────
+# Autosave removed: use Save Now button in Projects page
 def add_watermark():
     logo_path = Path("assets") / "fbc_logo.png"
     if logo_path.exists():
@@ -44,6 +46,33 @@ def add_watermark():
 
 add_watermark()
 st.set_page_config(page_title="Banking Valuation (Residual Income)", layout="wide")
+
+# ── Auth guard ────────────────────────────────────────────────────
+if not st.session_state.get("authenticated"):
+    st.error("🔒 You must be signed in to access this page.")
+    st.info("Please return to the main page and sign in.")
+    if st.button("Go to Sign In", key="goto_signin_bank"):
+        st.switch_page("app.py")
+    st.stop()
+
+# ── Sidebar with Sign Out ─────────────────────────────────────────
+_so_user = st.session_state.get("user") or {{}}
+with st.sidebar:
+    st.markdown("### 🧑‍💼 Analyst Profile")
+    st.markdown("---")
+    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
+    st.markdown(f"*Role: {_so_user.get('role', '')}*")
+    st.markdown("---")
+    if st.button("🚪 Sign Out", use_container_width=True, key="signout_bank"):
+        from auth import save_project_session as _save_proj
+        _pid = st.session_state.get("active_project_id")
+        if _pid:
+            _save_proj(_pid, dict(st.session_state))
+        for _k in list(st.session_state.keys()):
+            del st.session_state[_k]
+        st.switch_page("app.py")
+
+
 
 # ─── FBC DESIGN SYSTEM ─────────────────────────────────────────
 st.markdown('''
@@ -1084,6 +1113,12 @@ ss_init("bank", {
     "outputs": {}
 })
 BANK = st.session_state["bank"]
+# When a project is restored from the DB, auth.py saves file_bytes to
+# project_files (not the bank dict) and strips it before serialising.
+# So a restored "bank" dict may be missing these keys entirely.
+# Always ensure they exist so the rest of the page never gets a KeyError.
+BANK.setdefault("file_bytes", None)
+BANK.setdefault("file_name", None)
 
 # Clear button (YOU control resets)
 cclr1, cclr2 = st.columns([1, 6])
@@ -2133,35 +2168,31 @@ use_auto = st.checkbox(
 BANK["bank_use_auto_params"] = use_auto
 
 if "bank_ke_init" not in st.session_state:
-    BANK["bank_rf_pct"] = float(auto_rf_pct) if auto_rf_pct is not None else 11.61
-    BANK["bank_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
-    BANK["bank_tax_pct_for_beta"] = 25.0
-    BANK["bank_de_ratio_for_beta"] = 0.0
-    BANK["bank_beta_u_input"] = float(BANK.get("bank_beta_u_input", 1.0))
-    BANK["bank_beta_levered_manual"] = 0.22
+    _project_active = bool(st.session_state.get("active_project_id"))
+    if not _project_active:
+        BANK["bank_rf_pct"]  = float(auto_rf_pct)  if auto_rf_pct  is not None else 11.61
+        BANK["bank_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
+    BANK.setdefault("bank_tax_pct_for_beta",   25.0)
+    BANK.setdefault("bank_de_ratio_for_beta",  0.0)
+    BANK.setdefault("bank_beta_u_input",       1.0)
+    BANK.setdefault("bank_beta_levered_manual",0.22)
     st.session_state["bank_ke_init"] = True
 
 auto_signature = (auto_rf_pct, auto_mrp_pct, st.session_state.get("bank_country_select", None), float(BANK.get("bank_zim_avg_cod_pct", 0.0)))
 st.session_state.setdefault("bank_auto_signature", None)
 
 if use_auto and (auto_rf_pct is not None) and (auto_mrp_pct is not None) and (auto_signature != st.session_state["bank_auto_signature"]):
-    BANK["bank_rf_pct"] = float(auto_rf_pct)
+    BANK["bank_rf_pct"]  = float(auto_rf_pct)
     BANK["bank_mrp_pct"] = float(auto_mrp_pct)
-    st.session_state["bank_rf_pct_input"] = float(auto_rf_pct)
-    st.session_state["bank_mrp_pct_input"] = float(auto_mrp_pct)
     st.session_state["bank_auto_signature"] = auto_signature
 elif not use_auto:
     st.session_state["bank_auto_signature"] = None
 
-st.session_state.setdefault("bank_rf_pct_input", float(BANK["bank_rf_pct"]))
-st.session_state.setdefault("bank_mrp_pct_input", float(BANK["bank_mrp_pct"]))
-st.session_state.setdefault("bank_beta_u_input_box", float(BANK.get("bank_beta_u_input", 1.0)))
-
 capm1, capm2, capm3 = st.columns([1, 1, 1])
 
 with capm1:
-    rf_input = st.number_input("Risk-free rate (%)", step=0.1, key="bank_rf_pct_input")
-    mrp_input = st.number_input("Market risk premium (%)", step=0.1, key="bank_mrp_pct_input")
+    rf_input  = st.number_input("Risk-free rate (%)",      value=float(BANK["bank_rf_pct"]),  step=0.1, format="%.2f")
+    mrp_input = st.number_input("Market risk premium (%)", value=float(BANK["bank_mrp_pct"]), step=0.1, format="%.2f")
 
 with capm2:
     tax_beta = st.number_input(
@@ -2617,4 +2648,3 @@ BANK["outputs"] = {
 }
 
 st.session_state["equity_value_banking"] = float(equity_value_total)
-
