@@ -13,6 +13,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="Comparables Valuation", layout="wide")
 
+# ── Auth guard ────────────────────────────────────────────────────
+if not st.session_state.get("authenticated"):
+    st.error("🔒 You must be signed in to access this page.")
+    st.info("Please return to the main page and sign in.")
+    if st.button("Go to Sign In", key="goto_signin_comp"):
+        st.switch_page("app.py")
+    st.stop()
+
+# ── Sidebar with Sign Out ─────────────────────────────────────────
+_so_user = st.session_state.get("user") or {{}}
+with st.sidebar:
+    st.markdown("### 🧑‍💼 Analyst Profile")
+    st.markdown("---")
+    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
+    st.markdown(f"*Role: {_so_user.get('role', '')}*")
+    st.markdown("---")
+    if st.button("🚪 Sign Out", use_container_width=True, key="signout_comp"):
+        from auth import save_project_session as _save_proj
+        _pid = st.session_state.get("active_project_id")
+        if _pid:
+            _save_proj(_pid, dict(st.session_state))
+        for _k in list(st.session_state.keys()):
+            del st.session_state[_k]
+        st.switch_page("app.py")
+
+
+
+# ── Autosave active project (every 30 s) ─────────────────────────
+# Autosave removed: use Save Now button in Projects page
 # ─── FBC DESIGN SYSTEM ─────────────────────────────────────────
 st.markdown('''
 <style>
@@ -2903,6 +2932,13 @@ if st.session_state["comp_exp_0_debug_peer_search"]:
 # =========================================================
 S.setdefault("num_comps", 3)
 S.setdefault("comps", {})
+
+# ── Normalise comps keys to int ──────────────────────────────────
+# JSON round-trip (save→load) converts int keys to strings.
+# Re-key to int so all downstream code (comps[i]) works correctly.
+_raw_comps = S.get("comps", {})
+if _raw_comps and all(isinstance(k, str) for k in _raw_comps):
+    S["comps"] = {int(k): v for k, v in _raw_comps.items()}
 
 num_comps = st.number_input(
     "How many comparables?",
