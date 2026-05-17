@@ -1,41 +1,29 @@
+"""
+app.py  —  FBC Investment Valuation System
+Entry point: Login / Register / Forgot-Password  →  Dashboard
+"""
+
 import streamlit as st
 from pathlib import Path
-def section(title: str):
-    st.markdown(
-        f"""
-        <div class="fbc-section">
-            <div class="fbc-section-dot"></div>
-            <div class="fbc-section-title">{title}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-# ------------------------------------------------------------
-# PAGE CONFIG
-# ------------------------------------------------------------
+from auth import (
+    authenticate,
+    register_user,
+    get_security_question,
+    verify_security_answer,
+    reset_password,
+)
+
+# ── Must be FIRST Streamlit call ──────────────────────────────────
 st.set_page_config(
     page_title="FBC Valuation Dashboard",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-# ─── FBC DESIGN SYSTEM ─────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# STYLES
+# ══════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-.top-title {
-    color: black;
-    font-size: 28px;
-    font-weight: 700;
-}
-</style>
-""", unsafe_allow_html=True)
-st.markdown('''
-<style>
-/* ================================================================
-   FBC INVESTMENT VALUATION SYSTEM — Design System v3.0
-   ================================================================ */
-
-/* ── 0. GOOGLE FONTS ──────────────────────────────────────── */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Material+Icons&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined');
 
@@ -48,8 +36,6 @@ li, ul, ol, a, small,
   font-family: "EB Garamond", Georgia, "Times New Roman", serif !important;
   color: #1a1a2e;
 }
-
-/* Headings — Playfair Display */
 h1, h2, h3, h4, .fbc-heading, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   font-family: "Playfair Display", Georgia, serif !important;
   font-weight: 700 !important;
@@ -57,13 +43,8 @@ h1, h2, h3, h4, .fbc-heading, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
 }
 
 /* ── 2. PAGE BACKGROUND ───────────────────────────────────── */
-.stApp {
-  background: #f5f7fb !important;
-}
-.main .block-container {
-  background: #f5f7fb !important;
-  padding-top: 1.5rem !important;
-}
+.stApp { background: #f5f7fb !important; }
+.main .block-container { background: #f5f7fb !important; padding-top: 1.5rem !important; }
 
 /* ── 3. SIDEBAR ───────────────────────────────────────────── */
 section[data-testid="stSidebar"] {
@@ -100,14 +81,11 @@ section[data-testid="stSidebar"] a {
 section[data-testid="stSidebar"] a:hover {
     color: #f5b400 !important;
 }
-
-/* sidebar hr divider */
 section[data-testid="stSidebar"] hr {
     border: none !important;
     border-top: 1px solid rgba(245,180,0,0.25) !important;
     margin: 12px 0 !important;
 }
-
 
 /* ✅ Ensure Material Icons render correctly */
 .material-icons,
@@ -126,7 +104,6 @@ section[data-testid="stSidebar"] hr {
     -webkit-font-feature-settings: 'liga' !important;
     -webkit-font-smoothing: antialiased !important;
 }
-
 [data-testid="stSidebarCollapseButton"] button {
     background: linear-gradient(135deg, #f5b400, #ffd040) !important;
     border: none !important;
@@ -143,1182 +120,547 @@ section[data-testid="stSidebar"] hr {
     width: 22px !important; height: 22px !important;
     fill: #001a5c !important;
 }
-/* =========================================================
-   🔥 PREMIUM SIDEBAR COLLAPSE BUTTON (FBC STYLE)
-   ========================================================= */
-
-/* Button container */
+/* Move collapse arrow to right edge of sidebar */
 [data-testid="stSidebarCollapseButton"] {
-    position: relative;
-    margin-top: 10px;
+    position: absolute !important;
+    top: 12px !important;
+    right: 12px !important;
+    left: auto !important;
+    z-index: 999999 !important;
 }
-
-/* Main button */
 [data-testid="stSidebarCollapseButton"] button {
     background: linear-gradient(135deg, #003399, #0055ee) !important;
     border: none !important;
     border-radius: 50% !important;
     width: 46px !important;
     height: 46px !important;
-
-    box-shadow: 0 6px 18px rgba(0, 51, 153, 0.35) !important;
-
+    box-shadow: 0 6px 18px rgba(0,51,153,0.35) !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-
     transition: all 0.25s ease !important;
 }
 
-
-/* ── 5. PAGE HEADER BANNER ────────────────────────────────── */
-.fbc-page-header {
-    background: linear-gradient(135deg, #001a5c 0%, #003399 50%, #0044cc 100%);
-    border-radius: 18px;
-    padding: 26px 32px;
-    margin-bottom: 28px;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-bottom: 3px solid #f5b400;
-    box-shadow: 0 12px 40px rgba(0,26,92,0.28);
-    position: relative;
-    overflow: hidden;
-}
-.fbc-page-header::before {
-    content: "";
-    position: absolute;
-    left: -40px; top: -40px;
-    width: 200px; height: 200px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(245,180,0,0.12), transparent 70%);
-    pointer-events: none;
-}
-.fbc-page-header::after {
-    content: "";
-    position: absolute;
-    right: -30px; bottom: -30px;
-    width: 160px; height: 160px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(255,255,255,0.06), transparent 65%);
-    pointer-events: none;
-}
-.fbc-page-header-icon {
-    font-size: 30px;
-    margin-right: 12px;
-    vertical-align: middle;
-}
-.fbc-page-header-title {
-    font-family: "Playfair Display", serif !important;
-    font-size: 28px !important;
-    font-weight: 900 !important;
-    color: #ffffff !important;
-    display: inline !important;
-    vertical-align: middle !important;
-    letter-spacing: -0.01em !important;
-}
-.fbc-page-header-sub {
-    font-size: 14px;
-    color: rgba(255,255,255,0.78) !important;
-    margin-top: 8px;
-    font-style: italic;
-}
-.fbc-badge {
-    display: inline-block;
-    background: rgba(245,180,0,0.20);
-    border: 1px solid rgba(245,180,0,0.50);
-    color: #f5c842 !important;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.12em;
-    padding: 3px 10px;
-    border-radius: 999px;
-    margin-left: 10px;
-    vertical-align: middle;
-    text-transform: uppercase;
-    font-family: "EB Garamond", serif !important;
+/* ── Hide the "keyboa..." app name text ── */
+[data-testid="stSidebarHeader"] > *:not([data-testid="stSidebarCollapseButton"]) {
+    display: none !important;
 }
 
-/* ── 6. SECTION HEADINGS ──────────────────────────────────── */
-.fbc-section-heading {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 32px 0 16px 0;
-    padding-bottom: 10px;
-    border-bottom: 2px solid transparent;
-    border-image: linear-gradient(90deg, #003399 0%, #f5b400 55%, transparent 90%) 1;
-}
-.fbc-section-heading-text {
-    font-family: "Playfair Display", serif !important;
-    font-size: 18px !important;
-    font-weight: 700 !important;
-    color: #001a5c !important;
-    letter-spacing: 0.01em !important;
-}
-.fbc-section-heading-step {
-    background: linear-gradient(135deg, #003399, #0044cc);
-    color: white !important;
-    font-size: 11px;
-    font-weight: 900;
-    min-width: 28px; height: 28px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-    box-shadow: 0 3px 8px rgba(0,51,153,0.35);
-}
-.fbc-subsection-heading {
-    font-family: "Playfair Display", serif !important;
-    font-size: 15px !important;
-    font-weight: 700 !important;
-    color: #003399 !important;
-    margin: 20px 0 10px 0 !important;
-    padding-left: 12px !important;
-    border-left: 3px solid #f5b400 !important;
-}
-
-/* ── 7. CARD / PANEL ──────────────────────────────────────── */
-.fbc-card {
-    background: #ffffff;
-    border: 1px solid rgba(0,51,153,0.09);
-    border-left: 5px solid #003399;
-    border-radius: 16px;
-    padding: 20px 24px;
-    margin-bottom: 18px;
-    box-shadow: 0 6px 18px rgba(0,26,92,0.07);
-    transition: box-shadow 0.2s, transform 0.2s;
-}
-.fbc-card:hover {
-    box-shadow: 0 12px 32px rgba(0,51,153,0.14);
-    transform: translateY(-2px);
-}
-.fbc-card h3, .fbc-card h4 {
-    font-family: "Playfair Display", serif !important;
-    color: #001a5c !important;
-    margin: 0 0 10px 0 !important;
-}
-.fbc-card-gold {
-    border-left-color: #f5b400 !important;
-}
-.fbc-card-green {
-    border-left-color: #10b981 !important;
-}
-
-/* sub-card (nested) */
-.fbc-subcard {
-    background: rgba(0,51,153,0.03);
-    border: 1px solid rgba(0,51,153,0.10);
-    border-radius: 12px;
-    padding: 16px 18px;
-    margin-top: 12px;
-}
-
-/* ── 8. KPI METRIC CARDS ──────────────────────────────────── */
-.fbc-kpi {
-    background: linear-gradient(135deg, #f0f5ff, #fff8e6);
-    border: 1px solid rgba(0,51,153,0.12);
-    border-radius: 16px;
-    padding: 16px 18px;
-    text-align: center;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-.fbc-kpi:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0,51,153,0.12);
-}
-.fbc-kpi-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: #5a7099 !important;
-    margin-bottom: 6px;
-    font-family: "EB Garamond", serif !important;
-}
-.fbc-kpi-value {
-    font-family: "Playfair Display", serif !important;
-    font-size: 24px !important;
-    font-weight: 800 !important;
-    color: #001a5c !important;
-    line-height: 1.2;
-}
-.fbc-kpi-unit {
-    font-size: 11px;
-    color: #7a90b8 !important;
-    margin-top: 3px;
-}
-
-/* DCF card / kpi aliases */
-.dcf-card {
-    background: #ffffff;
-    border: 1px solid rgba(0,0,0,0.08);
-    border-left: 5px solid #003399;
-    border-radius: 16px;
-    padding: 20px 22px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-    margin-top: 12px;
-    margin-bottom: 16px;
-}
-.dcf-card h3 { margin: 0 0 10px 0; font-family: "Playfair Display", serif !important; color: #001a5c !important; }
-.dcf-subcard {
-    background: rgba(0,51,153,0.03);
-    border: 1px solid rgba(0,51,153,0.10);
-    border-radius: 14px;
-    padding: 14px;
-    margin-top: 10px;
-}
-.dcf-kpi {
-    background: linear-gradient(135deg, rgba(0,51,153,0.08), rgba(245,180,0,0.08));
-    border: 1px solid rgba(0,0,0,0.08);
-    border-radius: 16px;
-    padding: 14px 16px;
-    margin: 6px 0;
-    transition: transform 0.2s;
-}
-.dcf-kpi:hover { transform: translateY(-1px); }
-.dcf-kpi-title { font-size: 11px; opacity: 0.7; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.07em; }
-.dcf-kpi-value { font-size: 20px; font-weight: 800; font-family: "Playfair Display", serif !important; color: #001a5c !important; }
-
-/* ── 9. RESET / UTILITY CARDS ─────────────────────────────── */
-.fbc-reset-card {
-    background: linear-gradient(135deg, #001a5c 0%, #003399 55%, #0055cc 100%);
-    padding: 22px 28px;
-    border-radius: 16px;
-    color: white !important;
-    box-shadow: 0 8px 24px rgba(0,26,92,0.30);
-    margin-bottom: 22px;
-    border-bottom: 3px solid #f5b400;
-    position: relative;
-    overflow: hidden;
-}
-.fbc-reset-card::after {
-    content: "";
-    position: absolute;
-    right: -20px; top: -20px;
-    width: 120px; height: 120px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(245,180,0,0.15), transparent 70%);
-    pointer-events: none;
-}
-.fbc-reset-title {
-    font-family: "Playfair Display", serif !important;
-    font-size: 20px !important;
-    font-weight: 700 !important;
-    margin-bottom: 6px;
-    color: white !important;
-}
-.fbc-reset-sub { font-size: 14px; opacity: 0.88; margin-bottom: 14px; color: rgba(255,255,255,0.85) !important; }
-
-/* ── 10. BUTTONS ──────────────────────────────────────────── */
-.stButton > button[kind="primary"],
+/* ── BUTTONS ── */
 .stButton > button {
-    background: linear-gradient(135deg, #003399, #0044cc) !important;
-    color: white !important;
+    background: linear-gradient(135deg, #003399 0%, #0055ee 100%) !important;
+    color: #ffffff !important;
     border: none !important;
     border-radius: 10px !important;
     font-weight: 700 !important;
-    font-family: "EB Garamond", Georgia, serif !important;
-    padding: 10px 20px !important;
+    font-family: "EB Garamond", serif !important;
+    font-size: 15px !important;
+    padding: 10px 24px !important;
+    box-shadow: 0 4px 14px rgba(0,51,153,0.30) !important;
     transition: all 0.2s ease !important;
-    box-shadow: 0 4px 12px rgba(0,51,153,0.28) !important;
-    letter-spacing: 0.01em !important;
 }
 .stButton > button:hover {
-    background: linear-gradient(135deg, #0044cc, #0055ee) !important;
     transform: translateY(-2px) !important;
-    box-shadow: 0 8px 22px rgba(0,51,153,0.38) !important;
-}
-.fbc-reset-btn .stButton > button {
-    background: linear-gradient(135deg, #f5b400, #ffd040) !important;
-    color: #001a5c !important;
-    box-shadow: 0 4px 12px rgba(245,180,0,0.32) !important;
-}
-.fbc-reset-btn .stButton > button:hover {
-    background: linear-gradient(135deg, #ffd040, #ffe070) !important;
-    box-shadow: 0 8px 20px rgba(245,180,0,0.45) !important;
-}
-.fbc-nav-btn button,
-.fbc-nav-btn .stButton > button {
-    background: linear-gradient(135deg, #003399, #001a4d) !important;
-    color: white !important;
-    font-weight: 700 !important;
-    border-radius: 10px !important;
-    padding: 8px 18px !important;
-    border: none !important;
-    transition: all 0.25s ease-in-out !important;
-}
-.fbc-nav-btn button:hover,
-.fbc-nav-btn .stButton > button:hover {
-    background: linear-gradient(135deg, #0055cc, #003399) !important;
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 14px rgba(0,0,0,0.25) !important;
-}
-.stDownloadButton > button {
-    background: linear-gradient(135deg, #003399, #0044cc) !important;
-    color: white !important;
-    border-radius: 10px !important;
-    font-weight: 700 !important;
-    border: none !important;
-    transition: all 0.2s ease !important;
-}
-.stDownloadButton > button:hover {
-    background: linear-gradient(135deg, #0044cc, #0055ee) !important;
-    transform: translateY(-1px) !important;
+    box-shadow: 0 8px 22px rgba(0,51,153,0.40) !important;
 }
 
-/* ── 11. INPUTS ───────────────────────────────────────────── */
-.stNumberInput input, .stTextInput input {
-    border: 1.5px solid rgba(0,51,153,0.18) !important;
-    border-radius: 10px !important;
-    font-family: "EB Garamond", Georgia, serif !important;
-    background: #ffffff !important;
-    transition: border-color 0.15s, box-shadow 0.15s !important;
-    padding: 8px 12px !important;
+/* ── INPUTS ── */
+.stTextInput input, .stSelectbox select {
+    border: 1.5px solid rgba(0,51,153,0.20) !important;
+    border-radius: 8px !important;
+    font-family: Georgia, serif !important;
+    font-size: 15px !important;
+    transition: border-color 0.15s !important;
 }
-.stNumberInput input:focus, .stTextInput input:focus {
+.stTextInput input:focus {
     border-color: #003399 !important;
     box-shadow: 0 0 0 3px rgba(0,51,153,0.10) !important;
 }
-.stSelectbox > div > div {
-    border: 1.5px solid rgba(0,51,153,0.18) !important;
-    border-radius: 10px !important;
-    font-family: "EB Garamond", Georgia, serif !important;
-}
 
-/* ── 12. TABS ─────────────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    border-bottom: 2px solid rgba(0,51,153,0.12);
-    padding-bottom: 0;
+/* ── AUTH CARD ── */
+.auth-card {
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 38px 44px;
+    max-width: 460px;
+    width: 100%;
+    box-shadow: 0 20px 60px rgba(0,26,92,0.16);
+    border-top: 4px solid #f5b400;
+    margin: 0 auto;
 }
-.stTabs [data-baseweb="tab"] {
-    border-radius: 10px 10px 0 0 !important;
-    font-weight: 700 !important;
-    font-family: "EB Garamond", Georgia, serif !important;
-    color: #5a7099 !important;
-    padding: 10px 20px !important;
-    transition: all 0.15s !important;
-}
-.stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #003399, #0044cc) !important;
-    color: white !important;
-    box-shadow: 0 -2px 0 0 #f5b400 inset !important;
-}
-
-/* ── 13. EXPANDERS ────────────────────────────────────────── */
-.streamlit-expanderHeader {
-    font-weight: 700 !important;
-    color: #001a5c !important;
-    font-family: "Playfair Display", Georgia, serif !important;
-    border-radius: 10px !important;
-    background: rgba(0,51,153,0.04) !important;
-    padding: 12px 16px !important;
-    border-left: 3px solid #f5b400 !important;
-}
-/* Fix: hide raw "keyboard_arrow_right" text Streamlit injects into expander headers */
-[data-testid="stExpander"] details > summary > div > p > span[style],
-[data-testid="stExpander"] details > summary p span[data-testid="stMarkdownContainer"] > p > span,
-details > summary p > span[style*="font-weight"] {
-    display: none !important;
-}
-[data-testid="stExpanderToggleIcon"] svg,
-details > summary svg {
-    font-family: "Material Icons", "Material Symbols Outlined" !important;
-}
-
-/* ── 14. METRICS (st.metric) ──────────────────────────────── */
-[data-testid="metric-container"] {
-    background: linear-gradient(135deg, #f0f5ff, #fff8e6) !important;
-    border: 1px solid rgba(0,51,153,0.12) !important;
-    border-radius: 16px !important;
-    padding: 16px 18px !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05) !important;
-    transition: transform 0.2s, box-shadow 0.2s !important;
-}
-[data-testid="metric-container"]:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 20px rgba(0,51,153,0.10) !important;
-}
-[data-testid="metric-container"] label {
-    font-size: 10px !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.10em !important;
-    text-transform: uppercase !important;
-    color: #5a7099 !important;
-    font-family: "EB Garamond", serif !important;
-}
-[data-testid="stMetricValue"] {
+.auth-title {
     font-family: "Playfair Display", serif !important;
     font-size: 24px !important;
-    font-weight: 800 !important;
+    font-weight: 900 !important;
     color: #001a5c !important;
-}
-[data-testid="stMetricDelta"] {
-    font-family: "EB Garamond", serif !important;
-}
-
-/* ── 15. ALERTS & INFO BOXES ──────────────────────────────── */
-.stAlert {
-    border-radius: 14px !important;
-    font-family: "EB Garamond", Georgia, serif !important;
-    border-left-width: 4px !important;
-}
-
-/* ── 16. PROGRESS BAR ─────────────────────────────────────── */
-.stProgress > div > div > div {
-    background: linear-gradient(90deg, #003399, #0044cc, #f5b400) !important;
-    border-radius: 999px !important;
-}
-
-/* ── 17. SCROLLBAR ────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f0f4ff; border-radius: 999px; }
-::-webkit-scrollbar-thumb { background: linear-gradient(#003399, #0044cc); border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: #0055ee; }
-
-/* ── 18. FOOTER ───────────────────────────────────────────── */
-.fbc-footer {
     text-align: center;
-    padding: 28px;
-    margin-top: 48px;
-    color: #5a7099 !important;
+    margin-bottom: 4px !important;
+}
+.auth-subtitle {
     font-size: 13px;
-    border-top: 1px solid rgba(0,51,153,0.10);
-    font-style: italic;
-}
-.fbc-footer b { color: #003399 !important; font-style: normal; }
-
-/* ── 19. FEATURE CARDS (dashboard) ───────────────────────── */
-.feature-box {
-    background: #ffffff;
-    padding: 22px 26px;
-    border-radius: 16px;
-    border-left: 6px solid #003399;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.07);
-    transition: all 0.25s ease;
-    margin-bottom: 16px;
-    font-family: "EB Garamond", serif !important;
-}
-.feature-box:hover {
-    background: linear-gradient(135deg, #f4f8ff, #fffdf0);
-    box-shadow: 0 10px 28px rgba(0,51,153,0.16);
-    transform: translateY(-3px);
-    border-left-color: #f5b400;
-}
-.feature-icon { font-size: 24px; margin-right: 10px; }
-
-/* ── 20. SMALL UTILITIES ──────────────────────────────────── */
-.small-note {
-    font-size: 12px;
     color: #7a90b8 !important;
+    text-align: center;
     font-style: italic;
+    margin-bottom: 20px !important;
 }
-.gold-accent { color: #b87c00 !important; font-weight: 700; }
-.blue-accent  { color: #003399 !important; font-weight: 700; }
-
-/* ── 21. DATAFRAMES ───────────────────────────────────────── */
-.stDataFrame thead th {
-    background: linear-gradient(135deg, #001a5c, #003399) !important;
-    color: white !important;
-    font-weight: 700 !important;
-    font-family: "Playfair Display", serif !important;
-    letter-spacing: 0.02em !important;
+.auth-divider {
+    border: none;
+    border-top: 1px solid rgba(0,51,153,0.12);
+    margin: 18px 0;
 }
-.stDataFrame tbody tr:hover td {
-    background: rgba(0,51,153,0.04) !important;
-}
-.stDataFrame tbody tr:nth-child(even) td {
-    background: rgba(0,51,153,0.02) !important;
+.auth-link {
+    font-size: 13px;
+    color: #003399 !important;
+    text-align: center;
+    cursor: pointer;
+    text-decoration: underline;
 }
 
-/* ── 22. TOP NAV (dashboard) ──────────────────────────────── */
+/* ── TOP NAV ── */
 .top-nav {
-    position: fixed; top: 0; left: 0; width: 100%; height: 68px;
-    background: linear-gradient(90deg, #001a5c, #003399, #0044cc);
-    color: white; display: flex; align-items: center;
+    position: fixed; top: 0; left: 0; width: 100%; height: 60px;
+    background: linear-gradient(90deg, #002080, #003399);
+    display: flex; align-items: center;
     padding: 0 28px; z-index: 99999;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.30);
-    border-bottom: 2px solid #f5b400;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.30);
 }
 .top-title {
-    font-family: "Playfair Display", serif !important;
-    font-size: 26px; font-weight: 900; margin-left: 16px; letter-spacing: -0.01em;
-    color: Black;
-}
-
-/* ── 23. DIVIDER ──────────────────────────────────────────── */
-.fbc-divider {
-    height: 2px;
-    background: linear-gradient(90deg, transparent, #f5b400, #003399, transparent);
-    border: none;
-    margin: 28px 0;
-    border-radius: 999px;
-}
-
-/* ── 24. RADIO / CHECKBOX ─────────────────────────────────── */
-.stRadio > label, .stCheckbox > label {
-    font-family: "EB Garamond", Georgia, serif !important;
-    color: #1a1a2e !important;
-}
-
-/* ── 25. SELECTBOX OPTIONS ────────────────────────────────── */
-div[data-baseweb="select"] span {
-    font-family: "EB Garamond", Georgia, serif !important;
-}
-
-/* ── 26. PEER PICKER (Comparables) ───────────────────────── */
-.peer-picker-wrap {
-    border: 1px solid rgba(0,51,153,0.14);
-    border-radius: 18px;
-    padding: 18px 18px 12px 18px;
-    background: #f8fbff;
-    box-shadow: 0 6px 20px rgba(0,26,92,0.07);
-    margin-top: 12px;
-    margin-bottom: 14px;
-}
-.peer-picker-head {
-    font-family: "Playfair Display", serif !important;
-    font-size: 17px;
-    font-weight: 700;
-    color: #001a5c;
-    margin-bottom: 8px;
-}
-.peer-picker-sub {
-    font-size: 13px;
-    color: #475569;
-    margin-bottom: 14px;
-    font-style: italic;
-}
-
-/* ── 27. SENS TABLE OVERRIDES ─────────────────────────────── */
-.sens-outer { border: 2px solid rgba(0,51,153,0.15) !important; border-radius: 16px !important; }
-.sens-table { font-family: "EB Garamond", Georgia, serif !important; }
-.sens-table thead th { background: #001a5c !important; }
-
-/* ── 28. FOOTER BANNER ────────────────────────────────────── */
-.footer {
-    text-align: center;
-    padding: 24px;
-    margin-top: 40px;
-    color: #5a7099 !important;
-    font-size: 13px;
-    border-top: 1px solid rgba(0,51,153,0.10);
-    font-style: italic;
-}
-.footer b { color: #003399 !important; font-style: normal; }
-
-</style>
-''', unsafe_allow_html=True)
-
-st.markdown('''
-<div class="fbc-page-header">
-    <span class="fbc-page-header-icon">🏦</span>
-    <span class="fbc-page-header-title">FBC Valuation Dashboard</span>
-    <span class="fbc-badge">FBC Securities</span>
-    <div class="fbc-page-header-sub">Investment Research & Valuation System — FBC Securities</div>
-</div>
-''', unsafe_allow_html=True)
-st.markdown("""
-<style>
-
-/* =========================================================
-   FBC CLEAN SECTION HEADER (NO SUBTITLE, NO STEPS)
-   ========================================================= */
-
-.fbc-section {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-
-    padding: 16px 22px;
-    margin: 28px 0 18px 0;
-
-    background: linear-gradient(
-        135deg,
-        rgba(0, 51, 153, 0.08),
-        rgba(245, 180, 0, 0.05)
-    );
-
-    border-left: 6px solid #003399;
-    border-radius: 14px;
-
-    box-shadow: 0 4px 14px rgba(0, 26, 92, 0.08);
-}
-
-/* Left indicator (circle like your UI) */
-.fbc-section {
-    display: block;
-    padding: 16px 0;
-    margin: 28px 0 18px 0;
-    border-bottom: 2px solid rgba(0,51,153,0.15);
-    transition: all 0.25s ease;
-}
-
-/* animated underline */
-.fbc-section-title::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    bottom: -6px;
-    width: 40px;
-    height: 3px;
-    background: #003399;
-    transition: width 0.3s ease;
-}
-
-.fbc-section:hover .fbc-section-title::after {
-    width: 100%;
-}
-
-/* Title only */
-.fbc-section-title {
-    font-family: "Playfair Display", serif !important;
-    font-size: 21px;
-    font-weight: 700;
-    font-style: italic;
-    color: #001a5c !important;
-    letter-spacing: -0.01em;
-    position: relative;
-}
-
-/* Gold underline */
-.fbc-section-title::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    bottom: -6px;
-    width: 45px;
-    height: 3px;
-
-    background: linear-gradient(90deg, #f5b400, #ffcc33);
-    border-radius: 2px;
-
-    transition: width 0.35s ease;
-}
-
-/* Smooth expand on hover */
-.fbc-section:hover .fbc-section-title::after {
-    width: 100%;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ────────────────────────────────────────────────────────────────
-
-
-# ------------------------------------------------------------
-# STYLES (FIX SIDEBAR ICON + NICE COLLAPSE BUTTON)
-# ------------------------------------------------------------
-CUSTOM_STYLE = """
-<style>
-/* ================================================================
-   FBC DESIGN SYSTEM  v2.0
-   ================================================================ */
-
-/* ── 1. FONTS ─────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Material+Icons');
-@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined');
-
-html, body, .stApp, .block-container,
-p, div, label,
-h1, h2, h3, h4, h5, h6,
-li, ul, ol, a, small,
-.stDataFrame, .stTable {
-  font-family: Georgia, "Times New Roman", serif !important;
-}
-
-/* ── 2. SIDEBAR ───────────────────────────────────────── */
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #002080 0%, #001040 100%) !important;
-    border-right: 1px solid rgba(255,255,255,0.12) !important;
-    backdrop-filter: blur(10px) !important;
-}
-section[data-testid="stSidebar"] * { color: #e8f0ff !important; }
-section[data-testid="stSidebar"] h1,
-section[data-testid="stSidebar"] h2,
-section[data-testid="stSidebar"] h3 {
+    font-size: 20px; font-weight: 800; margin-left: 14px;
     color: #ffffff !important;
-    letter-spacing: 0.02em !important;
+    font-family: "Playfair Display", serif !important;
 }
-section[data-testid="stSidebar"] .block-container {
-    padding-top: 1rem !important;
-}
-
-/* sidebar nav links */
-section[data-testid="stSidebar"] a {
-    color: #b8d0ff !important;
-    transition: color 0.15s !important;
-}
-section[data-testid="stSidebar"] a:hover {
-    color: #f5b400 !important;
+.user-badge {
+    margin-left: auto;
+    background: rgba(245,180,0,0.20);
+    border: 1px solid rgba(245,180,0,0.50);
+    color: #f5c842 !important;
+    font-size: 13px; font-weight: 700;
+    padding: 5px 14px; border-radius: 999px;
+    font-family: "EB Garamond", serif !important;
 }
 
-/* ── 3. SIDEBAR COLLAPSE BUTTON ───────────────────────── */
-.material-icons,
-span.material-icons,
-i.material-icons,
-.material-symbols-outlined,
-[data-testid="stSidebarCollapseButton"] span,
-[data-testid="stSidebarCollapseButton"] i {
-    font-family: "Material Icons", "Material Symbols Outlined" !important;
-    font-weight: normal !important;
-    font-style: normal !important;
-    letter-spacing: normal !important;
-    text-transform: none !important;
-    direction: ltr !important;
-    -webkit-font-feature-settings: 'liga' !important;
-    -webkit-font-smoothing: antialiased !important;
-}
-[data-testid="stSidebarCollapseButton"] button {
-    background: linear-gradient(135deg, #003399, #0044cc) !important;
-    border: 1px solid rgba(255,255,255,0.20) !important;
-    border-radius: 50% !important;
-    width: 44px !important; height: 44px !important;
-    box-shadow: 0 4px 14px rgba(0,51,153,0.45) !important;
-    transition: all 0.2s ease !important;
-}
-[data-testid="stSidebarCollapseButton"] button:hover {
-    background: linear-gradient(135deg, #0044cc, #0055ee) !important;
-    transform: translateY(-1px) scale(1.05) !important;
-    box-shadow: 0 8px 20px rgba(0,51,153,0.5) !important;
-}
-[data-testid="stSidebarCollapseButton"] svg {
-    width: 22px !important; height: 22px !important;
-    fill: white !important;
-}
-
-/* ── 4. PAGE HEADER BANNER ────────────────────────────── */
+/* ── PAGE HEADER ── */
 .fbc-page-header {
-    background: linear-gradient(135deg, #002080 0%, #003399 55%, #0044cc 100%);
-    border-radius: 16px;
-    padding: 22px 28px;
-    margin-bottom: 24px;
-    border: 1px solid rgba(255,255,255,0.10);
-    box-shadow: 0 8px 30px rgba(0,32,128,0.30);
-    position: relative;
-    overflow: hidden;
-}
-.fbc-page-header::after {
-    content: "";
-    position: absolute;
-    right: -30px; top: -30px;
-    width: 160px; height: 160px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(245,180,0,0.18), transparent 65%);
-    pointer-events: none;
-}
-.fbc-page-header-icon {
-    font-size: 28px;
-    margin-right: 10px;
-    vertical-align: middle;
+    background: linear-gradient(135deg, #001a5c 0%, #003399 50%, #0044cc 100%);
+    border-radius: 18px; padding: 26px 32px; margin-bottom: 24px;
+    border-bottom: 3px solid #f5b400;
+    box-shadow: 0 12px 40px rgba(0,26,92,0.28);
 }
 .fbc-page-header-title {
-    font-size: 26px;
-    font-weight: 800;
+    font-family: "Playfair Display", serif !important;
+    font-size: 26px !important; font-weight: 900 !important;
     color: #ffffff !important;
-    display: inline;
-    vertical-align: middle;
 }
 .fbc-page-header-sub {
-    font-size: 14px;
-    color: rgba(255,255,255,0.78) !important;
-    margin-top: 6px;
-}
-.fbc-badge {
-    display: inline-block;
-    background: rgba(245,180,0,0.20);
-    border: 1px solid rgba(245,180,0,0.45);
-    color: #f5c842 !important;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    padding: 3px 10px;
-    border-radius: 999px;
-    margin-left: 10px;
-    vertical-align: middle;
-    text-transform: uppercase;
+    font-size: 14px; color: rgba(255,255,255,0.78) !important;
+    margin-top: 6px; font-style: italic;
 }
 
-/* ── 5. SECTION HEADINGS ──────────────────────────────── */
-.fbc-section-heading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 28px 0 14px 0;
-    padding-bottom: 6px;
-    border-bottom: 2px solid transparent;
-    border-image: linear-gradient(90deg, #003399, #f5b400 60%, transparent) 1;
-}
-.fbc-section-heading-text {
-    font-size: 17px;
-    font-weight: 700;
-    color: #002266 !important;
-    letter-spacing: 0.01em;
-}
-.fbc-section-heading-step {
-    background: #003399;
-    color: white !important;
-    font-size: 12px;
-    font-weight: 800;
-    width: 26px; height: 26px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-}
-
-/* ── 6. CARD / PANEL ──────────────────────────────────── */
-.fbc-card {
-    background: #ffffff;
-    border: 1px solid rgba(0,51,153,0.10);
-    border-left: 5px solid #003399;
-    border-radius: 14px;
-    padding: 18px 20px;
-    margin-bottom: 16px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
-    transition: box-shadow 0.2s, transform 0.2s;
-}
-.fbc-card:hover {
-    box-shadow: 0 8px 24px rgba(0,51,153,0.14);
-    transform: translateY(-2px);
-}
-.fbc-card h3, .fbc-card h4 {
-    color: #002266 !important;
-    margin: 0 0 8px 0;
-}
-
-/* sub-card (nested) */
-.fbc-subcard {
-    background: rgba(0,51,153,0.03);
-    border: 1px solid rgba(0,51,153,0.10);
-    border-radius: 12px;
-    padding: 14px 16px;
-    margin-top: 10px;
-}
-
-/* ── 7. KPI METRIC CARDS ──────────────────────────────── */
-.fbc-kpi {
-    background: linear-gradient(135deg, #f0f5ff, #fff8e6);
-    border: 1px solid rgba(0,51,153,0.12);
-    border-radius: 14px;
-    padding: 14px 16px;
-    text-align: center;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.05);
-}
-.fbc-kpi-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #5a7099 !important;
-    margin-bottom: 4px;
-}
-.fbc-kpi-value {
-    font-size: 22px;
-    font-weight: 800;
-    color: #002266 !important;
-    line-height: 1.2;
-}
-.fbc-kpi-unit {
-    font-size: 12px;
-    color: #7a90b8 !important;
-    margin-top: 2px;
-}
-
-/* ── 8. RESET / UTILITY CARDS ─────────────────────────── */
-.fbc-reset-card {
-    background: linear-gradient(135deg, #003399 0%, #0055cc 100%);
-    padding: 20px 24px;
-    border-radius: 14px;
-    color: white !important;
-    box-shadow: 0 6px 18px rgba(0,51,153,0.25);
-    margin-bottom: 20px;
-}
-.fbc-reset-title  { font-size: 18px; font-weight: 700; margin-bottom: 4px; color: white !important; }
-.fbc-reset-sub    { font-size: 13px; opacity: 0.88; margin-bottom: 12px; color: white !important; }
-
-/* ── 9. BUTTONS ───────────────────────────────────────── */
-/* Primary action buttons */
-.stButton > button[kind="primary"],
-.stButton > button {
-    background: linear-gradient(135deg, #003399, #0044cc) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 10px !important;
-    font-weight: 700 !important;
-    font-family: Georgia, serif !important;
-    padding: 9px 18px !important;
-    transition: all 0.2s ease !important;
-    box-shadow: 0 3px 10px rgba(0,51,153,0.25) !important;
-}
-.stButton > button:hover {
-    background: linear-gradient(135deg, #0044cc, #0055ee) !important;
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 18px rgba(0,51,153,0.35) !important;
-}
-
-/* Gold reset/generate button override */
-.fbc-reset-btn .stButton > button {
-    background: linear-gradient(135deg, #f5b400, #ffd040) !important;
-    color: #002266 !important;
-    box-shadow: 0 3px 10px rgba(245,180,0,0.30) !important;
-}
-.fbc-reset-btn .stButton > button:hover {
-    background: linear-gradient(135deg, #ffd040, #ffe070) !important;
-    box-shadow: 0 6px 18px rgba(245,180,0,0.40) !important;
-}
-
-/* Download buttons */
-.stDownloadButton > button {
-    background: linear-gradient(135deg, #003399, #0044cc) !important;
-    color: white !important;
-    border-radius: 10px !important;
-    font-weight: 700 !important;
-    border: none !important;
-    transition: all 0.2s ease !important;
-}
-.stDownloadButton > button:hover {
-    background: linear-gradient(135deg, #0044cc, #0055ee) !important;
-    transform: translateY(-1px) !important;
-}
-
-/* ── 10. INPUTS ───────────────────────────────────────── */
-.stNumberInput input, .stTextInput input, .stSelectbox select {
-    border: 1px solid rgba(0,51,153,0.20) !important;
-    border-radius: 8px !important;
-    font-family: Georgia, serif !important;
-    transition: border-color 0.15s !important;
-}
-.stNumberInput input:focus, .stTextInput input:focus {
-    border-color: #003399 !important;
-    box-shadow: 0 0 0 2px rgba(0,51,153,0.12) !important;
-}
-
-/* ── 11. TABS ─────────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    border-bottom: 2px solid rgba(0,51,153,0.15);
-}
-.stTabs [data-baseweb="tab"] {
-    border-radius: 10px 10px 0 0 !important;
-    font-weight: 600 !important;
-    font-family: Georgia, serif !important;
-    color: #5a7099 !important;
-    padding: 8px 18px !important;
-    transition: all 0.15s !important;
-}
-.stTabs [aria-selected="true"] {
-    background: #003399 !important;
-    color: white !important;
-}
-
-/* ── 12. EXPANDERS ────────────────────────────────────── */
-.streamlit-expanderHeader {
-    font-weight: 700 !important;
-    color: #002266 !important;
-    font-family: Georgia, serif !important;
-    border-radius: 8px !important;
-    background: rgba(0,51,153,0.04) !important;
-    padding: 10px 14px !important;
-}
-
-/* ── 13. METRICS (st.metric) ──────────────────────────── */
-[data-testid="metric-container"] {
-    background: linear-gradient(135deg, #f0f5ff, #fff8e6) !important;
-    border: 1px solid rgba(0,51,153,0.12) !important;
-    border-radius: 14px !important;
-    padding: 14px 16px !important;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.05) !important;
-}
-[data-testid="metric-container"] label {
-    font-size: 11px !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.08em !important;
-    text-transform: uppercase !important;
-    color: #5a7099 !important;
-}
-[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    font-size: 22px !important;
-    font-weight: 800 !important;
-    color: #002266 !important;
-}
-
-/* ── 14. ALERTS & INFO BOXES ──────────────────────────── */
-.stAlert {
-    border-radius: 12px !important;
-    font-family: Georgia, serif !important;
-}
-
-/* ── 15. SCROLLBAR ────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f0f4ff; border-radius: 999px; }
-::-webkit-scrollbar-thumb { background: #003399; border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: #0044cc; }
-
-/* ── 16. FOOTER ───────────────────────────────────────── */
-.fbc-footer {
-    text-align: center;
-    padding: 22px;
-    margin-top: 40px;
-    color: #5a7099 !important;
-    font-size: 13px;
-    border-top: 1px solid rgba(0,51,153,0.10);
-}
-.fbc-footer b { color: #003399 !important; }
-
-/* ── 17. FEATURE CARDS (dashboard) ───────────────────── */
+/* ── FEATURE CARDS ── */
 .feature-box {
-    background: #ffffff;
-    padding: 20px 22px;
-    border-radius: 14px;
-    border-left: 6px solid #003399;
+    background: #ffffff; padding: 20px 22px;
+    border-radius: 14px; border-left: 6px solid #003399;
     box-shadow: 0 4px 12px rgba(0,0,0,0.07);
-    transition: all 0.25s ease;
-    margin-bottom: 14px;
+    transition: all 0.25s ease; margin-bottom: 14px;
 }
 .feature-box:hover {
     background: #f4f8ff;
     box-shadow: 0 8px 22px rgba(0,51,153,0.16);
     transform: translateY(-3px);
 }
-.feature-icon {
-    font-size: 22px;
-    margin-right: 8px;
-}
+.feature-icon { font-size: 22px; margin-right: 8px; }
 
-/* ── 18. SMALL UTILITIES ──────────────────────────────── */
-.small-note {
-    font-size: 12px;
-    color: #7a90b8 !important;
-    font-style: italic;
+/* ── MISC ── */
+[data-testid="metric-container"] {
+    background: linear-gradient(135deg, #f0f5ff, #fff8e6) !important;
+    border: 1px solid rgba(0,51,153,0.12) !important;
+    border-radius: 14px !important;
+    padding: 14px 16px !important;
 }
-.gold-accent { color: #c48a00 !important; font-weight: 700; }
-.blue-accent  { color: #003399 !important; font-weight: 700; }
-
-/* ── 19. DATAFRAMES ───────────────────────────────────── */
-.stDataFrame thead th {
-    background: #003399 !important;
-    color: white !important;
-    font-weight: 700 !important;
+.stDataFrame thead th { background: #003399 !important; color: white !important; }
+.fbc-divider { border: none; border-top: 1px solid rgba(0,51,153,0.12); margin: 18px 0; }
+.fbc-footer {
+    text-align: center; padding: 22px; margin-top: 40px;
+    color: #5a7099 !important; font-size: 13px;
+    border-top: 1px solid rgba(0,51,153,0.10);
 }
-.stDataFrame tbody tr:hover td {
-    background: rgba(0,51,153,0.04) !important;
+.fbc-footer b { color: #003399 !important; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #003399; border-radius: 999px; }
+.stTabs [data-baseweb="tab"] {
+    border-radius: 10px 10px 0 0 !important; font-weight: 600 !important;
+    font-family: Georgia, serif !important; color: #5a7099 !important;
 }
-
-/* ── 20. TOP NAV (dashboard) ──────────────────────────── */
-.top-nav {
-    position: fixed; top: 0; left: 0; width: 100%; height: 64px;
-    background: linear-gradient(90deg, #002080, #003399);
-    color: white; display: flex; align-items: center;
-    padding: 0 28px; z-index: 99999;
-    box-shadow: 0 3px 12px rgba(0,0,0,0.30);
-}
-.top-title {
-    font-size: 24px; 
-    font-weight: 800; 
-    margin-left: 14px; 
-    letter-spacing: 0.01em;
-    color: black !important;
-    font-family: "Playfair Display", serif !important;
-}
-
+.stTabs [aria-selected="true"] { background: #003399 !important; color: white !important; }
 </style>
-"""
-
-st.markdown(CUSTOM_STYLE, unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# TOP NAVIGATION BAR
-# ------------------------------------------------------------
-LOGO_PATH = Path("assets") / "fbc log.png"
-
-st.markdown("<div class='top-nav'>", unsafe_allow_html=True)
-
-if LOGO_PATH.exists():
-    st.image(str(LOGO_PATH), width=200)
-
-st.markdown("<span class='top-title'>FBC Valuation Dashboard</span>", unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# SIDEBAR
-# ------------------------------------------------------------
-with st.sidebar:
-    st.markdown("### 📂 Navigation")
-    st.markdown("""
-    - 📊 DCF Model  
-    - 💰 DDM  
-    - 📈 Comparables  
-    - 🏦 Banking (RIM)  
-    - 🧾 Summary  
-    - 🧭 USER GUIDE
-    """)
-
-# ------------------------------------------------------------
-# MAIN CONTENT
-# ------------------------------------------------------------
-
-
-section("Welcome to the FBC Investment Valuation System")
-section("Explore valuation models using the sidebar or the quick-access buttons below.")
-st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
-colA, colB, colC, colD, colE, colF = st.columns(6)
-
-if colA.button("📊 DCF Model", use_container_width=True):
-    st.switch_page("pages/1_DCF.py")
-
-if colB.button("💰 Dividend Discount Model", use_container_width=True):
-    st.switch_page("pages/3_DDM.py")
-
-if colC.button("📈 Comparables", use_container_width=True):
-    st.switch_page("pages/2_COMPARABLES.py")
-
-if colD.button("🏦 Banking (RIM)", use_container_width=True):
-    st.switch_page("pages/4_BANKING.py")
-
-if colE.button("🧾 Summary", use_container_width=True):
-    st.switch_page("pages/5_SUMMARY.py")
-
-if colF.button("🧭 User Guide", use_container_width=True):
-    st.switch_page("pages/6_USER GUIDE.py")
-
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("""
-    <div class="feature-box">
-        <span class="feature-icon">📊</span>
-        <b>DCF Forecast + Valuation</b><br>
-        Multi-year FCFF forecasting, WACC, terminal value and intrinsic equity value.
-    </div>""", unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="feature-box">
-        <span class="feature-icon">💰</span>
-        <b>Dividend Discount Model (DDM)</b><br>
-        Gordon Growth + Multi-Stage with required equity returns.
-    </div>""", unsafe_allow_html=True)
-
-with col2:
-    st.markdown("""
-    <div class="feature-box">
-        <span class="feature-icon">📈</span>
-        <b>Comparables Valuation</b><br>
-        EV/EBITDA, P/E, and P/B multiple benchmarking.
-    </div>""", unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="feature-box">
-        <span class="feature-icon">🏦</span>
-        <b>Banking Valuation (Residual Income)</b><br>
-        BVPS, residual income, terminal value and implied equity value.
-    </div>""", unsafe_allow_html=True)
-
-st.markdown("</div>", unsafe_allow_html=True)
-# ------------------------------------------------------------
-# FOOTER
-# ------------------------------------------------------------
-st.markdown("""
-<div class="footer">
-    Powered by <b>FBC Securities</b> • Investment Research & Valuation Dashboard
-</div>
 """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SESSION STATE
+# ══════════════════════════════════════════════════════════════════
+for key, default in [
+    ("authenticated", False),
+    ("user", None),
+    ("auth_mode", "login"),          # 'login' | 'register' | 'forgot'
+    ("reset_step", 1),               # 1=enter username  2=answer  3=new password
+    ("reset_username", ""),
+    ("active_project_id",   None),   # ID of the currently open project
+    ("active_project_name", ""),     # Display name for the active project
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+
+# ══════════════════════════════════════════════════════════════════
+# HIDE SIDEBAR ON AUTH PAGES
+# ══════════════════════════════════════════════════════════════════
+def hide_sidebar():
+    st.markdown("""
+        <style>
+            section[data-testid="stSidebar"]  { display: none !important; }
+            [data-testid="collapsedControl"]   { display: none !important; }
+        </style>
+    """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECURITY QUESTIONS LIST
+# ══════════════════════════════════════════════════════════════════
+SECURITY_QUESTIONS = [
+    "Select a security question…",
+    "What is the name of your primary school?",
+    "What is your mother's maiden name?",
+    "What was the name of your first pet?",
+    "What city were you born in?",
+    "What is your favourite book?",
+    "What was the make of your first car?",
+    "What is the company name?",
+]
+
+
+# ══════════════════════════════════════════════════════════════════
+# AUTH PAGE — LOGIN
+# ══════════════════════════════════════════════════════════════════
+def show_login():
+    hide_sidebar()
+    _, col, _ = st.columns([1, 1.5, 1])
+    with col:
+        LOGO_PATH = Path("assets") / "fbc log.png"
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width=150)
+
+        st.markdown("""
+            <p class="auth-title">FBC Valuation System</p>
+            <p class="auth-subtitle">Investment Research & Valuation Dashboard</p>
+            <hr class="auth-divider">
+        """, unsafe_allow_html=True)
+
+        username = st.text_input("👤  Username", key="li_user", placeholder="Enter your username")
+        password = st.text_input("🔒  Password", type="password", key="li_pass", placeholder="Enter your password")
+
+        err = st.empty()
+
+        if st.button("Sign In  →", use_container_width=True, key="btn_login"):
+            if not username or not password:
+                err.error("Please enter both username and password.")
+            else:
+                user = authenticate(username, password)
+                if user:
+                    st.session_state.authenticated = True
+                    st.session_state.user = user
+                    st.rerun()
+                else:
+                    err.error("❌  Invalid username or password.")
+
+        st.markdown('<hr class="auth-divider">', unsafe_allow_html=True)
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("📝 Create Account", use_container_width=True, key="go_register"):
+                st.session_state.auth_mode = "register"
+                st.rerun()
+        with col_b:
+            if st.button("🔑 Forgot Password", use_container_width=True, key="go_forgot"):
+                st.session_state.auth_mode = "forgot"
+                st.session_state.reset_step = 1
+                st.session_state.reset_username = ""
+                st.rerun()
+
+        st.markdown("""
+            <p style="text-align:center; font-size:12px; color:#9aabcc;
+                      font-style:italic; margin-top:16px;">
+               Authorised personnel only &nbsp;·&nbsp; FBC Securities
+            </p>
+        """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# AUTH PAGE — REGISTER
+# ══════════════════════════════════════════════════════════════════
+def show_register():
+    hide_sidebar()
+    _, col, _ = st.columns([1, 1.5, 1])
+    with col:
+        st.markdown("""
+            <p class="auth-title">Create Account</p>
+            <p class="auth-subtitle">Fill in the details below to register</p>
+            <hr class="auth-divider">
+        """, unsafe_allow_html=True)
+
+        full_name = st.text_input("🪪  Full Name",    key="reg_name",  placeholder="e.g. Tafara Moyo")
+        username  = st.text_input("👤  Username",     key="reg_user",  placeholder="Choose a username (min 3 chars)")
+        email     = st.text_input("✉️  Email",        key="reg_email", placeholder="your@email.com  (optional)")
+        password  = st.text_input("🔒  Password",     type="password", key="reg_pass",  placeholder="Min 6 characters")
+        confirm   = st.text_input("🔒  Confirm Password", type="password", key="reg_conf", placeholder="Repeat password")
+
+        st.markdown("**🛡️ Security Question** *(used to reset your password)*")
+        sec_q = st.selectbox("", SECURITY_QUESTIONS, key="reg_sq")
+        sec_a = st.text_input("Your Answer", key="reg_sa", placeholder="Answer (not case-sensitive)")
+
+        err = st.empty()
+
+        if st.button("Create Account  →", use_container_width=True, key="btn_register"):
+            if password != confirm:
+                err.error("Passwords do not match.")
+            elif sec_q == SECURITY_QUESTIONS[0]:
+                err.error("Please select a security question.")
+            else:
+                ok, msg = register_user(
+                    username=username, password=password,
+                    full_name=full_name, email=email,
+                    security_question=sec_q, security_answer=sec_a,
+                )
+                if ok:
+                    err.success(msg)
+                    import time; time.sleep(1.5)
+                    st.session_state.auth_mode = "login"
+                    st.rerun()
+                else:
+                    err.error(msg)
+
+        st.markdown('<hr class="auth-divider">', unsafe_allow_html=True)
+        if st.button("← Back to Sign In", use_container_width=True, key="back_login_r"):
+            st.session_state.auth_mode = "login"
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════
+# AUTH PAGE — FORGOT PASSWORD  (3-step)
+# ══════════════════════════════════════════════════════════════════
+def show_forgot():
+    hide_sidebar()
+    _, col, _ = st.columns([1, 1.5, 1])
+    with col:
+        st.markdown("""
+            <p class="auth-title">Reset Password</p>
+            <p class="auth-subtitle">Answer your security question to reset</p>
+            <hr class="auth-divider">
+        """, unsafe_allow_html=True)
+
+        step = st.session_state.reset_step
+        err = st.empty()
+
+        # ── Step 1: Enter username ─────────────────────────────────
+        if step == 1:
+            uname = st.text_input("👤  Username", key="fp_user", placeholder="Enter your username")
+            if st.button("Continue  →", use_container_width=True, key="fp_next1"):
+                if not uname:
+                    err.error("Please enter your username.")
+                else:
+                    q = get_security_question(uname)
+                    if q:
+                        st.session_state.reset_username = uname
+                        st.session_state.reset_step = 2
+                        st.rerun()
+                    else:
+                        err.error("Username not found or account is inactive.")
+
+        # ── Step 2: Answer security question ──────────────────────
+        elif step == 2:
+            uname = st.session_state.reset_username
+            q = get_security_question(uname)
+            st.info(f"🛡️  Security question for **{uname}**:\n\n*{q}*")
+            answer = st.text_input("Your Answer", key="fp_ans", placeholder="Enter your answer")
+            if st.button("Verify Answer  →", use_container_width=True, key="fp_next2"):
+                if not answer:
+                    err.error("Please enter your answer.")
+                elif verify_security_answer(uname, answer):
+                    st.session_state.reset_step = 3
+                    st.rerun()
+                else:
+                    err.error("❌  Incorrect answer. Please try again.")
+
+        # ── Step 3: Set new password ───────────────────────────────
+        elif step == 3:
+            st.success("✅  Identity verified! Set your new password below.")
+            new_pass = st.text_input("🔒  New Password",     type="password", key="fp_new",  placeholder="Min 6 characters")
+            confirm  = st.text_input("🔒  Confirm Password", type="password", key="fp_conf", placeholder="Repeat new password")
+            if st.button("Reset Password  →", use_container_width=True, key="fp_reset"):
+                if not new_pass:
+                    err.error("Please enter a new password.")
+                elif new_pass != confirm:
+                    err.error("Passwords do not match.")
+                else:
+                    ok, msg = reset_password(st.session_state.reset_username, new_pass)
+                    if ok:
+                        err.success(msg)
+                        import time; time.sleep(1.5)
+                        st.session_state.reset_step = 1
+                        st.session_state.reset_username = ""
+                        st.session_state.auth_mode = "login"
+                        st.rerun()
+                    else:
+                        err.error(msg)
+
+        st.markdown('<hr class="auth-divider">', unsafe_allow_html=True)
+        if st.button("← Back to Sign In", use_container_width=True, key="back_login_f"):
+            st.session_state.auth_mode = "login"
+            st.session_state.reset_step = 1
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════
+# DASHBOARD
+# ══════════════════════════════════════════════════════════════════
+def show_dashboard():
+    user = st.session_state.user
+    LOGO_PATH = Path("assets") / "fbc log.png"
+
+    # ── Autosave active project ───────────────────────────────────
+    from auth import autosave_project as _autosave
+    _autosave(st.session_state)
+
+    # ── Top nav ───────────────────────────────────────────────────
+    st.markdown("<div class='top-nav'>", unsafe_allow_html=True)
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=160)
+    st.markdown(
+        f"<span class='top-title'>FBC Valuation Dashboard</span>"
+        f"<span class='user-badge'>👤 {user['full_name'] or user['username']}  "
+        f"[{user['role'].upper()}]</span>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Sidebar ───────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("### 🧑‍💼 Analyst Profile")
+
+        st.markdown("---")
+        st.markdown(f"**Signed in as:** {user['username']}")
+        st.markdown(f"*Role: {user['role']}*")
+        st.markdown("---")
+        if st.button("🚪 Sign Out", use_container_width=True, key="signout"):
+            from auth import save_project_session as _save_proj
+            _pid = st.session_state.get("active_project_id")
+            if _pid:
+                _save_proj(_pid, dict(st.session_state))
+            for _k in list(st.session_state.keys()):
+                del st.session_state[_k]
+            st.rerun()
+
+    # ── Page header ───────────────────────────────────────────────
+    st.markdown(f"""
+        <div class="fbc-page-header">
+            <span class="fbc-page-header-title">
+                🏛️ Welcome to FBC Investment Valuation System
+            </span>
+            <p class="fbc-page-header-sub">
+                Good day, {user['full_name'] or user['username']} —
+                select a valuation model to get started.
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ── Active project banner ─────────────────────────────────────
+    active_id   = st.session_state.get("active_project_id")
+    active_name = st.session_state.get("active_project_name", "")
+    if active_id:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(90deg, #001a5c, #003399);
+                border-radius: 12px; padding: 14px 20px; margin-bottom: 18px;
+                border-left: 5px solid #f5b400;">
+                <div style="color:#ffffff !important;
+                            font-family:'Playfair Display',serif;
+                            font-size:16px; font-weight:700;">
+                    🏢 Active Project: {active_name}
+                </div>
+                <div style="color:rgba(255,255,255,0.72) !important;
+                            font-size:12px; font-style:italic;">
+                    All model inputs are being saved to this project.
+                    Visit <b>My Projects</b> to save or switch.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info(
+            "💡 No project is active. Go to **📁 My Projects** to create or resume "
+            "a company valuation — your work will be saved automatically."
+        )
+
+    # ── Quick-access buttons  ← FIXED PAGE PATHS ─────────────────
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
+    colP, colA, colB, colC, colD, colE, colF = st.columns(7)
+
+    if colP.button("📁 My Projects",             use_container_width=True): st.switch_page("pages/projects.py")
+    if colA.button("📊 DCF Model",               use_container_width=True): st.switch_page("pages/dcf.py")
+    if colB.button("💰 Dividend Discount Model",  use_container_width=True): st.switch_page("pages/DDM.py")
+    if colC.button("📈 Comparables",             use_container_width=True): st.switch_page("pages/comparables.py")
+    if colD.button("🏦 Banking (RIM)",            use_container_width=True): st.switch_page("pages/BANKING.py")
+    if colE.button("🧾 Summary",                  use_container_width=True): st.switch_page("pages/summary.py")
+    if colF.button("🧭 User Guide",               use_container_width=True): st.switch_page("pages/user_guide.py")
+
+    st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
+
+    # ── Feature cards ─────────────────────────────────────────────
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        <div class="feature-box">
+            <span class="feature-icon">📊</span>
+            <b>DCF Forecast + Valuation</b><br>
+            Multi-year FCFF forecasting, WACC, terminal value and intrinsic equity value.
+        </div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="feature-box">
+            <span class="feature-icon">💰</span>
+            <b>Dividend Discount Model (DDM)</b><br>
+            Gordon Growth + Multi-Stage with required equity returns.
+        </div>""", unsafe_allow_html=True)
+    with col2:
+        st.markdown("""
+        <div class="feature-box">
+            <span class="feature-icon">📈</span>
+            <b>Comparables Valuation</b><br>
+            EV/EBITDA, P/E, and P/B multiple benchmarking.
+        </div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="feature-box">
+            <span class="feature-icon">🏦</span>
+            <b>Banking Valuation (Residual Income)</b><br>
+            BVPS, residual income, terminal value and implied equity value.
+        </div>""", unsafe_allow_html=True)
+
+    # ── Footer ────────────────────────────────────────────────────
+    st.markdown("""
+    <div class="fbc-footer">
+        Powered by <b>FBC Securities</b> · Investment Research &amp; Valuation Dashboard
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# ROUTER
+# ══════════════════════════════════════════════════════════════════
+if st.session_state.authenticated:
+    show_dashboard()
+else:
+    mode = st.session_state.auth_mode
+    if mode == "register":
+        show_register()
+    elif mode == "forgot":
+        show_forgot()
+    else:
+        show_login()
