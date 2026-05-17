@@ -605,12 +605,12 @@ def show_dashboard():
     colP, colA, colB, colC, colD, colE, colF = st.columns(7)
 
     if colP.button("📁 My Projects",             use_container_width=True): st.switch_page("pages/projects.py")
-    if colA.button("📊 DCF Model",               use_container_width=True): st.switch_page("pages/dcf.py")
-    if colB.button("💰 Dividend Discount Model",  use_container_width=True): st.switch_page("pages/DDM.py")
-    if colC.button("📈 Comparables",             use_container_width=True): st.switch_page("pages/comparables.py")
-    if colD.button("🏦 Banking (RIM)",            use_container_width=True): st.switch_page("pages/BANKING.py")
-    if colE.button("🧾 Summary",                  use_container_width=True): st.switch_page("pages/summary.py")
-    if colF.button("🧭 User Guide",               use_container_width=True): st.switch_page("pages/user_guide.py")
+    if colA.button("📊 DCF Model",               use_container_width=True): st.switch_page("pages/1_DCF.py")
+    if colB.button("💰 Dividend Discount Model",  use_container_width=True): st.switch_page("pages/3_DDM.py")
+    if colC.button("📈 Comparables",             use_container_width=True): st.switch_page("pages/2_COMPARABLES.py")
+    if colD.button("🏦 Banking (RIM)",            use_container_width=True): st.switch_page("pages/4_BANKING.py")
+    if colE.button("🧾 Summary",                  use_container_width=True): st.switch_page("pages/5_SUMMARY.py")
+    if colF.button("🧭 User Guide",               use_container_width=True): st.switch_page("pages/6_USER GUIDE.py")
 
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
