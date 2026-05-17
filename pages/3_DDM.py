@@ -8,6 +8,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import base64
 
+# Autosave removed: use Save Now button in Projects page
 def step(title: str, number: int):
     st.markdown(
         f"""
@@ -58,6 +59,33 @@ add_watermark()
 # PAGE CONFIG
 # ---------------------------------------------------------
 st.set_page_config(page_title="Dividend Discount Model (DDM)", layout="wide")
+
+# ── Auth guard ────────────────────────────────────────────────────
+if not st.session_state.get("authenticated"):
+    st.error("🔒 You must be signed in to access this page.")
+    st.info("Please return to the main page and sign in.")
+    if st.button("Go to Sign In", key="goto_signin_ddm"):
+        st.switch_page("app.py")
+    st.stop()
+
+# ── Sidebar with Sign Out ─────────────────────────────────────────
+_so_user = st.session_state.get("user") or {{}}
+with st.sidebar:
+    st.markdown("### 🧑‍💼 Analyst Profile")
+    st.markdown("---")
+    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
+    st.markdown(f"*Role: {_so_user.get('role', '')}*")
+    st.markdown("---")
+    if st.button("🚪 Sign Out", use_container_width=True, key="signout_ddm"):
+        from auth import save_project_session as _save_proj
+        _pid = st.session_state.get("active_project_id")
+        if _pid:
+            _save_proj(_pid, dict(st.session_state))
+        for _k in list(st.session_state.keys()):
+            del st.session_state[_k]
+        st.switch_page("app.py")
+
+
 
 # ─── FBC DESIGN SYSTEM ─────────────────────────────────────────
 st.markdown('''
@@ -902,7 +930,7 @@ with col1:
         "Start Year",
         value=int(st.session_state["ddm_start_year"]),
         step=1,
-        key="ddm_start_year_input",
+        format="%d",
     )
     st.session_state["ddm_start_year"] = int(start_year_input)
 
@@ -911,7 +939,7 @@ with col2:
         "End Year",
         value=int(st.session_state["ddm_end_year"]),
         step=1,
-        key="ddm_end_year_input",
+        format="%d",
     )
     st.session_state["ddm_end_year"] = int(end_year_input)
 
@@ -924,23 +952,26 @@ if start_year > end_year:
 
 years = list(range(start_year, end_year + 1))
 
-# Persistent dividend storage per year
+# Persistent dividend storage per year — plain_k is the single source of truth.
+# On project restore, saved plain_k values come back via session state.
+# We never use key= on dividend widgets to avoid Streamlit ownership conflicts.
 for y in years:
-    if f"ddm_div_{y}" not in st.session_state:
-        st.session_state[f"ddm_div_{y}"] = 0.01  # default once
+    plain_k = f"ddm_div_{y}"
+    if plain_k not in st.session_state:
+        st.session_state[plain_k] = 0.01  # first-time default
 
 step("Enter Dividends",2)
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 dividends = []
 for y in years:
+    plain_k = f"ddm_div_{y}"
     div = st.number_input(
         f"Dividend for {y}",
-        value=float(st.session_state[f"ddm_div_{y}"]),
+        value=float(st.session_state[plain_k]),
         step=0.00001,
         format="%.5f",
-        key=f"ddm_div_input_{y}",
     )
-    st.session_state[f"ddm_div_{y}"] = div
+    st.session_state[plain_k] = float(div)
     dividends.append(div)
 
 # Store full dividend history for AI / summary pages
@@ -997,15 +1028,21 @@ st.metric("Next year's dividend (D₁)", f"{D1:,.5f}")
 # ---------------------------------------------------------
 step("Cost of Equity Inputs", 5)
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
-# Pull live values from DCF page where possible
-rf = st.session_state.get("dcf_rf_pct", st.session_state.get("rf", 0.0)) / 100
-mrp = st.session_state.get("dcf_mrp_pct", st.session_state.get("erp", 0.0)) / 100
-tax_rate = (
-    st.session_state.get("dcf_tax_pct", st.session_state.get("tax_rate", 0.0)) / 100
-)
-unlevered_beta = st.session_state.get(
-    "dcf_unlevered_beta", st.session_state.get("unlevered_beta", 0.0)
-)
+# Pull saved DDM overrides first; fall back to DCF keys; then zero.
+# This preserves whatever the user typed in the override boxes below
+# across tab switches — even before a Save has been done.
+rf = st.session_state.get("ddm_saved_rf",
+     st.session_state.get("dcf_rf_pct",
+     st.session_state.get("rf", 0.0))) / 100
+mrp = st.session_state.get("ddm_saved_mrp",
+      st.session_state.get("dcf_mrp_pct",
+      st.session_state.get("erp", 0.0))) / 100
+tax_rate = st.session_state.get("ddm_saved_tax",
+           st.session_state.get("dcf_tax_pct",
+           st.session_state.get("tax_rate", 0.0))) / 100
+unlevered_beta = st.session_state.get("ddm_saved_beta",
+                 st.session_state.get("dcf_unlevered_beta",
+                 st.session_state.get("unlevered_beta", 0.0)))
 de_ratio = st.session_state.get("de_ratio", 0.0)
 
 # Store back normalised keys
@@ -1031,7 +1068,6 @@ if use_custom:
             value=float(unlevered_beta),
             step=0.001,
             format="%.4f",
-            key="ddm_unlevered_beta",
         )
 
         de_ratio = st.number_input(
@@ -1039,7 +1075,6 @@ if use_custom:
             value=float(de_ratio),
             step=0.001,
             format="%.4f",
-            key="ddm_de_ratio",
         )
 
     with cB:
@@ -1049,7 +1084,6 @@ if use_custom:
                 value=float(tax_rate * 100),
                 step=0.01,
                 format="%.2f",
-                key="ddm_tax_rate",
             )
             / 100
         )
@@ -1060,7 +1094,6 @@ if use_custom:
                 value=float(rf * 100),
                 step=0.01,
                 format="%.2f",
-                key="ddm_rf",
             )
             / 100
         )
@@ -1071,10 +1104,15 @@ if use_custom:
                 value=float(mrp * 100),
                 step=0.01,
                 format="%.2f",
-                key="ddm_erp",
             )
             / 100
         )
+
+    # Persist overrides so they survive tab switches without autosave
+    st.session_state["ddm_saved_rf"]   = rf   * 100
+    st.session_state["ddm_saved_mrp"]  = mrp  * 100
+    st.session_state["ddm_saved_tax"]  = tax_rate * 100
+    st.session_state["ddm_saved_beta"] = unlevered_beta
 
 # Save final values
 st.session_state["rf"] = rf
@@ -1148,15 +1186,16 @@ num_shares = st.number_input(
     value=float(st.session_state["num_shares"]),
     step=1000.0,
     format="%.0f",
-    key="ddm_num_shares",
     label_visibility="collapsed"
 )
+
+# ✅ Always persist num_shares immediately so Save / Resume works correctly
+#    regardless of whether P0 is valid yet.
+st.session_state["num_shares"] = float(num_shares)
 
 if num_shares > 0 and not np.isnan(P0):
     equity_value = P0 * num_shares
     st.success(f"Total Equity Value = **{equity_value:,.2f} USD**")
-
-    st.session_state["num_shares"] = float(num_shares)
     st.session_state["equity_value_ddm"] = float(equity_value)
 else:
     st.warning("Enter a valid number of shares to compute total equity value.")
