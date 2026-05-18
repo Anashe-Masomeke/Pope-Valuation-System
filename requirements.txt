@@ -12,3 +12,6 @@ html5lib
 beautifulsoup4
 yahooquery 
 html5lib
+xlsxwriter
+watchdog
+scipy
