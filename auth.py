@@ -21,7 +21,10 @@ import re as _re
 import datetime as _dt
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fbc_users.db")
+DB_PATH = os.environ.get(
+    "DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fbc_users.db")
+)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -537,9 +540,6 @@ _EXCLUDED_KEYS = {
     # Auth / identity
     "authenticated", "user", "auth_mode", "reset_step", "reset_username",
     "active_project_id", "active_project_name", "_autosave_last_ts",
-    # Init flags — excluded so the init block reruns on restore
-    # and properly re-seeds WACC params instead of being skipped.
-    "dcf_init", "dcf_timing_init", "bank_init",
     # Projects page UI
     "proj_signout", "btn_create_proj",
     "nc_company", "nc_ticker", "nc_sector", "nc_desc",
@@ -552,51 +552,30 @@ _EXCLUDED_KEYS = {
 }
 
 _WIDGET_SUFFIXES = (
-    # "_input" is intentionally NOT here.
-    # Keys like dcf_rf_pct_input, dcf_mrp_pct_input, dcf_tax_pct_input,
-    # dcf_unlevered_beta_input, dcf_terminal_g_pct_input,
-    # dcf_zim_avg_cost_debt_pct_input, dcf_rd_manual_input,
-    # dcf_forecast_years_input, num_shares_input, net_debt_input,
-    # book_equity_input MUST be saved and restored so Streamlit widgets
-    # display the correct saved values (not zero) after a project open.
-    # Any _input keys that should NOT be saved are in _EXACT_WIDGET_KEYS.
-    "_ui", "_radio", "_select", "_uploader",
+    "_input", "_ui", "_radio", "_select", "_uploader",
     "_widget", "_checkbox", "_editor", "_picker", "_multiselect",
 )
 
 _EXACT_WIDGET_KEYS = {
-    # ── DDM ──────────────────────────────────────────────────────────────────
     "ddm_de_ratio", "ddm_erp", "ddm_g_end", "ddm_g_start", "ddm_rf",
     "ddm_tax_rate", "ddm_unlevered_beta", "ddm_use_custom_params",
     "ddm_num_shares", "ddm_start_year_input", "ddm_end_year_input",
     "ddm_download_excel", "ddm_generate_excel",
-    # ── Banking — button keys only (no matching data key) ─────────────────
-    "bank_clear_btn", "bank_apply_beta_u_btn", "bank_reset_beta_u_btn",
-    # ── Banking numeric _input keys whose data lives in the "bank" dict ────
-    # The flat session keys bank_rf_pct_input etc. are pure widget keys;
-    # the actual values are stored in st.session_state["bank"]["ke_pct"] etc.
-    "bank_g_term_input", "bank_n_years_input", "bank_base_year_input",
-    "bank_de_beta_input", "bank_tax_beta_input", "bank_beta_u_input_box",
-    "bank_disc_uniform_input", "bank_eps_uniform_input", "bank_yoy_uniform_input",
+    "bank_clear_btn", "bank_g_term_input", "bank_n_years_input",
+    "bank_base_year_input", "bank_de_beta_input", "bank_tax_beta_input",
+    "bank_beta_u_input_box", "bank_disc_uniform_input",
+    "bank_eps_uniform_input", "bank_yoy_uniform_input",
     "bank_mrp_pct_input", "bank_rf_pct_input", "bank_zim_avg_cod_pct_input",
-    # ── Comparables / Summary ─────────────────────────────────────────────────
+    "net_debt_input", "book_equity_input", "target_company_input",
+    "live_peer_limit", "num_comps_input", "auto_peer_count_input",
     "bs_jump_radio", "cf_jump_radio", "np_end_locked", "np_start_locked",
     "discount_factor_widget",
     "comp_timing_base_manual", "comp_timing_base_manual_no_dcf", "comp_timing_choice",
-    # ── Download / action buttons ─────────────────────────────────────────────
     "dl_forecast_is_xlsx", "dl_full_dcf_model_btn", "gen_full_dcf_excel_btn",
     "use_selected_peers_btn", "toggle_capex_expander_btn",
     "reset_capex_exclusions_btn", "apply_auto_beta_btn",
-    "auto_apply_peers", "btn_comp_exp_0_debug_peer_search",
-    # ── Search / peer inputs ──────────────────────────────────────────────────
-    "live_peer_limit", "num_comps_input", "auto_peer_count_input",
-    "target_company_input",
-    # ── Keys intentionally NOT here (must be saved for widget restore) ────────
-    # dcf_rf_pct_input, dcf_mrp_pct_input, dcf_tax_pct_input,
-    # dcf_unlevered_beta_input, dcf_terminal_g_pct_input,
-    # dcf_zim_avg_cost_debt_pct_input, dcf_rd_manual_input,
-    # dcf_forecast_years_input, num_shares_input,
-    # net_debt_input, book_equity_input
+    "auto_apply_peers", "bank_apply_beta_u_btn", "bank_reset_beta_u_btn",
+    "btn_comp_exp_0_debug_peer_search",
 }
 
 _WIDGET_PREFIX_PAT = _re.compile(
@@ -745,55 +724,18 @@ _THIS_PAGE_SKIP = _re.compile(
     r"cancel_|ecn_|etk_|esec_|edes_|est_|"
     r"FormSubmitter|uploaded_|proj_signout|btn_create_proj|nc_)"
 )
-# Keys that hold DERIVED/COMPUTED state OR per-project data that must be
-# cleared on project switch so they are rebuilt / restored from the new
-# project's own DB rows.
-#
-# is_core_mapping, dcf_mapping, comps and all flat comp_* / inc_*_i keys
-# ARE in this list (or matched by _STALE_COMP_KEY_PAT).  Every project saves
-# its own mapping; clearing here ensures the new project's saved mapping is
-# loaded cleanly from the DB without any bleed-through from the old project.
+# Keys that hold parsed state and must be cleared so the page re-parses
+# the newly loaded file bytes from scratch
 _STALE_PARSE_KEYS = {
-    # Parsed DataFrames — must be rebuilt from the new project's Excel bytes
     "dcf_is_df", "dcf_bs_df", "dcf_cf_df",
     "dcf_is_base", "dcf_bs_base", "dcf_cf_base",
-    # Init flags — let them re-run so WACC params are re-seeded correctly
+    "dcf_mapping", "is_core_mapping",
     "dcf_init", "dcf_timing_init",
-    # Banking DataFrames
     "bank_is_df", "bank_bs_df", "bank_soce_df",
     "bank_is_base", "bank_bs_base", "bank_soce_base",
     "bank_init",
-    # Force the file uploader widget to reset so the new project's file shows
-    "dcf_uploader_key",
-    # FX / computed caches — derived from the project's specific file bytes
-    "dcf_fx_signature", "dcf_bs_fx_dirty",
-    "dcf_fx_raw", "dcf_yearly_fx", "dcf_bs_fx_rates",
-    # DCF page project-tracking key so it re-initialises for the new project
-    "_dcf_last_project_id",
-    # ── Comparables — must be cleared so the new project's own peers/mapping
-    #    are restored from DB instead of bleeding in from the previous project.
-    "comps", "comps_num",
-    "comps_ev_list", "comps_pb_list", "comps_pe_list",
-    "comps_inc_ev", "comps_inc_pb", "comps_inc_pe",
-    "comp_timing_base", "comp_timing_base_manual",
-    "comp_timing_base_manual_no_dcf", "comp_timing_choice",
-    "comp_use_timing_eb", "comp_use_timing_np",
-    "comp_use_timing_np_checkbox", "comp_sync_np_to_eb",
-    "comp_eb_start_year", "comp_eb_end_year", "comp_eb_weights",
-    "comp_np_start_year", "comp_np_end_year", "comp_np_weights",
-    "comp_exp_0_debug_peer_search",
-    # DCF / IS-core mapping — saved per-project in DB; clear so the new
-    # project's own mapping is loaded (NOT the previous project's).
-    "is_core_mapping", "dcf_mapping",
+    "dcf_uploader_key",   # force the uploader widget to reset
 }
-
-# Pattern that matches all flat per-comp-row keys  (comp_name_0, comp_ticker_2 …)
-# These are mirrors of what lives inside "comps" and must be wiped on switch.
-_STALE_COMP_KEY_PAT = _re.compile(
-    r"^(comp_(?:name|ticker|source|profile|ev|pb|pe)_\d+|"
-    r"inc_(?:ev|pb|pe)_\d+|"
-    r"comp_np_weight_\d+)$"
-)
 
 
 def switch_project(new_project_id: int, new_project_name: str,
@@ -802,17 +744,10 @@ def switch_project(new_project_id: int, new_project_name: str,
     """
     Safely open a different project:
       1. Save the CURRENT project (data + files) so nothing is lost.
-      2. Clear derived/computed keys (DataFrames, caches) AND all per-project
-         mapping/comp keys (is_core_mapping, dcf_mapping, comps, comp_name_* …)
-         so nothing from the old project bleeds into the new one.
-      3. Load the NEW project's data into session (includes its own mappings,
-         peer comparables, WACC params, forecast settings, etc.).
+      2. Clear stale file bytes and parsed DataFrames from session.
+      3. Load the NEW project's data into session.
       4. Load the NEW project's file bytes into session.
       5. Set active_project_id / active_project_name.
-
-    After this returns, dcf.py's _reanchor_is_core_mapping() will automatically
-    correct any row-number differences between the two projects' Excels so that
-    the user never needs to redo the Income Statement mapping.
 
     Returns (data_keys_restored, files_restored).
     """
@@ -820,18 +755,12 @@ def switch_project(new_project_id: int, new_project_name: str,
     if current_project_id and current_project_id != new_project_id:
         save_project_session(current_project_id, dict(session_state))
 
-    # 2. Clear derived state + per-project mappings/comp data so the new
-    #    project's own saved values are restored cleanly from the DB.
+    # 2. Clear stale files and parsed state
     _clear_all_file_bytes(session_state)
     for k in _STALE_PARSE_KEYS:
         session_state.pop(k, None)
-    # Also wipe flat per-row comp keys (comp_name_0, inc_ev_2, …) which are
-    # not enumerable ahead of time — scan current session keys.
-    for k in list(session_state.keys()):
-        if _STALE_COMP_KEY_PAT.match(k):
-            session_state.pop(k, None)
 
-    # 3. Load new project's saved data (mappings, WACC inputs, forecast years, etc.)
+    # 3. Load data (no files)
     saved_data = load_project_session(new_project_id)
     data_restored = 0
     for k, v in saved_data.items():
@@ -904,6 +833,133 @@ def autosave_project(session_state, interval_seconds: int = 30) -> bool:
         return True
     except Exception:
         return False
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# ADMIN FUNCTIONS
+# ══════════════════════════════════════════════════════════════════
+
+def admin_list_all_projects() -> list:
+    """List ALL projects across ALL users — admin only."""
+    conn = _connect()
+    rows = conn.execute("""
+        SELECT p.id, p.username, p.company_name, p.ticker, p.sector,
+               p.status, p.created_at, p.updated_at,
+               (SELECT COUNT(*) FROM project_data  pd WHERE pd.project_id = p.id) as data_count,
+               (SELECT COUNT(*) FROM project_files pf WHERE pf.project_id = p.id) as file_count
+        FROM   projects p
+        ORDER  BY p.updated_at DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def admin_get_stats() -> dict:
+    """Return high-level system statistics."""
+    conn = _connect()
+    total_users    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    active_users   = conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0]
+    total_projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+    total_files    = conn.execute("SELECT COUNT(*) FROM project_files").fetchone()[0]
+    logins_today   = conn.execute(
+        "SELECT COUNT(*) FROM login_log WHERE date(timestamp)=date('now') AND success=1"
+    ).fetchone()[0]
+    failed_today   = conn.execute(
+        "SELECT COUNT(*) FROM login_log WHERE date(timestamp)=date('now') AND success=0"
+    ).fetchone()[0]
+    conn.close()
+    return {
+        "total_users":    total_users,
+        "active_users":   active_users,
+        "total_projects": total_projects,
+        "total_files":    total_files,
+        "logins_today":   logins_today,
+        "failed_today":   failed_today,
+    }
+
+
+def admin_get_user(username: str) -> dict | None:
+    """Get full user profile for admin editing."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT id, username, full_name, email, role, is_active, created_at "
+        "FROM users WHERE username = ?", (username,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def admin_update_user(username: str, full_name: str = None,
+                      email: str = None, role: str = None,
+                      is_active: int = None) -> tuple:
+    """Update any user field — admin only."""
+    conn = _connect()
+    user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    if not user:
+        conn.close()
+        return False, "User not found."
+    fn  = full_name.strip() if full_name  is not None else user["full_name"]
+    em  = email.strip()     if email      is not None else user["email"]
+    rl  = role              if role       is not None else user["role"]
+    act = is_active         if is_active  is not None else user["is_active"]
+    conn.execute(
+        "UPDATE users SET full_name=?, email=?, role=?, is_active=? WHERE username=?",
+        (fn, em, rl, act, username)
+    )
+    conn.commit()
+    conn.close()
+    return True, f"User '{username}' updated."
+
+
+def admin_reset_password(username: str, new_password: str) -> tuple:
+    """Admin force-reset any user's password."""
+    if len(new_password) < 6:
+        return False, "Password must be at least 6 characters."
+    conn = _connect()
+    conn.execute(
+        "UPDATE users SET password_hash=? WHERE username=?",
+        (_hash(new_password), username)
+    )
+    conn.commit()
+    conn.close()
+    return True, f"Password for '{username}' reset successfully."
+
+
+def admin_delete_user(username: str) -> tuple:
+    """Permanently delete a user and ALL their projects/data."""
+    conn = _connect()
+    # Delete all projects (cascade deletes project_data and project_files)
+    conn.execute("DELETE FROM projects WHERE username=?", (username,))
+    conn.execute("DELETE FROM users    WHERE username=?", (username,))
+    conn.commit()
+    conn.close()
+    return True, f"User '{username}' and all their data deleted."
+
+
+def admin_get_full_login_history(limit: int = 200) -> list:
+    """Full login audit log — admin only."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT * FROM login_log ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def admin_delete_project(project_id: int) -> tuple:
+    """Admin delete any project regardless of owner."""
+    conn = _connect()
+    proj = conn.execute("SELECT company_name, username FROM projects WHERE id=?",
+                        (project_id,)).fetchone()
+    if not proj:
+        conn.close()
+        return False, "Project not found."
+    name = proj["company_name"]
+    conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+    conn.commit()
+    conn.close()
+    return True, f"Project '{name}' deleted."
 
 
 # ── Auto-init on import ───────────────────────────────────────────
