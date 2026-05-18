@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: fbc-valuation
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    disk:
+      name: fbc-database
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DB_PATH
+        value: /data/fbc_users.db
