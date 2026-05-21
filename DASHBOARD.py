@@ -190,17 +190,18 @@ section[data-testid="stSidebar"] hr {
 }
 .auth-title {
     font-family: "Playfair Display", serif !important;
-    font-size: 24px !important;
+    font-size: 26px !important;
     font-weight: 900 !important;
     color: #001a5c !important;
     text-align: center;
     margin-bottom: 4px !important;
 }
 .auth-subtitle {
-    font-size: 13px;
-    color: #7a90b8 !important;
+    font-size: 14px !important;
+    color: #003399 !important;
     text-align: center;
     font-style: italic;
+    font-weight: 600 !important;
     margin-bottom: 20px !important;
 }
 .auth-divider {
@@ -218,25 +219,42 @@ section[data-testid="stSidebar"] hr {
 
 /* ── TOP NAV ── */
 .top-nav {
-    position: fixed; top: 0; left: 0; width: 100%; height: 60px;
-    background: linear-gradient(90deg, #002080, #003399);
-    display: flex; align-items: center;
-    padding: 0 28px; z-index: 99999;
-    box-shadow: 0 3px 12px rgba(0,0,0,0.30);
+    background: linear-gradient(90deg, #001a5c, #003399);
+    border-radius: 16px;
+    padding: 14px 28px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 6px 24px rgba(0,26,92,0.30);
+    border-bottom: 3px solid #f5b400;
 }
 .top-title {
-    font-size: 20px; font-weight: 800; margin-left: 14px;
+    font-size: 22px;
+    font-weight: 900;
     color: #ffffff !important;
     font-family: "Playfair Display", serif !important;
+    letter-spacing: -0.01em;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.top-logo-text {
+    font-size: 13px;
+    color: rgba(255,255,255,0.65) !important;
+    font-style: italic;
+    font-family: "EB Garamond", serif !important;
+    margin-top: 2px;
 }
 .user-badge {
-    margin-left: auto;
-    background: rgba(245,180,0,0.20);
-    border: 1px solid rgba(245,180,0,0.50);
-    color: #f5c842 !important;
-    font-size: 13px; font-weight: 700;
-    padding: 5px 14px; border-radius: 999px;
+    background: rgba(245,180,0,0.22);
+    border: 1.5px solid rgba(245,180,0,0.60);
+    color: #ffd040 !important;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 6px 18px;
+    border-radius: 999px;
     font-family: "EB Garamond", serif !important;
+    white-space: nowrap;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.20);
 }
 
 /* ── PAGE HEADER ── */
@@ -252,7 +270,7 @@ section[data-testid="stSidebar"] hr {
     color: #ffffff !important;
 }
 .fbc-page-header-sub {
-    font-size: 14px; color: rgba(255,255,255,0.78) !important;
+    font-size: 14px; color: rgba(255,255,255,0.85) !important;
     margin-top: 6px; font-style: italic;
 }
 
@@ -348,11 +366,14 @@ def show_login():
     with col:
         LOGO_PATH = Path("assets") / "fbc log.png"
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), width=150)
+            # Centre the logo
+            l, c, r = st.columns([1, 2, 1])
+            with c:
+                st.image(str(LOGO_PATH), width=130)
 
         st.markdown("""
-            <p class="auth-title">FBC Valuation System</p>
-            <p class="auth-subtitle">Investment Research & Valuation Dashboard</p>
+            <p class="auth-title">FBC Valuation Dashboard</p>
+            <p class="auth-subtitle">Investment Research &amp; Valuation Platform</p>
             <hr class="auth-divider">
         """, unsafe_allow_html=True)
 
@@ -388,7 +409,7 @@ def show_login():
                 st.rerun()
 
         st.markdown("""
-            <p style="text-align:center; font-size:12px; color:#9aabcc;
+            <p style="text-align:center; font-size:12px; color:#7a90b8;
                       font-style:italic; margin-top:16px;">
                Authorised personnel only &nbsp;·&nbsp; FBC Securities
             </p>
@@ -531,22 +552,69 @@ def show_dashboard():
     from auth import autosave_project as _autosave
     _autosave(st.session_state)
 
-    # ── Top nav ───────────────────────────────────────────────────
-    st.markdown("<div class='top-nav'>", unsafe_allow_html=True)
+    # ── Top nav bar (single HTML block with inline base64 logo) ─────
+    import base64 as _b64
+    _logo_tag = ""
     if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), width=160)
-    st.markdown(
-        f"<span class='top-title'>FBC Valuation Dashboard</span>"
-        f"<span class='user-badge'>👤 {user['full_name'] or user['username']}  "
-        f"[{user['role'].upper()}]</span>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+        with open(str(LOGO_PATH), "rb") as _lf:
+            _logo_b64 = _b64.b64encode(_lf.read()).decode()
+        _logo_tag = f'<img src="data:image/png;base64,{_logo_b64}" style="height:90px; width:auto; object-fit:contain; border-radius:6px; margin-right:14px; flex-shrink:0;">'
+
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(90deg, #001233 0%, #001a5c 40%, #003399 100%);
+            border-radius: 16px;
+            padding: 14px 24px;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;*
+            justify-content: space-between;
+            box-shadow: 0 6px 24px rgba(0,26,92,0.32);
+            border-bottom: 3px solid #f5b400;">
+            <!-- Left: logo + title -->
+            <div style="display:flex; align-items:center;">
+                {_logo_tag}
+                <div style="line-height:1.25;">
+                    <div style="
+                        font-family: 'Playfair Display', serif;
+                        font-size: 22px; font-weight: 900;
+                        color: #ffffff;
+                        letter-spacing: -0.01em;
+                        text-shadow: 0 2px 8px rgba(0,0,0,0.30);">
+                        🏛️ FBC Valuation Dashboard
+                    </div>
+                    <div style="
+                        font-family: 'EB Garamond', serif;
+                        font-size: 13px; font-style: italic;
+                        color: rgba(255,255,255,0.65);
+                        margin-top: 2px;">
+                        Investment Research &amp; Valuation Platform
+                    </div>
+                </div>
+            </div>
+            <!-- Right: user badge -->
+            <span style="
+                background: rgba(245,180,0,0.18);
+                border: 1.5px solid rgba(245,180,0,0.55);
+                color: #ffd040;
+                font-size: 13px; font-weight: 700;
+                padding: 7px 16px; border-radius: 999px;
+                font-family: 'EB Garamond', serif;
+                white-space: nowrap;
+                box-shadow: 0 3px 10px rgba(0,26,92,0.20);
+                text-shadow: 0 1px 3px rgba(0,0,0,0.25);">
+                👤 &nbsp;{user['full_name'] or user['username']}
+                &nbsp;<span style="color:rgba(255,208,64,0.65); font-weight:500;">
+                    [{user['role'].upper()}]
+                </span>
+            </span>
+        </div>
+        <hr style="border:none; border-top:2px solid #dde6f5; margin:6px 0 20px 0;">
+    """, unsafe_allow_html=True)
 
     # ── Sidebar ───────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("### 🧑‍💼 Analyst Profile")
-
         st.markdown("---")
         st.markdown(f"**Signed in as:** {user['username']}")
         st.markdown(f"*Role: {user['role']}*")
@@ -564,11 +632,10 @@ def show_dashboard():
     st.markdown(f"""
         <div class="fbc-page-header">
             <span class="fbc-page-header-title">
-                🏛️ Welcome to FBC Investment Valuation System
+                Welcome, {user['full_name'] or user['username']} 👋
             </span>
             <p class="fbc-page-header-sub">
-                Good day, {user['full_name'] or user['username']} —
-                select a valuation model to get started.
+                Select a valuation model below to get started, or open an existing project.
             </p>
         </div>
     """, unsafe_allow_html=True)
@@ -579,18 +646,53 @@ def show_dashboard():
     if active_id:
         st.markdown(f"""
             <div style="
-                background: linear-gradient(90deg, #001a5c, #003399);
-                border-radius: 12px; padding: 14px 20px; margin-bottom: 18px;
-                border-left: 5px solid #f5b400;">
-                <div style="color:#ffffff !important;
-                            font-family:'Playfair Display',serif;
-                            font-size:16px; font-weight:700;">
-                    🏢 Active Project: {active_name}
-                </div>
-                <div style="color:rgba(255,255,255,0.72) !important;
-                            font-size:12px; font-style:italic;">
-                    All model inputs are being saved to this project.
-                    Visit <b>My Projects</b> to save or switch.
+                background: linear-gradient(135deg, #001233 0%, #001a5c 35%, #003399 100%);
+                border-radius: 16px; padding: 0; margin-bottom: 20px;
+                border: 1px solid rgba(245,180,0,0.30);
+                box-shadow: 0 8px 28px rgba(0,26,92,0.32);
+                overflow: hidden;">
+                <!-- Gold top accent bar -->
+                <div style="height:4px; background:linear-gradient(90deg,#f5b400,#ffd040,#f5b400);"></div>
+                <!-- Content row -->
+                <div style="padding: 16px 22px; display:flex; align-items:center; gap:18px;">
+                    <!-- Icon bubble -->
+                    <div style="
+                        background: rgba(245,180,0,0.18);
+                        border: 1.5px solid rgba(245,180,0,0.45);
+                        border-radius: 12px; padding: 10px 13px;
+                        font-size: 26px; line-height:1; flex-shrink:0;">
+                        🏢
+                    </div>
+                    <!-- Text -->
+                    <div>
+                        <div style="
+                            color: #ffffff;
+                            font-family: 'Playfair Display', serif;
+                            font-size: 17px; font-weight: 800;
+                            letter-spacing: -0.01em;
+                            text-shadow: 0 1px 6px rgba(0,0,0,0.40);
+                            margin-bottom: 5px;">
+                            Active Project: &nbsp;
+                            <span style="color:#ffd040; font-size:18px;
+                                         text-shadow:0 0 12px rgba(255,208,64,0.35);">
+                                {active_name}
+                            </span>
+                        </div>
+                        <div style="
+                            color: #a8c8ff;
+                            font-family: 'EB Garamond', serif;
+                            font-size: 14px; font-weight: 600;">
+                            ✅ All model inputs are being saved to this project.&nbsp;&nbsp;
+                            <span style="color:rgba(168,200,255,0.70);">·</span>&nbsp;&nbsp;
+                            Visit &nbsp;<span style="
+                                color: #ffd040;
+                                font-style: normal; font-weight: 700;
+                                text-decoration: underline;
+                                text-underline-offset: 2px;">
+                                My Projects
+                            </span>&nbsp; to save or switch.
+                        </div>
+                    </div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -600,11 +702,11 @@ def show_dashboard():
             "a company valuation — your work will be saved automatically."
         )
 
-    # ── Quick-access buttons  ← FIXED PAGE PATHS ─────────────────
+    # ── Quick-access buttons ──────────────────────────────────────
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     colP, colA, colB, colC, colD, colE, colF = st.columns(7)
 
-    if colP.button("📁 My Projects",             use_container_width=True): st.switch_page("pages/projects.py")
+    if colP.button("📁 My Projects",             use_container_width=True): st.switch_page("pages/7_PROJECTS.py")
     if colA.button("📊 DCF Model",               use_container_width=True): st.switch_page("pages/1_DCF.py")
     if colB.button("💰 Dividend Discount Model",  use_container_width=True): st.switch_page("pages/3_DDM.py")
     if colC.button("📈 Comparables",             use_container_width=True): st.switch_page("pages/2_COMPARABLES.py")
