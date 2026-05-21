@@ -70,7 +70,7 @@ with st.sidebar:
             _save_proj(_pid, dict(st.session_state))
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
-        st.switch_page("dashboard.py")
+        st.switch_page("DASHBOARD.py")
 
 
 
