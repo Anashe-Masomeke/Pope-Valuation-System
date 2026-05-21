@@ -61,7 +61,7 @@ if not st.session_state.get("authenticated"):
     st.error("🔒 You must be signed in to access this page.")
     st.info("Please return to the main page and sign in.")
     if st.button("Go to Sign In", key="goto_signin_summ"):
-        st.switch_page("app.py")
+        st.switch_page("dashboard.py")
     st.stop()
 
 # ── Sidebar with Sign Out ─────────────────────────────────────────
@@ -79,7 +79,7 @@ with st.sidebar:
             _save_proj(_pid, dict(st.session_state))
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
-        st.switch_page("app.py")
+        st.switch_page("dashboard.py")
 
 
 
@@ -1171,11 +1171,29 @@ if "model_weights" not in st.session_state:
         "BANKING": 10.0,
     }
 
+if "summary_num_shares" not in st.session_state:
+    # Seed from num_shares if already set (e.g. from DDM), else 0
+    st.session_state["summary_num_shares"] = float(st.session_state.get("num_shares", 0.0))
+
+if "summary_current_price" not in st.session_state:
+    st.session_state["summary_current_price"] = float(st.session_state.get("current_price", 0.0))
+
+# Keep num_shares / current_price aliases in sync for backwards compat
 if "num_shares" not in st.session_state:
-    st.session_state["num_shares"] = 0.0
+    st.session_state["num_shares"] = st.session_state["summary_num_shares"]
 
 if "current_price" not in st.session_state:
-    st.session_state["current_price"] = 0.0
+    st.session_state["current_price"] = st.session_state["summary_current_price"]
+
+# Pre-cast to float BEFORE the widgets are created so value= always gets a float.
+# These writes are safe here because the widgets haven't been instantiated yet.
+# Do NOT write these keys again after the widgets appear further down.
+_pre_ns = st.session_state.get("summary_num_shares", 0.0)
+if not isinstance(_pre_ns, float):
+    st.session_state["summary_num_shares"] = float(_pre_ns)
+_pre_cp = st.session_state.get("summary_current_price", 0.0)
+if not isinstance(_pre_cp, float):
+    st.session_state["summary_current_price"] = float(_pre_cp)
 
 # ------------------------------------------------------------------------------
 # MODEL SELECTION (PERSISTENT)
@@ -1435,15 +1453,23 @@ with c1:
     }
     </style>
     """, unsafe_allow_html=True)
+    # Widget owns key="summary_num_shares" — Streamlit reads/writes it directly.
+    # We must NOT write to session_state["summary_num_shares"] after this widget.
+    # The value= param seeds the widget from the master key on every render,
+    # so tab-switching and project restores always show the correct stored value.
+    _ns_val = float(st.session_state.get("summary_num_shares", 0.0))
     num_shares = st.number_input(
         "Number of Shares in Issue",
-        value=float(st.session_state["num_shares"]),
+        min_value=0.0,
+        value=_ns_val,
         step=1000.0,
         format="%.0f",
-        key="num_shares_input",
-    label_visibility="collapsed"
+        key="summary_num_shares",
+        label_visibility="collapsed"
     )
-    st.session_state["num_shares"] = num_shares
+    # Mirror to the generic alias for DDM / save compatibility.
+    # summary_num_shares itself is managed by the widget — do NOT write it here.
+    st.session_state["num_shares"] = float(num_shares)
 
 with c2:
     st.markdown("""
@@ -1476,15 +1502,19 @@ with c2:
     }
     </style>
     """, unsafe_allow_html=True)
+    # Widget owns key="summary_current_price" — Streamlit manages it directly.
+    _cp_val = float(st.session_state.get("summary_current_price", 0.0))
     current_price = st.number_input(
         "Current Share Price (USD)",
-        value=float(st.session_state["current_price"]),
+        min_value=0.0,
+        value=_cp_val,
         step=0.01,
         format="%.2f",
-        key="current_price_input",
-    label_visibility="collapsed"
+        key="summary_current_price",
+        label_visibility="collapsed"
     )
-    st.session_state["current_price"] = current_price
+    # Mirror to the generic alias. summary_current_price is widget-owned — do NOT write it here.
+    st.session_state["current_price"] = float(current_price)
 
 # ---- Calculations ----
 intrinsic_value = (weighted_equity / num_shares) if (num_shares and num_shares > 0) else np.nan
