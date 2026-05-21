@@ -674,6 +674,9 @@ _MASTER_TO_INPUT = {
     "bank_rf_pct":               "bank_rf_pct_input",
     "bank_mrp_pct":              "bank_mrp_pct_input",
     "num_shares":                "num_shares_input",
+    # Summary page uses its own dedicated keys (not shared with DDM)
+    "summary_num_shares":        "summary_num_shares",
+    "summary_current_price":     "summary_current_price",
 }
 _INT_MASTER_KEYS = {"dcf_forecast_years"}
 
