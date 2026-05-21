@@ -22,7 +22,7 @@ if not st.session_state.get("authenticated"):
     st.error("🔒 You must be signed in to access this page.")
     st.info("Please return to the main page and sign in.")
     if st.button("Go to Sign In", key="goto_signin_dcf"):
-        st.switch_page("app.py")
+        st.switch_page("dashboard.py")
     st.stop()
 
 # ── Sidebar with Sign Out ─────────────────────────────────────────
@@ -36,7 +36,7 @@ with st.sidebar:
     if st.button("🚪 Sign Out", use_container_width=True, key="signout_dcf"):
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
-        st.switch_page("app.py")
+        st.switch_page("dashboard.py")
 
 
 
@@ -3412,6 +3412,168 @@ st.dataframe(
     width='stretch',
     hide_index=True
 )
+
+# ---------------------------------------------------------
+# 📊 HISTORICAL IS RATIOS — SINGLE SUMMARY TABLE
+# ---------------------------------------------------------
+section("📊 Historical Income Statement Ratios")
+st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
+
+# ── Helpers ────────────────────────────────────────────────────────────
+def _hist_row(df, idx, cols):
+    """Return numpy float array for a row index across given year columns."""
+    if idx is None or not isinstance(idx, int):
+        return np.full(len(cols), np.nan)
+    vals = []
+    for c in cols:
+        try:
+            v = pd.to_numeric(df.iat[idx, df.columns.get_loc(c)], errors="coerce")
+            vals.append(float(v) if pd.notna(v) else np.nan)
+        except Exception:
+            vals.append(np.nan)
+    return np.array(vals, dtype=float)
+
+def safe_ratio(num, denom):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(
+            (denom != 0) & ~np.isnan(denom) & ~np.isnan(num),
+            num / denom, np.nan
+        )
+
+def avg_excl_nan(arr):
+    valid = arr[~np.isnan(arr)]
+    return float(np.mean(valid)) if len(valid) else np.nan
+
+def fmt_pct(v):
+    return f"{v*100:.1f}%" if not np.isnan(v) else "—"
+
+# ── Pull key mapped lines ──────────────────────────────────────────────
+rev_hist    = _hist_row(forecast_is, rev_idx,    year_cols_is)
+gp_hist_r   = _hist_row(forecast_is, gp_idx,     year_cols_is)
+ebitda_hist = _hist_row(forecast_is, ebitda_idx, year_cols_is)
+op_hist     = _hist_row(forecast_is, op_idx,     year_cols_is)
+pbt_hist    = _hist_row(forecast_is, pbt_idx,    year_cols_is)
+tax_hist    = _hist_row(forecast_is, tax_idx,    year_cols_is)
+np_hist     = _hist_row(forecast_is, np_idx,     year_cols_is)
+dep_hist    = _hist_row(forecast_is, dep_idx,    year_cols_is)
+
+# ── Revenue growth (YoY) ───────────────────────────────────────────────
+rev_growth = np.full(len(year_cols_is), np.nan)
+for _i in range(1, len(year_cols_is)):
+    if not np.isnan(rev_hist[_i]) and not np.isnan(rev_hist[_i-1]) and rev_hist[_i-1] != 0:
+        rev_growth[_i] = (rev_hist[_i] - rev_hist[_i-1]) / abs(rev_hist[_i-1])
+
+# ── SECTION A: Key margin ratios (mapped totals) ───────────────────────
+# These are shown first as they are the main analytical ratios
+KEY_RATIOS = []
+
+KEY_RATIOS.append(("Revenue Growth (YoY) %", rev_growth, "growth"))
+
+if gp_idx is not None:
+    KEY_RATIOS.append(("Gross Profit Margin %",       safe_ratio(gp_hist_r, rev_hist),   "margin"))
+if ebitda_idx is not None:
+    KEY_RATIOS.append(("EBITDA Margin %",             safe_ratio(ebitda_hist, rev_hist),  "margin"))
+if op_idx is not None:
+    KEY_RATIOS.append(("EBIT / Operating Margin %",   safe_ratio(op_hist, rev_hist),      "margin"))
+if pbt_idx is not None:
+    KEY_RATIOS.append(("PBT Margin %",                safe_ratio(pbt_hist, rev_hist),     "margin"))
+if tax_idx is not None and pbt_idx is not None:
+    KEY_RATIOS.append(("Effective Tax Rate % (Tax÷PBT)", safe_ratio(tax_hist, pbt_hist), "tax"))
+if np_idx is not None:
+    KEY_RATIOS.append(("PAT / Net Profit Margin %",   safe_ratio(np_hist, rev_hist),      "margin"))
+if dep_idx is not None:
+    KEY_RATIOS.append(("D&A as % of Revenue",         safe_ratio(dep_hist, rev_hist),     "da"))
+
+# ── SECTION B: ALL other IS rows as % of Revenue ──────────────────────
+# Every non-revenue, non-total row that was NOT one of the key mapped lines
+_mapped_special_idx = {
+    i for i in [rev_idx, gp_idx, ebitda_idx, op_idx, pbt_idx, tax_idx, np_idx, dep_idx]
+    if isinstance(i, int)
+}
+
+OTHER_RATIOS = []
+for _row_i in range(len(forecast_is)):
+    if _row_i in _mapped_special_idx:
+        continue  # already in KEY_RATIOS above
+    _label = str(forecast_is.iloc[_row_i]["Item"]).strip()
+    if not _label or _label.lower() in ("", "nan", "none"):
+        continue
+    _row_vals = _hist_row(forecast_is, _row_i, year_cols_is)
+    # skip rows that are all-zero or all-NaN
+    _valid = _row_vals[~np.isnan(_row_vals)]
+    if len(_valid) == 0 or np.all(_valid == 0):
+        continue
+    _ratio = safe_ratio(_row_vals, rev_hist)
+    OTHER_RATIOS.append((f"{_label} % of Rev", _ratio, "other"))
+
+# ── Build the unified summary DataFrame ───────────────────────────────
+_all_ratio_rows = KEY_RATIOS + OTHER_RATIOS
+
+# Columns: Metric | Year1 | Year2 | ... | Average
+_col_names  = ["Metric"] + [str(y) for y in year_cols_is] + ["Average"]
+_table_data = []
+
+for _label, _arr, _kind in _all_ratio_rows:
+    row = [_label]
+    for _v in _arr:
+        row.append(fmt_pct(_v))
+    row.append(fmt_pct(avg_excl_nan(_arr)))
+    _table_data.append(row)
+
+ratio_summary_df = pd.DataFrame(_table_data, columns=_col_names)
+
+# ── Styling ────────────────────────────────────────────────────────────
+_divider_rows = {i for i, (lbl, _, _k) in enumerate(_all_ratio_rows) if _k == "other" and i > 0 and _all_ratio_rows[i-1][2] != "other"}
+
+def _style_ratio_summary(styler):
+    # Average column — gold tint
+    styler.set_properties(subset=["Average"], **{
+        "background-color": "rgba(245,180,0,0.13)",
+        "font-weight": "800",
+        "color": "#7a4500",
+        "border-left": "2px solid rgba(245,180,0,0.45)",
+    })
+    # Metric column — dark blue, bold
+    styler.set_properties(subset=["Metric"], **{
+        "font-weight": "700",
+        "color": "#001a5c",
+        "white-space": "nowrap",
+    })
+    # Year columns — normal weight
+    _yr_cols = [str(y) for y in year_cols_is]
+    styler.set_properties(subset=_yr_cols, **{
+        "text-align": "right",
+        "font-variant-numeric": "tabular-nums",
+    })
+
+    # Row-level: highlight key mapped ratios with a very light blue tint
+    _key_labels = {lbl for lbl, _, _k in KEY_RATIOS}
+    def _row_bg(row):
+        lbl = row["Metric"]
+        if lbl in _key_labels:
+            return ["background-color: rgba(0,51,153,0.04)"] * len(row)
+        return [""] * len(row)
+    styler.apply(_row_bg, axis=1)
+
+    return styler
+
+_styled = ratio_summary_df.style.pipe(_style_ratio_summary)
+
+st.dataframe(_styled, hide_index=True, use_container_width=True)
+
+# ── Download ───────────────────────────────────────────────────────────
+_buf_ratio = io.BytesIO()
+ratio_summary_df.to_excel(_buf_ratio, index=False, sheet_name="Historical_Ratios")
+_buf_ratio.seek(0)
+st.download_button(
+    "⬇️ Download Historical Ratios (Excel)",
+    data=_buf_ratio,
+    file_name="Historical_IS_Ratios.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key="dl_hist_ratios_xlsx"
+)
+
+# ── End of Historical Ratios Panel ─────────────────────────────────────
 
 # Extract EBITDA row for forecast years
 if isinstance(ebitda_idx, int):
