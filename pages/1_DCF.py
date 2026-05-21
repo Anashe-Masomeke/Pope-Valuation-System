@@ -22,7 +22,7 @@ if not st.session_state.get("authenticated"):
     st.error("🔒 You must be signed in to access this page.")
     st.info("Please return to the main page and sign in.")
     if st.button("Go to Sign In", key="goto_signin_dcf"):
-    st.switch_page("DASHBOARD.py")
+    st.switch_page("pages/../DASHBOARD.py")
     st.stop()
 
 # ── Sidebar with Sign Out ─────────────────────────────────────────
@@ -36,7 +36,7 @@ with st.sidebar:
     if st.button("🚪 Sign Out", use_container_width=True, key="signout_dcf"):
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
-        st.switch_page("DASHBOARD.py")
+        st.switch_page("pages/../DASHBOARD.py")
 
 
 
