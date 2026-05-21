@@ -267,7 +267,7 @@ with st.sidebar:
             save_project_session(_pid, dict(st.session_state))
         for k in list(st.session_state.keys()):
             del st.session_state[k]
-        st.switch_page("dashboard.py")
+        st.switch_page("DASHBOARD.py")
 
 # ══════════════════════════════════════════════════════════════════
 # PAGE HEADER
