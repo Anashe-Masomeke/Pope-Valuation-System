@@ -624,7 +624,7 @@ details > summary svg {
 }
 .fbc-footer b { color: #003399 !important; font-style: normal; }
 
-/* ── 19. FEATURE CARDS (dashboard) ───────────────────────── */
+/* ── 19. FEATURE CARDS (DASHBOARD) ───────────────────────── */
 .feature-box {
     background: #ffffff;
     padding: 22px 26px;
@@ -667,7 +667,7 @@ details > summary svg {
     background: rgba(0,51,153,0.02) !important;
 }
 
-/* ── 22. TOP NAV (dashboard) ──────────────────────────────── */
+/* ── 22. TOP NAV (DASHBOARD) ──────────────────────────────── */
 .top-nav {
     position: fixed; top: 0; left: 0; width: 100%; height: 68px;
     background: linear-gradient(90deg, #001a5c, #003399, #0044cc);
