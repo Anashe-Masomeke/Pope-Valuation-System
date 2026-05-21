@@ -838,7 +838,6 @@ def autosave_project(session_state, interval_seconds: int = 30) -> bool:
         return False
 
 
-
 # ══════════════════════════════════════════════════════════════════
 # ADMIN FUNCTIONS
 # ══════════════════════════════════════════════════════════════════
