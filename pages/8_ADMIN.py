@@ -376,7 +376,7 @@ with st.sidebar:
     if st.button("🚪 Sign Out", use_container_width=True, key="admin_signout"):
         for k in list(st.session_state.keys()):
             del st.session_state[k]
-        st.switch_page("app.py")
+        st.switch_page("dashboard.py")
 
 
 # ══════════════════════════════════════════════════════════════════
