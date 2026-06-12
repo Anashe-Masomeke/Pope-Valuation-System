@@ -47,30 +47,11 @@ def add_watermark():
 add_watermark()
 st.set_page_config(page_title="Banking Valuation (Residual Income)", layout="wide")
 
-# ── Auth guard ────────────────────────────────────────────────────
-if not st.session_state.get("authenticated"):
-    st.error("🔒 You must be signed in to access this page.")
-    st.info("Please return to the main page and sign in.")
-    if st.button("Go to Sign In", key="goto_signin_bank"):
-        st.switch_page("dashboard.py")
-    st.stop()
-
-# ── Sidebar with Sign Out ─────────────────────────────────────────
-_so_user = st.session_state.get("user") or {{}}
-with st.sidebar:
-    st.markdown("### 🧑‍💼 Analyst Profile")
-    st.markdown("---")
-    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
-    st.markdown(f"*Role: {_so_user.get('role', '')}*")
-    st.markdown("---")
-    if st.button("🚪 Sign Out", use_container_width=True, key="signout_bank"):
-        from auth import save_project_session as _save_proj
-        _pid = st.session_state.get("active_project_id")
-        if _pid:
-            _save_proj(_pid, dict(st.session_state))
-        for _k in list(st.session_state.keys()):
-            del st.session_state[_k]
-        st.switch_page("DASHBOARD.py")
+# ── Ensure session is always authenticated ───────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = True
+if "user" not in st.session_state or not st.session_state.get("user"):
+    st.session_state["user"] = {"username": "analyst", "role": "analyst", "full_name": "Analyst"}
 
 
 
@@ -1293,7 +1274,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-uploaded= st.file_uploader("", type=["xlsx"])
+uploaded= st.file_uploader("Upload Excel file", type=["xlsx"], label_visibility="collapsed")
 if uploaded is not None:
     BANK["file_bytes"] = uploaded.getvalue()
     BANK["file_name"] = uploaded.name
@@ -2168,10 +2149,8 @@ use_auto = st.checkbox(
 BANK["bank_use_auto_params"] = use_auto
 
 if "bank_ke_init" not in st.session_state:
-    _project_active = bool(st.session_state.get("active_project_id"))
-    if not _project_active:
-        BANK["bank_rf_pct"]  = float(auto_rf_pct)  if auto_rf_pct  is not None else 11.61
-        BANK["bank_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
+    BANK["bank_rf_pct"]  = float(auto_rf_pct)  if auto_rf_pct  is not None else 11.61
+    BANK["bank_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
     BANK.setdefault("bank_tax_pct_for_beta",   25.0)
     BANK.setdefault("bank_de_ratio_for_beta",  0.0)
     BANK.setdefault("bank_beta_u_input",       1.0)
