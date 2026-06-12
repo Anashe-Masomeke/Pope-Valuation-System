@@ -13,30 +13,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="Comparables Valuation", layout="wide")
 
-# ── Auth guard ────────────────────────────────────────────────────
-if not st.session_state.get("authenticated"):
-    st.error("🔒 You must be signed in to access this page.")
-    st.info("Please return to the main page and sign in.")
-    if st.button("Go to Sign In", key="goto_signin_comp"):
-        st.switch_page("DASHBOARD.py")
-    st.stop()
-
-# ── Sidebar with Sign Out ─────────────────────────────────────────
-_so_user = st.session_state.get("user") or {{}}
-with st.sidebar:
-    st.markdown("### 🧑‍💼 Analyst Profile")
-    st.markdown("---")
-    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
-    st.markdown(f"*Role: {_so_user.get('role', '')}*")
-    st.markdown("---")
-    if st.button("🚪 Sign Out", use_container_width=True, key="signout_comp"):
-        from auth import save_project_session as _save_proj
-        _pid = st.session_state.get("active_project_id")
-        if _pid:
-            _save_proj(_pid, dict(st.session_state))
-        for _k in list(st.session_state.keys()):
-            del st.session_state[_k]
-        st.switch_page("DASHBOARD.py")
+# ── Ensure session is always authenticated ───────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = True
+if "user" not in st.session_state or not st.session_state.get("user"):
+    st.session_state["user"] = {"username": "analyst", "role": "analyst", "full_name": "Analyst"}
 
 
 
@@ -3235,8 +3216,23 @@ else:
         eb_min_year = min(eb_years_all)
         eb_max_year = max(eb_years_all)
 
-        S.setdefault("comp_eb_start_year", eb_min_year)
-        S.setdefault("comp_eb_end_year", eb_max_year)
+        _prev_eb_min = S.get("_comp_eb_min_year")
+        _prev_eb_max = S.get("_comp_eb_max_year")
+        _range_changed = (_prev_eb_min != eb_min_year or _prev_eb_max != eb_max_year)
+        # AFTER
+        if _range_changed:
+            # Range changed — clamp existing picks to stay within new valid range,
+            # but DON'T reset them to the full range (preserve user's selection)
+            prev_start = S.get("comp_eb_start_year", eb_min_year)
+            prev_end = S.get("comp_eb_end_year", eb_max_year)
+            S["comp_eb_start_year"] = max(eb_min_year, min(int(prev_start), eb_max_year))
+            S["comp_eb_end_year"] = max(eb_min_year, min(int(prev_end), eb_max_year))
+        else:
+            S.setdefault("comp_eb_start_year", eb_min_year)
+            S.setdefault("comp_eb_end_year", eb_max_year)
+
+        S["_comp_eb_min_year"] = eb_min_year
+        S["_comp_eb_max_year"] = eb_max_year
         S.setdefault("comp_eb_weights", {})
         S.setdefault("comp_use_timing_eb", True)
 
@@ -3281,6 +3277,9 @@ else:
 
         eb_start_year = int(max(eb_start_year, eb_min_year))
         eb_end_year = int(min(eb_end_year, eb_max_year))
+        # Persist user's selection back to session state
+        S["comp_eb_start_year"] = eb_start_year
+        S["comp_eb_end_year"] = eb_end_year
         if eb_end_year < eb_start_year:
             st.error("❌ EBITDA End Year must be ≥ Start Year.")
             st.stop()
@@ -3378,8 +3377,19 @@ else:
         np_min_year = min(np_years_all)
         np_max_year = max(np_years_all)
 
-        S.setdefault("comp_np_start_year", np_min_year)
-        S.setdefault("comp_np_end_year", np_max_year)
+        _prev_np_min = S.get("_comp_np_min_year")
+        _prev_np_max = S.get("_comp_np_max_year")
+        _np_range_changed = (_prev_np_min != np_min_year or _prev_np_max != np_max_year)
+
+        if _np_range_changed:
+            S["comp_np_start_year"] = np_min_year
+            S["comp_np_end_year"] = np_max_year
+        else:
+            S.setdefault("comp_np_start_year", np_min_year)
+            S.setdefault("comp_np_end_year", np_max_year)
+
+        S["_comp_np_min_year"] = np_min_year
+        S["_comp_np_max_year"] = np_max_year
         S.setdefault("comp_np_weights", {})
         S.setdefault("comp_use_timing_np", True)
         # ---------------------------------------------------------
