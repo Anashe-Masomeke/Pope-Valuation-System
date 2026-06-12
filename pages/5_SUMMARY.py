@@ -3744,6 +3744,26 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ── Attempt to restore project session if not already loaded ──────────
+_active_pid = st.session_state.get("active_project_id")
+if _active_pid and not st.session_state.get("_project_data_loaded"):
+    try:
+        from auth import load_project_session as _load_proj_sess
+        _proj_data = _load_proj_sess(_active_pid)
+        _SUMMARY_WIDGET_KEYS = {
+            "summary_num_shares", "summary_current_price",
+            "selected_models_input", "authenticated", "user",
+        }
+        if _proj_data:
+            for _k, _v in _proj_data.items():
+                if _k in _SUMMARY_WIDGET_KEYS:
+                    continue
+                if _k not in st.session_state:
+                    st.session_state[_k] = _v
+            st.session_state["_project_data_loaded"] = True
+    except Exception:
+        pass
+
 _ss = dict(st.session_state)
 excel_bytes = _build_combined_valuation_excel(
     ss=_ss,
@@ -3759,4 +3779,3 @@ st.download_button(
     data=excel_bytes,
     file_name="FBC_Combined_Valuation.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
