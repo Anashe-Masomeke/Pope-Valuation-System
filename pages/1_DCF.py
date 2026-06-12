@@ -17,26 +17,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── Auth guard ────────────────────────────────────────────────────
-if not st.session_state.get("authenticated"):
-    st.error("🔒 You must be signed in to access this page.")
-    st.info("Please return to the main page and sign in.")
-    if st.button("Go to Sign In", key="goto_signin_dcf"):
-        st.switch_page("DASHBOARD.py")
-    st.stop()
-
-# ── Sidebar with Sign Out ─────────────────────────────────────────
-_so_user = st.session_state.get("user") or {}
-with st.sidebar:
-    st.markdown("### 🧑‍💼 Analyst Profile")
-    st.markdown("---")
-    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
-    st.markdown(f"*Role: {_so_user.get('role', '')}*")
-    st.markdown("---")
-    if st.button("🚪 Sign Out", use_container_width=True, key="signout_dcf"):
-        for _k in list(st.session_state.keys()):
-            del st.session_state[_k]
-        st.switch_page("DASHBOARD.py")
+# ── Ensure session is always authenticated ───────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = True
+if "user" not in st.session_state or not st.session_state.get("user"):
+    st.session_state["user"] = {"username": "analyst", "role": "analyst", "full_name": "Analyst"}
 
 
 
@@ -624,7 +609,7 @@ details > summary svg {
 }
 .fbc-footer b { color: #003399 !important; font-style: normal; }
 
-/* ── 19. FEATURE CARDS (DASHBOARD) ───────────────────────── */
+/* ── 19. FEATURE CARDS (dashboard) ───────────────────────── */
 .feature-box {
     background: #ffffff;
     padding: 22px 26px;
@@ -667,7 +652,7 @@ details > summary svg {
     background: rgba(0,51,153,0.02) !important;
 }
 
-/* ── 22. TOP NAV (DASHBOARD) ──────────────────────────────── */
+/* ── 22. TOP NAV (dashboard) ──────────────────────────────── */
 .top-nav {
     position: fixed; top: 0; left: 0; width: 100%; height: 68px;
     background: linear-gradient(90deg, #001a5c, #003399, #0044cc);
@@ -1616,32 +1601,7 @@ li, ul, ol, a, small {
 # we clear every file/mapping key so they get freshly loaded from the
 # restored project data (dcf_file_bytes → re-parse, mappings → restored).
 # ---------------------------------------------------------
-_active_pid = st.session_state.get("active_project_id")
-_dcf_last_pid = st.session_state.get("_dcf_last_project_id")
-
-if _active_pid != _dcf_last_pid:
-    # Project has changed (or first load).
-    # Only clear DERIVED / COMPUTED objects that must be rebuilt from the
-    # new project's Excel bytes.  Do NOT clear user-input keys
-    # (dcf_mapping, is_core_mapping, dcf_init, dcf_timing_init,
-    #  dcf_file_bytes, dcf_file_name, dcf_fx_bytes, dcf_fx_name,
-    #  dcf_forecast_years, dcf_yearly_growth_pct, dcf_rf_pct, etc.)
-    # — those were just restored from the DB and must be preserved so the
-    # user's selections and parameter choices are visible immediately.
-    _DCF_DERIVED_KEYS = [
-        # Parsed DataFrames — must be re-built from the new Excel bytes
-        "dcf_is_df", "dcf_bs_df", "dcf_cf_df",
-        "dcf_is_base", "dcf_bs_base", "dcf_cf_base",
-        # FX lookup tables — derived from the FX Excel bytes
-        "dcf_fx_raw", "dcf_yearly_fx",
-        # Any cached computation results
-        "dcf_fcff_array", "dcf_pv_fcff_array",
-    ]
-    for _k in _DCF_DERIVED_KEYS:
-        if _k in st.session_state:
-            del st.session_state[_k]
-    # Record that DCF is now initialised for this project
-    st.session_state["_dcf_last_project_id"] = _active_pid
+# No project switching needed (projects removed)
 
 # ---------------------------------------------------------
 # COMPANY NAME (persistent across pages/models)
@@ -1780,7 +1740,6 @@ year_cols_cf = get_year_cols(cf_df)
 _has_mapping = (
     st.session_state.get("is_core_mapping") is not None
     and st.session_state.get("dcf_mapping") is not None
-    and st.session_state.get("active_project_id") is not None
 )
 
 section("➕ Add a New Financial Year to This Project")
@@ -1894,7 +1853,7 @@ else:
                             f"New value ({_new_year})": _val,
                         })
                     st.markdown("**Income Statement lines:**")
-                    st.dataframe(pd.DataFrame(_is_preview_rows), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(_is_preview_rows), hide_index=True, width="stretch")
 
                     # BS preview
                     _bs_preview_rows = []
@@ -1907,7 +1866,7 @@ else:
                             _val = None
                         _bs_preview_rows.append({"Line": _title, f"New value ({_new_year})": _val})
                     st.markdown("**Balance Sheet lines:**")
-                    st.dataframe(pd.DataFrame(_bs_preview_rows), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(_bs_preview_rows), hide_index=True, width="stretch")
 
                     # CF preview
                     _cf_preview_rows = []
@@ -1920,7 +1879,7 @@ else:
                             _val = None
                         _cf_preview_rows.append({"Line": _title, f"New value ({_new_year})": _val})
                     st.markdown("**Cash Flow lines:**")
-                    st.dataframe(pd.DataFrame(_cf_preview_rows), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(_cf_preview_rows), hide_index=True, width="stretch")
 
                     st.markdown("---")
                     st.markdown(
@@ -2887,10 +2846,9 @@ calculated_g = avg_revenue_growth(revenue_row, year_cols_is)
 # ---------------------------------------------------------
 # FORECAST HORIZON (USER-DEFINED)
 # ---------------------------------------------------------
+# AFTER
 if "dcf_forecast_years" not in st.session_state:
     st.session_state["dcf_forecast_years"] = 5
-else:
-    st.session_state["dcf_forecast_years"] = int(st.session_state["dcf_forecast_years"])
 st.markdown("""
 <div class="fbc-forecast-label">
     Number of years to forecast
@@ -2921,13 +2879,13 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+# REPLACE WITH:
 forecast_horizon = st.number_input(
     "Number of years to forecast",
     min_value=1,
     max_value=15,
     value=int(st.session_state.get("dcf_forecast_years", 5)),
     step=1,
-    key="dcf_forecast_years_input",
     label_visibility="collapsed"
 )
 
@@ -3559,7 +3517,7 @@ def _style_ratio_summary(styler):
 
 _styled = ratio_summary_df.style.pipe(_style_ratio_summary)
 
-st.dataframe(_styled, hide_index=True, use_container_width=True)
+st.dataframe(_styled, hide_index=True, width="stretch")
 
 # ── Download ───────────────────────────────────────────────────────────
 _buf_ratio = io.BytesIO()
@@ -3821,10 +3779,12 @@ if ca_idx_list and cl_idx_list:
     if "average" in wc_choice.lower():
         st.session_state["dcf_wc_pct_method"] = "average"
         wc_percent_avg = wc_percent_mean
+        st.session_state["dcf_wc_pct_method_last_val"] = wc_percent_avg
         st.success(f"✅ Using historical average WC% of Sales = {wc_percent_avg:.2%}")
     else:
         st.session_state["dcf_wc_pct_method"] = "last"
         wc_percent_avg = wc_percent_last
+        st.session_state["dcf_wc_pct_method_last_val"] = wc_percent_avg
         st.info(f"📌 Using most recent WC% of Sales ({last_year}) = {wc_percent_avg:.2%}")
 
     # 4️⃣ FORECAST WC
@@ -3852,6 +3812,7 @@ if ca_idx_list and cl_idx_list:
     section("Change in Working Capital (ΔWC = Old – New)")
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     last_wc_hist_value = float(wc_hist[common_hist[-1]])
+    st.session_state["dcf_last_wc_hist"] = last_wc_hist_value
 
     prev_wc = last_wc_hist_value
     delta_list = []
@@ -4126,21 +4087,10 @@ with right:
 #   • If NO project is active → use the old seeding logic so a fresh
 #     session still shows sensible starting values.
 # ──────────────────────────────────────────────────────────────────
-_project_active = bool(st.session_state.get("active_project_id"))
-
-if _project_active:
-    # Inside a project: only fill missing keys, never overwrite
-    st.session_state.setdefault("dcf_rf_pct",
-        float(auto_rf_pct) if auto_rf_pct is not None else 11.61)
-    st.session_state.setdefault("dcf_mrp_pct",
-        float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82)
-else:
-    # No active project: use auto/default seeding (original logic,
-    # but drop the == 0.0 trap — absent is enough to trigger seeding)
-    if "dcf_rf_pct" not in st.session_state:
-        st.session_state["dcf_rf_pct"] = float(auto_rf_pct) if auto_rf_pct is not None else 11.61
-    if "dcf_mrp_pct" not in st.session_state:
-        st.session_state["dcf_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
+if "dcf_rf_pct" not in st.session_state:
+    st.session_state["dcf_rf_pct"] = float(auto_rf_pct) if auto_rf_pct is not None else 11.61
+if "dcf_mrp_pct" not in st.session_state:
+    st.session_state["dcf_mrp_pct"] = float(auto_mrp_pct) if auto_mrp_pct is not None else 13.82
 
 st.session_state.setdefault("dcf_tax_pct",         25.0)
 st.session_state.setdefault("dcf_unlevered_beta",   1.00)
