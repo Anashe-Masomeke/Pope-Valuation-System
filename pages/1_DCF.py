@@ -1758,6 +1758,49 @@ else:
         f"Current years in statements: **{', '.join(_existing_years)}**"
     )
 
+    # ── DELETE A YEAR ─────────────────────────────────────────────────────
+    with st.expander("🗑️ Remove a financial year (click to open)", expanded=False):
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#7f1d1d,#991b1b);
+                    border-radius:14px;padding:14px 20px;margin-bottom:14px;
+                    border-bottom:3px solid #f5b400;">
+            <div style="color:white;font-family:'Playfair Display',serif;
+                        font-size:16px;font-weight:700;margin-bottom:4px;">
+                ⚠️ Remove a Year from Statements
+            </div>
+            <div style="color:rgba(255,255,255,0.85);font-size:13px;">
+                This removes the selected year's column from IS, BS, and CF.
+                The row mappings are preserved. This cannot be undone without re-uploading.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        _year_to_delete = st.selectbox(
+            "Select year to remove:",
+            options=_existing_years,
+            key="dcf_delete_year_select"
+        )
+
+        _confirm_delete = st.checkbox(
+            f"✅ I confirm I want to permanently remove **{_year_to_delete}** from all statements",
+            key="dcf_delete_year_confirm"
+        )
+
+        if st.button("🗑️ Remove Year", key="dcf_delete_year_btn", type="primary"):
+            if not _confirm_delete:
+                st.error("❌ Please tick the confirmation checkbox first.")
+            elif len(_existing_years) <= 2:
+                st.error("❌ Cannot remove — you need at least 2 years in the statements.")
+            else:
+                for _key in ["dcf_is_df", "dcf_bs_df", "dcf_cf_df",
+                             "dcf_is_base", "dcf_bs_base", "dcf_cf_base"]:
+                    _df = st.session_state.get(_key)
+                    if _df is not None and _year_to_delete in _df.columns:
+                        st.session_state[_key] = _df.drop(columns=[_year_to_delete])
+                st.success(f"✅ Year **{_year_to_delete}** removed from all statements.")
+                st.rerun()
+
+    # ── ADD A NEW YEAR ────────────────────────────────────────────────────
     with st.expander("📅 Append a new financial year (click to open)", expanded=False):
 
         st.markdown("""
@@ -1830,8 +1873,9 @@ else:
 
                     st.markdown("#### 🔍 Preview — mapped rows for the new year")
 
-                    _mapping     = st.session_state["is_core_mapping"]
+                    _mapping = st.session_state["is_core_mapping"]
                     _dcf_mapping = st.session_state["dcf_mapping"]
+
 
                     def _get_new_val(new_df, col_choice, row_label_val):
                         if row_label_val is None:
@@ -1842,7 +1886,7 @@ else:
                         except Exception:
                             return None
 
-                    # IS preview
+
                     _is_preview_rows = []
                     for _k, _label in CORE_LINES:
                         _stored_label = _mapping.get(_k)
@@ -1855,7 +1899,6 @@ else:
                     st.markdown("**Income Statement lines:**")
                     st.dataframe(pd.DataFrame(_is_preview_rows), hide_index=True, width="stretch")
 
-                    # BS preview
                     _bs_preview_rows = []
                     for _k, _title in BS_LINES:
                         _sel_labels = _dcf_mapping.get(_k, [])
@@ -1868,7 +1911,6 @@ else:
                     st.markdown("**Balance Sheet lines:**")
                     st.dataframe(pd.DataFrame(_bs_preview_rows), hide_index=True, width="stretch")
 
-                    # CF preview
                     _cf_preview_rows = []
                     for _k, _title in CF_LINES:
                         _sel_labels = _dcf_mapping.get(_k, [])
@@ -1888,19 +1930,19 @@ else:
                     )
 
                     if st.button(
-                        f"✅ Confirm — Append {_new_year} to statements",
-                        key="dcf_append_confirm",
-                        type="primary"
+                            f"✅ Confirm — Append {_new_year} to statements",
+                            key="dcf_append_confirm",
+                            type="primary"
                     ):
                         _new_is_col = _new_is[_is_col_choice].copy()
                         _new_bs_col = _new_bs[_bs_col_choice].copy()
                         _new_cf_col = _new_cf[_cf_col_choice].copy()
 
-                        st.session_state["dcf_is_df"][_new_year]   = _new_is_col.values
+                        st.session_state["dcf_is_df"][_new_year] = _new_is_col.values
                         st.session_state["dcf_is_base"][_new_year] = _new_is_col.values
-                        st.session_state["dcf_bs_df"][_new_year]   = _new_bs_col.values
+                        st.session_state["dcf_bs_df"][_new_year] = _new_bs_col.values
                         st.session_state["dcf_bs_base"][_new_year] = _new_bs_col.values
-                        st.session_state["dcf_cf_df"][_new_year]   = _new_cf_col.values
+                        st.session_state["dcf_cf_df"][_new_year] = _new_cf_col.values
                         st.session_state["dcf_cf_base"][_new_year] = _new_cf_col.values
 
                         for _key in ["dcf_is_df", "dcf_bs_df", "dcf_cf_df",
