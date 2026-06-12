@@ -60,30 +60,11 @@ add_watermark()
 # ---------------------------------------------------------
 st.set_page_config(page_title="Dividend Discount Model (DDM)", layout="wide")
 
-# ── Auth guard ────────────────────────────────────────────────────
-if not st.session_state.get("authenticated"):
-    st.error("🔒 You must be signed in to access this page.")
-    st.info("Please return to the main page and sign in.")
-    if st.button("Go to Sign In", key="goto_signin_ddm"):
-        st.switch_page("DASHBOARD.py")
-    st.stop()
-
-# ── Sidebar with Sign Out ─────────────────────────────────────────
-_so_user = st.session_state.get("user") or {{}}
-with st.sidebar:
-    st.markdown("### 🧑‍💼 Analyst Profile")
-    st.markdown("---")
-    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
-    st.markdown(f"*Role: {_so_user.get('role', '')}*")
-    st.markdown("---")
-    if st.button("🚪 Sign Out", use_container_width=True, key="signout_ddm"):
-        from auth import save_project_session as _save_proj
-        _pid = st.session_state.get("active_project_id")
-        if _pid:
-            _save_proj(_pid, dict(st.session_state))
-        for _k in list(st.session_state.keys()):
-            del st.session_state[_k]
-        st.switch_page("DASHBOARD.py")
+# ── Ensure session is always authenticated ───────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = True
+if "user" not in st.session_state or not st.session_state.get("user"):
+    st.session_state["user"] = {"username": "analyst", "role": "analyst", "full_name": "Analyst"}
 
 
 
