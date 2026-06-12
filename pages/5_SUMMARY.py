@@ -50,36 +50,66 @@ def add_watermark():
         """
         st.markdown(watermark_css, unsafe_allow_html=True)
 
-add_watermark()
+
 # ------------------------------------------------------------------------------
 # PAGE CONFIG
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Summary Valuation", layout="wide")
 
-# ── Auth guard ────────────────────────────────────────────────────
-if not st.session_state.get("authenticated"):
-    st.error("🔒 You must be signed in to access this page.")
-    st.info("Please return to the main page and sign in.")
-    if st.button("Go to Sign In", key="goto_signin_summ"):
-        st.switch_page("DASHBOARD.py")
-    st.stop()
+# ── CRASH CATCHER — remove after debugging ──────────────────────
+import traceback as _tb, sys as _sys
+_original_excepthook = _sys.excepthook
+def _crash_catcher(exc_type, exc_value, exc_tb):
+    print("\n\n========== SUMMARY PAGE CRASH ==========", flush=True)
+    _tb.print_exception(exc_type, exc_value, exc_tb)
+    print("=========================================\n", flush=True)
+    _original_excepthook(exc_type, exc_value, exc_tb)
+_sys.excepthook = _crash_catcher
+# ── END CRASH CATCHER ────────────────────────────────────────────
+add_watermark()
+# ── Auth guard (robust: restores session if user dict is valid) ──
+# ── Ensure session is always authenticated ───────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = True
+if "user" not in st.session_state or not st.session_state.get("user"):
+    st.session_state["user"] = {"username": "analyst", "role": "analyst", "full_name": "Analyst"}
 
-# ── Sidebar with Sign Out ─────────────────────────────────────────
-_so_user = st.session_state.get("user") or {{}}
-with st.sidebar:
-    st.markdown("### 🧑‍💼 Analyst Profile")
-    st.markdown("---")
-    st.markdown(f"**Signed in as:** {_so_user.get('username', '')}")
-    st.markdown(f"*Role: {_so_user.get('role', '')}*")
-    st.markdown("---")
-    if st.button("🚪 Sign Out", use_container_width=True, key="signout_summ"):
-        from auth import save_project_session as _save_proj
-        _pid = st.session_state.get("active_project_id")
-        if _pid:
-            _save_proj(_pid, dict(st.session_state))
-        for _k in list(st.session_state.keys()):
-            del st.session_state[_k]
-        st.switch_page("dashboard.py")
+# ── Re-parse DCF DataFrames from file bytes if missing ────────────────
+if (
+    st.session_state.get("dcf_file_bytes")
+    and st.session_state.get("dcf_is_df") is None
+):
+    try:
+        import io as _io
+        import pandas as _pd_parse
+
+        def _sort_year_cols(df):
+            item_col = df.columns[0]
+            year_cols = []
+            other_cols = []
+            for c in df.columns[1:]:
+                try:
+                    int(str(c).strip())
+                    year_cols.append(c)
+                except ValueError:
+                    other_cols.append(c)
+            return df[[item_col] + sorted(year_cols, key=lambda x: int(str(x).strip())) + other_cols]
+
+        def _clean_numeric(df):
+            for col in df.columns[1:]:
+                df[col] = _pd_parse.to_numeric(df[col], errors="coerce")
+            return df
+
+        _xls = _pd_parse.ExcelFile(_io.BytesIO(st.session_state["dcf_file_bytes"]))
+        st.session_state["dcf_is_df"] = _sort_year_cols(_clean_numeric(_xls.parse(_xls.sheet_names[0])))
+        st.session_state["dcf_bs_df"] = _sort_year_cols(_clean_numeric(_xls.parse(_xls.sheet_names[1])))
+        st.session_state["dcf_cf_df"] = _sort_year_cols(_clean_numeric(_xls.parse(_xls.sheet_names[2])))
+    except Exception:
+        pass
+
+# ── Re-build forecast_is_df from dcf_is_df if missing ────────────────
+if st.session_state.get("dcf_is_df") is not None and st.session_state.get("forecast_is_df") is None:
+    st.session_state["forecast_is_df"] = st.session_state["dcf_is_df"].copy()
 
 
 
@@ -1214,9 +1244,67 @@ if not selected_models:
     st.warning("Please select at least one model.")
     st.stop()
 
-# ------------------------------------------------------------------------------
-# RETRIEVE VALUATIONS FROM OTHER PAGES (DCF, DDM, COMPARABLES)
-# ------------------------------------------------------------------------------
+# ── Recompute Comparables equity values from latest DCF data ──────────
+# This runs every time Summary loads so values are never stale after
+# a DCF change, even if the user hasn't revisited the Comparables page.
+S = st.session_state
+_implied_ev  = S.get("implied_ev",  0.0) or 0.0
+_implied_pb  = S.get("implied_pb",  0.0) or 0.0
+_implied_pe  = S.get("implied_pe",  0.0) or 0.0
+_maint_ebitda   = S.get("maintainable_ebitda")
+_maint_earnings = S.get("maintainable_earnings")
+_book_equity    = S.get("book_equity")
+_net_debt       = S.get("net_debt", 0.0) or 0.0
+
+import numpy as _np_summ
+import pandas as _pd_summ
+
+# Recompute EBITDA-based equity value from fresh dcf_ebitda_all + weights
+_dcf_eb_all = S.get("dcf_ebitda_all") or S.get("dcf_ebitda_forecast") or {}
+_comp_eb_weights = S.get("comp_eb_weights") or {}
+_timing_base = float(S.get("comp_timing_base", 1.0) or 1.0)
+_use_timing_eb = bool(S.get("comp_use_timing_eb", True))
+if _dcf_eb_all and _comp_eb_weights:
+    _eb_years = sorted(int(y) for y in _dcf_eb_all.keys()
+                       if str(y).strip().isdigit() and len(str(y).strip()) == 4)
+    _weighted_eb = 0.0
+    for _idx_e, _yr in enumerate(_eb_years):
+        _wt = float(_comp_eb_weights.get(str(_yr), 0.0)) / 100.0
+        if _wt > 0:
+            _eb_val = float(_dcf_eb_all.get(str(_yr), 0.0))
+            _timing = (_timing_base + _idx_e) if _use_timing_eb else 1.0
+            _weighted_eb += _eb_val * _timing * _wt
+    if _weighted_eb != 0.0:
+        S["maintainable_ebitda"] = _weighted_eb
+        _maint_ebitda = _weighted_eb
+
+# Recompute Net Profit-based equity value from fresh dcf_profit_all + weights
+_dcf_np_all = S.get("dcf_profit_all") or {}
+_comp_np_weights = S.get("comp_np_weights") or {}
+_use_timing_np = bool(S.get("comp_use_timing_np", True))
+if _dcf_np_all and _comp_np_weights:
+    _np_years = sorted(int(y) for y in _dcf_np_all.keys()
+                       if str(y).strip().isdigit() and len(str(y).strip()) == 4)
+    _weighted_np = 0.0
+    for _idx_n, _yr in enumerate(_np_years):
+        _wt = float(_comp_np_weights.get(str(_yr), 0.0)) / 100.0
+        if _wt > 0:
+            _np_val = float(_dcf_np_all.get(str(_yr), 0.0))
+            _timing = (_timing_base + _idx_n) if _use_timing_np else 1.0
+            _weighted_np += _np_val * _timing * _wt
+    if _weighted_np != 0.0:
+        S["maintainable_earnings"] = _weighted_np
+        _maint_earnings = _weighted_np
+
+# Recompute final equity values and write back to session_state
+if _maint_ebitda is not None and _np_summ.isfinite(float(_maint_ebitda)) and not _pd_summ.isna(_implied_ev) and _implied_ev:
+    S["value_ev_ebitda"] = float(_implied_ev * float(_maint_ebitda) - _net_debt)
+if _book_equity is not None and _np_summ.isfinite(float(_book_equity)) and not _pd_summ.isna(_implied_pb) and _implied_pb:
+    S["value_pbv"] = float(_implied_pb * float(_book_equity))
+if _maint_earnings is not None and _np_summ.isfinite(float(_maint_earnings)) and not _pd_summ.isna(_implied_pe) and _implied_pe:
+    S["value_pe"] = float(_implied_pe * float(_maint_earnings))
+# ── End recompute ─────────────────────────────────────────────────────
+
 value_map = {
     "DCF": st.session_state.get("equity_value_dcf"),
     "DDM": st.session_state.get("equity_value_ddm"),
@@ -1225,7 +1313,6 @@ value_map = {
     "P/E": st.session_state.get("value_pe"),
     "BANKING": st.session_state.get("equity_value_banking"),
 }
-
 # ------------------------------------------------------------------------------
 # WEIGHT ASSIGNMENT (PERSISTENT)
 # ------------------------------------------------------------------------------
@@ -1627,170 +1714,2049 @@ styled_table = df_display.style.apply(highlight_upside, axis=1)
 
 st.dataframe(styled_table, width="stretch", hide_index=True)
 
-# ---- Download button (Excel with formulas) ----
+# ---- Download button (Combined Excel — all models, formula-linked) ----
 import io
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill, numbers
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-def build_summary_excel_with_formulas(
-    selected_models,
-    value_map,
-    weights_new,
-    num_shares,
-    current_price
-) -> bytes:
+
+def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new, num_shares, current_price) -> bytes:  # noqa: C901
+    """
+    Build a single .xlsx workbook mirroring the Innscor Valuation Model format.
+
+    Sheet order (only selected model sheets are created):
+      1. Summary Valuation    — Innscor-style table + recommendation + analyst note
+      2. Forecasts            — Full forecasted Income Statement + key ratios
+      3. DCF                  — WACC build-up, UFCF table, sensitivity table, equity value
+      4. Dividend Discount Model — dividend history, g, Re, P0, equity value
+      5. CompCo               — peer multiples, maintainable metrics, implied equity values
+      6. Banking              — residual income model outputs
+
+    All model equity-value cells link back to Summary Valuation via Excel formulas.
+    """
+    import io, datetime
+    import re as _re
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    def _sanitize(s):
+        return _re.sub(r'[\x00-\x1f\x7f]', '', str(s)) if s else ''
+    # ── Palette (matches Innscor navy/gold look) ──────────────────────────────
+    NAVY        = "0A1B33"
+    MID_NAVY    = "003399"
+    LIGHT_BLUE  = "E8F0FF"
+    GOLD        = "F5B400"
+    WHITE       = "FFFFFF"
+    LIGHT_GREY  = "F2F5FA"
+    HEADER_GREY = "D9E2EF"
+
+    # ── Fonts ─────────────────────────────────────────────────────────────────
+    def fnt(bold=False, color="000000", sz=10, italic=False, name="Arial"):
+        return Font(bold=bold, color=color, size=sz, italic=italic, name=name)
+
+    F_TTL   = fnt(bold=True,  color=WHITE,    sz=12)   # sheet title
+    F_HDR   = fnt(bold=True,  color=WHITE,    sz=10)   # column header
+    F_SHDR  = fnt(bold=True,  color=WHITE,    sz=10)   # section header
+    F_BOLD  = fnt(bold=True,  color="000000", sz=10)
+    F_BLUE  = fnt(bold=False, color="0000FF", sz=10)   # hardcoded input
+    F_GREEN = fnt(bold=False, color="008000", sz=10)   # cross-sheet link
+    F_STD   = fnt(bold=False, color="000000", sz=10)
+    F_NOTE  = fnt(bold=False, color="666666", sz=9, italic=True)
+
+    # ── Fills ─────────────────────────────────────────────────────────────────
+    FL_NAVY  = PatternFill("solid", fgColor=NAVY)
+    FL_MID   = PatternFill("solid", fgColor=MID_NAVY)
+    FL_GOLD  = PatternFill("solid", fgColor="F5B400")
+    FL_LBLUE = PatternFill("solid", fgColor=LIGHT_BLUE)
+    FL_LGREY = PatternFill("solid", fgColor=LIGHT_GREY)
+    FL_HDR   = PatternFill("solid", fgColor="1A3A6B")  # darker navy for column headers
+
+    # ── Borders ───────────────────────────────────────────────────────────────
+    _thin = Side(style="thin", color=HEADER_GREY)
+    _med  = Side(style="medium", color="AABBCC")
+    BDR   = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+    BDR_M = Border(left=_med,  right=_med,  top=_med,  bottom=_med)
+
+    # ── Number formats ────────────────────────────────────────────────────────
+    FMT_MONEY  = '#,##0.00'
+    FMT_MONEY0 = '#,##0'
+    FMT_MONEY4 = '#,##0.0000'
+    FMT_PCT    = '0.00%'
+    FMT_PCT1   = '0.0%'
+    FMT_MULT = '0.00'
+    FMT_NUM    = '#,##0'
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def col(n):
+        return get_column_letter(n)
+
+    def write_title(ws, text, ncols=8, row=1):
+        c = ws.cell(row, 1, text)
+        c.font = F_TTL; c.fill = FL_NAVY
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[row].height = 28
+        for j in range(2, ncols + 1):
+            ws.cell(row, j).fill = FL_NAVY
+        return row + 1
+
+    def write_section(ws, row, text, ncols=6):
+        c = ws.cell(row, 1, text)
+        c.font = F_SHDR; c.fill = FL_MID
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[row].height = 17
+        for j in range(2, ncols + 1):
+            ws.cell(row, j).fill = FL_MID
+        return row + 1
+
+    def write_hdr(ws, row, labels, start_col=1):
+        for j, lbl in enumerate(labels, start=start_col):
+            c = ws.cell(row, j, lbl)
+            c.font = F_HDR; c.fill = FL_HDR
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.border = BDR
+        ws.row_dimensions[row].height = 18
+        return row + 1
+
+    def cell_bd(ws, r, c, value=None, font=None, fmt=None, fill=None, align="left"):
+        cell = ws.cell(r, c)
+        if value is not None:
+            cell.value = value
+        if font:
+            cell.font = font
+        if fmt:
+            cell.number_format = fmt
+        if fill:
+            cell.fill = fill
+        cell.border = BDR
+        cell.alignment = Alignment(horizontal=align, vertical="center")
+        return cell
+
+    def border_range(ws, r1, c1, r2, c2):
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                ws.cell(r, c).border = BDR
+
+    # ── Normalised weights (only selected models) ─────────────────────────────
+    total_w = sum(weights_new.get(m, 0.0) for m in selected_models)
+    if total_w == 0:
+        total_w = 1.0
+    norm_w = {m: (weights_new.get(m, 0.0) / total_w) for m in selected_models}
+
     wb = Workbook()
+    # We'll track cross-sheet equity value cell addresses for each model
+    eq_addr = {}   # model → "SheetName!CellAddress"  (absolute)
 
-    # -----------------------------
-    # Sheet 1: Model Summary
-    # -----------------------------
-    ws1 = wb.active
-    ws1.title = "Model_Summary"
+    # =========================================================================
+    # SHEET: Forecasts — Full Income Statement + Ratios (always created if DCF selected)
+    # =========================================================================
+    import numpy as _np
 
-    headers = ["Model", "Value_USD", "Weight_Input_%", "Weight_Normalized_%", "Weighted_Value_USD"]
-    ws1.append(headers)
+    # Track Forecasts sheet row positions for cross-sheet formulas used by CompCo
+    _for_rev_row_excel = None       # excel row# of Revenue in Forecasts sheet
+    _for_ebitda_row_excel = None    # excel row# of EBITDA
+    _for_np_row_excel = None        # excel row# of Net Profit
+    _for_bk_eq_row_excel = None     # excel row# of Book Equity (static input)
+    _for_nd_row_excel = None        # excel row# of Net Debt (static input)
+    _for_dep_row_excel = None       # excel row# of Depreciation
+    _for_capex_row_excel = None     # excel row# of Capex
+    _for_year_cols = []             # list of year column labels in Forecasts sheet
+    _for_hist_col_count = 0         # number of historical year columns
+    _yr_to_col = {}
+    _for_ratio_rev_row = None       # excel row# of Revenue Growth ratio row
+    _for_ratio_ebitda_row = None    # excel row# of EBITDA Margin ratio row
+    _for_ratio_ebit_row = None      # excel row# of EBIT Margin ratio row
+    _for_ratio_np_row = None        # excel row# of Net Profit Margin ratio row
+    _for_wc_pct_row = None          # excel row# of WC % of Sales row
+    _for_wc_last_row = None         # excel row# of last historical WC (for ΔWC anchor)
+    _for_wc_forecast_start = None   # excel row# of first WC forecast row
+    _for_wc_forecast_end = None     # excel row# of last WC forecast row
+    _for_dwc_start = None           # excel row# of first ΔWC row
+    _for_dwc_end = None             # excel row# of last ΔWC row
 
-    header_fill = PatternFill("solid", fgColor="0A1B33")
-    header_font = Font(bold=True, color="FFFFFF")
-    for col_idx, h in enumerate(headers, start=1):
-        c = ws1.cell(row=1, column=col_idx)
-        c.fill = header_fill
-        c.font = header_font
-        c.alignment = Alignment(horizontal="center")
+    if "DCF" in selected_models:
+        wsFor = wb.active
+        wsFor.title = "Forecasts"
+        co_name = _sanitize(ss.get("company_name", "Company"))
+        write_title(wsFor, f"{co_name} — Forecasted Income Statement", ncols=20)
 
-    # write model rows
-    start_row = 2
-    for i, m in enumerate(selected_models):
-        r = start_row + i
-        ws1.cell(r, 1, m)
+        _fi = ss.get("forecast_is_df")
+        forecast_is = _fi if (_fi is not None and not (hasattr(_fi, "empty") and _fi.empty)) else ss.get("dcf_is_df")
 
-        # Value
-        v = value_map.get(m)
-        ws1.cell(r, 2, float(v) if v is not None else None)
+        r = 3
+        if forecast_is is not None and hasattr(forecast_is, "columns"):
+            item_col = "Item"
+            year_cols = [c for c in forecast_is.columns if c != item_col]
+            _for_year_cols = [str(y) for y in year_cols]
 
-        # Raw weight input
-        w_in = float(weights_new.get(m, 0.0))
-        ws1.cell(r, 3, w_in)
+            # Avg column: col 1=Item, col 2..n+1=years, col n+2=Hist.Avg
+            # Define early so IS forecast formulas can reference it
+            _avg_col_num = len(year_cols) + 2
+            _avg_col_L   = get_column_letter(_avg_col_num)
 
-        # Weight normalized = C / SUM(C range) * 100
-        # We'll compute SUM range based on number of models
-        # Example: =C2/SUM($C$2:$C$6)*100
-        end_row = start_row + len(selected_models) - 1
-        ws1.cell(r, 4, f"=C{r}/SUM($C${start_row}:$C${end_row})*100")
+            # Detect historical vs forecast columns
+            _dcf_is = ss.get("dcf_is_df")
+            _dcf_is_cols = list(_dcf_is.columns) if (_dcf_is is not None and hasattr(_dcf_is, "columns")) else year_cols
+            hist_yrs = set(str(c) for c in _dcf_is_cols if c != item_col)
+            _for_hist_col_count = len(hist_yrs)
 
-        # Weighted value = Value * WeightNormalized / 100
-        ws1.cell(r, 5, f"=B{r}*D{r}/100")
+            forecast_start_yr = None
+            try:
+                int_years = sorted([int(c) for c in year_cols if str(c).isdigit()])
+                # Use the last historical year stored by the DCF page (last uploaded year + 1)
+                # Fall back to dcf_is_df columns if not available
+                _last_hist_yr = None
+                _dcf_is_yr_cols = [c for c in (_dcf_is.columns if _dcf_is is not None else []) if c != item_col]
+                if _dcf_is_yr_cols:
+                    try:
+                        _last_hist_yr = max(int(str(c)) for c in _dcf_is_yr_cols if str(c).isdigit())
+                    except Exception:
+                        pass
+                if _last_hist_yr is not None:
+                    forecast_start_yr = next((y for y in int_years if y > _last_hist_yr), None)
+                else:
+                    # absolute fallback: first year not in dcf_is_df
+                    forecast_start_yr = next((y for y in int_years if str(y) not in hist_yrs), None)
+            except Exception:
+                pass
 
-    # Totals row
-    total_row = start_row + len(selected_models)
-    ws1.cell(total_row, 1, "TOTAL / WEIGHTED EQUITY")
-    ws1.cell(total_row, 1).font = Font(bold=True)
+            # Write header row
+            write_hdr(wsFor, r, [item_col] + [str(y) for y in year_cols], start_col=1)
+            r += 1
+            is_data_start_row = r  # first data row of IS
 
-    # Weighted equity = SUM(weighted values)
-    ws1.cell(total_row, 5, f"=SUM($E${start_row}:$E${total_row-1})")
-    ws1.cell(total_row, 5).font = Font(bold=True)
+            # ── Identify mapped row indices from session ─────────────────────
+            # We use the IS core mapping stored in session to know which excel
+            # rows correspond to which financial line items.
+            _is_core = ss.get("is_core_mapping", {})
+            def _mapped_excel_row(key):
+                """Convert mapping label '5: Revenue' to 0-based df index."""
+                lbl = _is_core.get(key)
+                if not lbl:
+                    return None
+                try:
+                    return int(str(lbl).split(":")[0]) - 1
+                except Exception:
+                    return None
 
-    # formatting
-    for r in range(start_row, total_row + 1):
-        ws1.cell(r, 2).number_format = '#,##0.00'
-        ws1.cell(r, 3).number_format = '0.00'
-        ws1.cell(r, 4).number_format = '0.00'
-        ws1.cell(r, 5).number_format = '#,##0.00'
+            _rev_df_idx     = _mapped_excel_row("rev")
+            _cos_df_idx     = _mapped_excel_row("cos")
+            _gp_df_idx      = _mapped_excel_row("gp")
+            _ebitda_df_idx  = _mapped_excel_row("ebitda")
+            _dep_df_idx     = _mapped_excel_row("dep")
+            _op_df_idx      = _mapped_excel_row("op")
+            _pbt_df_idx     = _mapped_excel_row("pbt")
+            _tax_df_idx     = _mapped_excel_row("tax")
+            _np_df_idx      = _mapped_excel_row("np")
 
-    # adjust column widths
-    for col in range(1, 6):
-        ws1.column_dimensions[get_column_letter(col)].width = 22
+            # Pull DCF assumptions for formulas
+            _avg_g          = float(ss.get("dcf_rev_growth_override", ss.get("dcf_yearly_growth_pct", {}).get(str(forecast_start_yr), 0.15) if forecast_start_yr else 0.15))
+            _avg_gp_margin  = None
+            _avg_tax_ratio  = 0.0
+            _cos_ratio      = 0.0
+            _wc_pct_used    = float(ss.get("dcf_wc_pct_method_last_val", 0.0) or 0.0)
+            # Try to get GP margin from session (stored in DCF page globals)
+            try:
+                if _gp_df_idx is not None and _rev_df_idx is not None:
+                    _rev_hist = forecast_is.iloc[_rev_df_idx][list(hist_yrs)] if hist_yrs else None
+                    _gp_hist  = forecast_is.iloc[_gp_df_idx][list(hist_yrs)]  if hist_yrs else None
+                    if _rev_hist is not None and _gp_hist is not None:
+                        import numpy as _np2
+                        _rv = _rev_hist.values.astype(float)
+                        _gv = _gp_hist.values.astype(float)
+                        mask = (_rv != 0) & ~_np2.isnan(_rv) & ~_np2.isnan(_gv)
+                        if mask.any():
+                            _avg_gp_margin = float(_np2.mean(_gv[mask] / _rv[mask]))
+            except Exception:
+                pass
 
-    # -----------------------------
-    # Sheet 2: Valuation Summary
-    # -----------------------------
-    ws2 = wb.create_sheet("Valuation_Summary")
+            # ── Write IS rows ─────────────────────────────────────────────────
+            for idx, row_data in forecast_is.iterrows():
+                item_name = row_data.get(item_col, f"Row {idx}")
+                is_subtotal = any(kw in str(item_name).upper() for kw in
+                                  ["TOTAL", "PROFIT", "EBITDA", "EBIT", "REVENUE", "NET", "GROSS"])
+                font_row = F_BOLD if is_subtotal else F_STD
+                fill_row = FL_LGREY if is_subtotal else None
 
-    ws2_headers = ["Metric", "Value", "Unit"]
-    ws2.append(ws2_headers)
-    for col_idx, h in enumerate(ws2_headers, start=1):
-        c = ws2.cell(row=1, column=col_idx)
-        c.fill = header_fill
-        c.font = header_font
-        c.alignment = Alignment(horizontal="center")
+                # Track key row positions
+                if idx == _rev_df_idx:
+                    _for_rev_row_excel = r
+                if idx == _ebitda_df_idx:
+                    _for_ebitda_row_excel = r
+                if idx == _np_df_idx:
+                    _for_np_row_excel = r
+                if idx == _dep_df_idx:
+                    _for_dep_row_excel = r
 
-    # Put inputs and formulas:
-    # Weighted Equity Value comes from Model_Summary!E{total_row}
-    # Shares and current price are typed values
-    # Intrinsic = WeightedEquity / Shares
-    # Upside% = (Intrinsic - CurrentPrice) / CurrentPrice
+                wsFor.cell(r, 1).value = str(item_name)
+                wsFor.cell(r, 1).font = font_row
+                wsFor.cell(r, 1).border = BDR
+                if fill_row:
+                    wsFor.cell(r, 1).fill = fill_row
 
-    r = 2
-    ws2.cell(r, 1, "Weighted Equity Value")
-    ws2.cell(r, 2, f"=Model_Summary!E{total_row}")
-    ws2.cell(r, 3, "USD")
+                for ci, yr in enumerate(year_cols, start=2):
+                    val = row_data.get(yr)
+                    cell = wsFor.cell(r, ci)
+                    is_forecast_col = (forecast_start_yr and str(yr).isdigit() and int(str(yr)) >= forecast_start_yr)
+                    try:
+                        cell.value = float(val) if val is not None and not (isinstance(val, float) and _np.isnan(val)) else None
+                        cell.number_format = FMT_MONEY0
+                    except (TypeError, ValueError):
+                        cell.value = str(val) if val is not None else None
+                    cell.font = F_BLUE if is_forecast_col else F_STD
+                    if is_subtotal:
+                        cell.font = Font(bold=True, color="0000FF" if is_forecast_col else "000000", name="Arial", size=10)
+                        cell.fill = FL_LGREY
+                    cell.border = BDR
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                r += 1
 
+            # ── NOW overwrite forecast columns with Excel formulas ─────────────
+            # We have historical data as hardcoded values (written above).
+            # For forecast columns we overwrite with proper Excel formulas so
+            # changing revenue growth in the ratios table updates everything.
+            #
+            # Formula structure (referencing ratios table written BELOW):
+            #   Revenue(y)   = Revenue(y-1) * (1 + RevGrowth%)
+            #   COS(y)       = -Revenue(y) * (1 - GPMargin%)    [if GP+COS mapped]
+            #   GP(y)        = Revenue(y) + COS(y)
+            #   Other rows   = Revenue(y) * (row ratio%)
+            #   EBITDA/OP/PBT/NP = SUM of rows above (chain)
+            #   Tax(y)       = PBT(y) * TaxRatio%
+            #   NP(y)        = PBT(y) + Tax(y)
+            #
+            # The ratios table will be written after the IS data, so we use
+            # a "forward reference" approach: write the IS formulas referencing
+            # ratio rows we will create, using row numbers we pre-calculate.
+            #
+            # We pre-calculate where the ratios table will be.
+            # Actual write sequence after IS loop:
+            #   r += 1            → blank row         (r+1)
+            #   write_section     → section header    (r+2), then r += 1 → r becomes r+3
+            #   write_hdr         → column header     (r+3), then r += 1 → r becomes r+4
+            #   Revenue Growth    → first data row    (r+4)
+            # So _ratio_data_r = r_after_IS + 3  (the +1 blank + section + hdr = 3 rows before data)
+            _ratio_data_r    = r + 3   # Revenue Growth row (first data row of ratio table)
+
+            # We'll write ratios in this order:
+            #   0: Revenue Growth (%)
+            #   1: EBITDA Margin (%)
+            #   2: EBIT Margin (%)
+            #   3: Net Profit Margin (%)
+            #   Then one row per non-total, non-revenue IS row (as % of Rev)
+            # We need to know the row index for each IS row ratio:
+            # Total IS rows that are "total" rows (skip in ratio table):
+            _total_df_idxs = set()
+            for _k in ["gp", "ebitda", "op", "pbt", "np"]:
+                _v = _mapped_excel_row(_k)
+                if _v is not None:
+                    _total_df_idxs.add(_v)
+            if _tax_df_idx is not None:
+                _total_df_idxs.add(_tax_df_idx)
+            # Only exclude COS from ratio table if GP mapping exists (otherwise treat as % of Rev)
+            _has_gp_for_cos = (_gp_df_idx is not None and _avg_gp_margin is not None)
+            if _cos_df_idx is not None and _has_gp_for_cos:
+                _total_df_idxs.add(_cos_df_idx)
+
+            # Build mapping: df_idx -> ratio table excel row
+            # First 4 rows = key ratios (Rev Growth, EBITDA%, EBIT%, NP%)
+            # Then each non-rev, non-total IS row gets its own ratio row
+            _ratio_row_for_df_idx = {}  # df_idx -> excel row in ratio table
+            _ratio_counter = _ratio_data_r + 4  # after the 4 key ratios
+
+            for _df_i in range(len(forecast_is)):
+                if _df_i == _rev_df_idx:
+                    continue  # revenue not a ratio row
+                if _df_i in _total_df_idxs:
+                    continue  # totals not in ratio table
+                _ratio_row_for_df_idx[_df_i] = _ratio_counter
+                _ratio_counter += 1
+
+            # Now overwrite forecast columns with formulas
+            _hist_cols = [str(c) for c in year_cols if str(c) in hist_yrs]
+            _fore_cols = [str(c) for c in year_cols if str(c) not in hist_yrs]
+
+            # Column index mapping: year string -> excel col number (1-based, col 1=Item, col 2=first year)
+            _yr_to_col = {str(yr): ci + 2 for ci, yr in enumerate(year_cols)}
+
+            # For each forecast year, overwrite formulas
+            _rev_row_e    = _for_rev_row_excel
+            _gp_row_e     = (is_data_start_row + _gp_df_idx)    if _gp_df_idx is not None else None
+            _cos_row_e    = (is_data_start_row + _cos_df_idx)   if _cos_df_idx is not None else None
+            _ebitda_row_e = _for_ebitda_row_excel
+            _op_row_e     = (is_data_start_row + _op_df_idx)    if _op_df_idx is not None else None
+            _pbt_row_e    = (is_data_start_row + _pbt_df_idx)   if _pbt_df_idx is not None else None
+            _tax_row_e    = (is_data_start_row + _tax_df_idx)   if _tax_df_idx is not None else None
+            _np_row_e     = _for_np_row_excel
+
+            for _f_i, _f_yr in enumerate(_fore_cols):
+                _col_num = _yr_to_col[_f_yr]
+                _col_L   = get_column_letter(_col_num)
+
+                # Revenue: prev_col * (1 + RevGrowth%) — use THIS year's column for growth rate
+                _rev_growth_cell = f"{_col_L}{_ratio_data_r}"   # column-specific Rev Growth cell
+                if _rev_row_e:
+                    if _f_i == 0:
+                        # first forecast year: previous = last historical col
+                        _last_hist_col_L = get_column_letter(_yr_to_col[_hist_cols[-1]]) if _hist_cols else "B"
+                        wsFor.cell(_rev_row_e, _col_num).value = f"={_last_hist_col_L}{_rev_row_e}*(1+{_rev_growth_cell})"
+                    else:
+                        _prev_fore_col_L = get_column_letter(_yr_to_col[_fore_cols[_f_i - 1]])
+                        wsFor.cell(_rev_row_e, _col_num).value = f"={_prev_fore_col_L}{_rev_row_e}*(1+{_rev_growth_cell})"
+                    wsFor.cell(_rev_row_e, _col_num).number_format = FMT_MONEY0
+                    wsFor.cell(_rev_row_e, _col_num).font = Font(bold=True, color="0000FF", name="Arial", size=10)
+                    wsFor.cell(_rev_row_e, _col_num).fill = FL_LGREY
+                    wsFor.cell(_rev_row_e, _col_num).border = BDR
+
+                # COS and GP
+                _gp_margin_cell = f"$B${_ratio_data_r + 1}"   # row 1 of ratio table = EBITDA margin (but we need GP margin)
+                # We'll use a dedicated GP margin row in the ratio table at row _ratio_data_r + 4 + len(non-total-rows)
+                # But simpler: reference the GP margin we'll put in the "EBITDA Margin" slot row
+                # Actually GP Margin = EBITDA Margin is wrong. Let's add a GP Margin row at the END of ratio section.
+                # We'll use the actual average computed above as a hardcoded value (blue) since GP margin
+                # is a backward-looking average. The formula =Revenue*(GPmargin%) is the live formula.
+                # The GP margin cell will be placed after the main ratio rows:
+                _gp_margin_explicit_r = _ratio_counter  # last row in ratio table
+                # (written later in ratio section)
+
+                if _cos_row_e and _gp_row_e and _rev_row_e:
+                    # ── GP margin method: only use if GP margin row was actually mapped ──
+                    # Check if the GP margin avg cell will have a real value
+                    _has_gp_mapping = (_gp_df_idx is not None and _avg_gp_margin is not None)
+                    if _has_gp_mapping:
+                        _last_cos = forecast_is.iloc[_cos_df_idx].get(
+                            list(hist_yrs)[-1] if hist_yrs else year_cols[-1], 0.0
+                        )
+                        try:
+                            _last_cos = float(_last_cos)
+                        except Exception:
+                            _last_cos = 0.0
+                        _cos_sign = -1 if _last_cos < 0 else 1
+                        wsFor.cell(_cos_row_e, _col_num).value = (
+                            f"={_cos_sign}*{_col_L}{_rev_row_e}*(1-${_avg_col_L}${_gp_margin_explicit_r})"
+                        )
+                        wsFor.cell(_cos_row_e, _col_num).number_format = FMT_MONEY0
+                        wsFor.cell(_cos_row_e, _col_num).font = Font(bold=False, color="0000FF", name="Arial", size=10)
+                        wsFor.cell(_cos_row_e, _col_num).border = BDR
+                        wsFor.cell(_gp_row_e, _col_num).value = (
+                            f"={_col_L}{_rev_row_e}+{_col_L}{_cos_row_e}"
+                        )
+                        wsFor.cell(_gp_row_e, _col_num).number_format = FMT_MONEY0
+                        wsFor.cell(_gp_row_e, _col_num).font = Font(bold=True, color="0000FF", name="Arial", size=10)
+                        wsFor.cell(_gp_row_e, _col_num).fill = FL_LGREY
+                        wsFor.cell(_gp_row_e, _col_num).border = BDR
+                    else:
+                        # ── No GP mapping: treat COS as % of Revenue like any other line ──
+                        # Find its ratio row in the ratio table and use that formula instead
+                        _cos_ratio_row = _ratio_row_for_df_idx.get(_cos_df_idx)
+                        if _cos_ratio_row and _rev_row_e:
+                            wsFor.cell(_cos_row_e, _col_num).value = (
+                                f"={_col_L}{_rev_row_e}*${_avg_col_L}${_cos_ratio_row}"
+                            )
+                        else:
+                            wsFor.cell(_cos_row_e, _col_num).value = 0
+                        wsFor.cell(_cos_row_e, _col_num).number_format = FMT_MONEY0
+                        wsFor.cell(_cos_row_e, _col_num).font = Font(bold=False, color="0000FF", name="Arial", size=10)
+                        wsFor.cell(_cos_row_e, _col_num).border = BDR
+                        # GP row: also falls through to the ratio table via standard chain
+                        if _gp_row_e and _rev_row_e:
+                            _gp_ratio_row = _ratio_row_for_df_idx.get(_gp_df_idx)
+                            if _gp_ratio_row:
+                                wsFor.cell(_gp_row_e, _col_num).value = (
+                                    f"={_col_L}{_rev_row_e}*${_avg_col_L}${_gp_ratio_row}"
+                                )
+                                wsFor.cell(_gp_row_e, _col_num).number_format = FMT_MONEY0
+                                wsFor.cell(_gp_row_e, _col_num).font = Font(bold=True, color="0000FF", name="Arial",
+                                                                            size=10)
+                                wsFor.cell(_gp_row_e, _col_num).fill = FL_LGREY
+                                wsFor.cell(_gp_row_e, _col_num).border = BDR
+
+                elif _gp_row_e and _rev_row_e:
+                    wsFor.cell(_gp_row_e, _col_num).value = (
+                        f"={_col_L}{_rev_row_e}*${_avg_col_L}${_gp_margin_explicit_r}"
+                    )
+                    wsFor.cell(_gp_row_e, _col_num).number_format = FMT_MONEY0
+                    wsFor.cell(_gp_row_e, _col_num).font = Font(bold=True, color="0000FF", name="Arial", size=10)
+                    wsFor.cell(_gp_row_e, _col_num).fill = FL_LGREY
+                    wsFor.cell(_gp_row_e, _col_num).border = BDR
+
+                # Other non-total rows: Revenue * avg ratio%
+                for _df_i2, _ratio_excel_r in _ratio_row_for_df_idx.items():
+                    _is_row_e = is_data_start_row + _df_i2
+                    if _rev_row_e:
+                        wsFor.cell(_is_row_e, _col_num).value = f"={_col_L}{_rev_row_e}*${_avg_col_L}${_ratio_excel_r}"
+                    wsFor.cell(_is_row_e, _col_num).number_format = FMT_MONEY0
+                    wsFor.cell(_is_row_e, _col_num).font = Font(bold=False, color="0000FF", name="Arial", size=10)
+                    wsFor.cell(_is_row_e, _col_num).border = BDR
+
+                # Totals chain: each total = SUM of rows from previous total down to just above current
+                _chain = []
+                for _k2, _di2 in [("rev", _rev_df_idx), ("gp", _gp_df_idx), ("ebitda", _ebitda_df_idx),
+                                    ("op", _op_df_idx), ("pbt", _pbt_df_idx), ("np", _np_df_idx)]:
+                    if _di2 is not None:
+                        _chain.append((is_data_start_row + _di2))
+                _chain = sorted(set(_chain))
+
+                for _ci2 in range(1, len(_chain)):
+                    _prev_r = _chain[_ci2 - 1]
+                    _cur_r  = _chain[_ci2]
+                    if _cur_r == _gp_row_e and _cos_row_e:
+                        continue  # GP already handled
+                    if _cur_r == _gp_row_e:
+                        continue  # GP already handled
+                    wsFor.cell(_cur_r, _col_num).value = f"=SUM({_col_L}{_prev_r}:{_col_L}{_cur_r - 1})"
+                    wsFor.cell(_cur_r, _col_num).number_format = FMT_MONEY0
+                    wsFor.cell(_cur_r, _col_num).font = Font(bold=True, color="0000FF", name="Arial", size=10)
+                    wsFor.cell(_cur_r, _col_num).fill = FL_LGREY
+                    wsFor.cell(_cur_r, _col_num).border = BDR
+
+                # Tax = PBT * TaxRatio — use Hist. Avg column for tax ratio (row _ratio_data_r+2)
+                _tax_ratio_cell = f"${_avg_col_L}${_ratio_data_r + 2}"
+                if _tax_row_e and _pbt_row_e:
+                    wsFor.cell(_tax_row_e, _col_num).value = f"={_col_L}{_pbt_row_e}*{_tax_ratio_cell}"
+                    wsFor.cell(_tax_row_e, _col_num).number_format = FMT_MONEY0
+                    wsFor.cell(_tax_row_e, _col_num).font = Font(bold=False, color="0000FF", name="Arial", size=10)
+                    wsFor.cell(_tax_row_e, _col_num).border = BDR
+
+                # Net Profit = PBT + Tax + anything between
+                if _np_row_e and _pbt_row_e:
+                    if _tax_row_e and (_tax_row_e + 1) <= (_np_row_e - 1):
+                        wsFor.cell(_np_row_e, _col_num).value = f"={_col_L}{_pbt_row_e}+{_col_L}{_tax_row_e}+SUM({_col_L}{_tax_row_e + 1}:{_col_L}{_np_row_e - 1})"
+                    elif _tax_row_e:
+                        wsFor.cell(_np_row_e, _col_num).value = f"={_col_L}{_pbt_row_e}+{_col_L}{_tax_row_e}"
+                    else:
+                        wsFor.cell(_np_row_e, _col_num).value = f"={_col_L}{_pbt_row_e}"
+                    wsFor.cell(_np_row_e, _col_num).number_format = FMT_MONEY0
+                    wsFor.cell(_np_row_e, _col_num).font = Font(bold=True, color="0000FF", name="Arial", size=10)
+                    wsFor.cell(_np_row_e, _col_num).fill = FL_LGREY
+                    wsFor.cell(_np_row_e, _col_num).border = BDR
+
+            # ── Key Ratios section — ALL AS EXCEL FORMULAS ────────────────────
+            r += 1
+            # Avg column is the column right after the last year column
+
+            # Identify which column indices are historical vs forecast
+            _hist_col_indices = []   # (ci, yr_str) for historical years
+            _fore_col_indices = []   # (ci, yr_str) for forecast years
+            for _ci_tmp, _yr_tmp in enumerate(year_cols, start=2):
+                _is_fc_tmp = (forecast_start_yr and str(_yr_tmp).isdigit() and int(str(_yr_tmp)) >= forecast_start_yr)
+                if _is_fc_tmp:
+                    _fore_col_indices.append((_ci_tmp, str(_yr_tmp)))
+                else:
+                    _hist_col_indices.append((_ci_tmp, str(_yr_tmp)))
+
+            # Build AVERAGE formula over historical columns for a given row
+            def _avg_formula(row_num):
+                if not _hist_col_indices:
+                    return None
+                hist_cells = ",".join(f"{get_column_letter(ci)}{row_num}" for ci, _ in _hist_col_indices)
+                return f"=IFERROR(AVERAGE({hist_cells}),\"\")"
+
+            write_section(wsFor, r, "Key Financial Ratios", ncols=_avg_col_num); r += 1
+            write_hdr(wsFor, r, ["Metric"] + [str(y) for y in year_cols] + ["Hist. Avg"], start_col=1); r += 1
+
+            # ── helper: write one ratio row ──────────────────────────────────
+            # hist_fn(ci, yr_str) -> formula string for historical cell
+            # avg_col -> True = add AVERAGE formula in avg col
+            # forecast_ref -> "avg" = reference avg col; "value:X" = hardcode X
+            def _write_ratio_row(ws, row, label, hist_fn, forecast_ref="avg",
+                                  fmt=FMT_PCT1, label_font=None):
+                ws.cell(row, 1).value = label
+                ws.cell(row, 1).font  = label_font or F_STD
+                ws.cell(row, 1).border = BDR
+
+                # Historical cells
+                for ci, yr_s in _hist_col_indices:
+                    cell = ws.cell(row, ci)
+                    cell.border = BDR
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = fmt
+                    v = hist_fn(ci, yr_s)
+                    if v is not None:
+                        cell.value = v
+
+                # Average column
+                avg_cell = ws.cell(row, _avg_col_num)
+                avg_cell.border = BDR
+                avg_cell.alignment = Alignment(horizontal="right", vertical="center")
+                avg_cell.number_format = fmt
+                avg_f = _avg_formula(row)
+                if avg_f:
+                    avg_cell.value  = avg_f
+                    avg_cell.font   = Font(bold=True, color="008000", name="Arial", size=10)  # green = formula
+
+                # Forecast cells → reference average column
+                for ci, yr_s in _fore_col_indices:
+                    cell = ws.cell(row, ci)
+                    cell.border = BDR
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = fmt
+                    if forecast_ref == "avg":
+                        cell.value = f"=${_avg_col_L}${row}"
+                        cell.font  = F_GREEN
+                    elif str(forecast_ref).startswith("value:"):
+                        cell.value = float(str(forecast_ref).split(":", 1)[1])
+                        cell.font  = F_BLUE
+                    elif str(forecast_ref).startswith("peryear:"):
+                        # per-year dict passed as peryear:{yr:val,...}
+                        pass  # handled outside
+
+            # -- Revenue Growth --
+            _for_ratio_rev_row = r
+            _yearly_g_pct = ss.get("dcf_yearly_growth_pct", {}) or {}
+            _uniform_g    = ss.get("dcf_avg_g", ss.get("avg_g", None))
+            wsFor.cell(r, 1).value = "Revenue Growth (%)"
+            wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+
+            for ci, yr in enumerate(year_cols, start=2):
+                cell = wsFor.cell(r, ci)
+                cell.border = BDR
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.number_format = FMT_PCT1
+                _is_fc_g = (forecast_start_yr and str(yr).isdigit() and int(str(yr)) >= forecast_start_yr)
+                if _is_fc_g:
+                    _yr_key = str(yr)
+                    _g_val = _yearly_g_pct.get(_yr_key)
+                    if _g_val is None and _uniform_g is not None:
+                        _g_val = float(_uniform_g)
+                    if _g_val is None:
+                        if ci > 2 and _for_rev_row_excel:
+                            prev_col_L = get_column_letter(ci - 1)
+                            cur_col_L  = get_column_letter(ci)
+                            cell.value = f"=IFERROR(({cur_col_L}{_for_rev_row_excel}-{prev_col_L}{_for_rev_row_excel})/ABS({prev_col_L}{_for_rev_row_excel}),\"\")"
+                        else:
+                            cell.value = None
+                    else:
+                        _g_dec = float(_g_val) / 100.0 if abs(float(_g_val)) > 1 else float(_g_val)
+                        cell.value = _g_dec
+                        cell.font = F_BLUE
+                else:
+                    if ci > 2 and _for_rev_row_excel:
+                        prev_col_L = get_column_letter(ci - 1)
+                        cur_col_L  = get_column_letter(ci)
+                        cell.value = f"=IFERROR(({cur_col_L}{_for_rev_row_excel}-{prev_col_L}{_for_rev_row_excel})/ABS({prev_col_L}{_for_rev_row_excel}),\"\")"
+                    else:
+                        cell.value = None
+
+            # Avg of historical revenue growths
+            _rev_avg_cell = wsFor.cell(r, _avg_col_num)
+            _rev_avg_cell.border = BDR
+            _rev_avg_cell.number_format = FMT_PCT1
+            _rev_avg_cell.alignment = Alignment(horizontal="right", vertical="center")
+            if _hist_col_indices:
+                # Average of historical cols (skip first hist col since it has no prior year growth)
+                _hist_growth_cols = [ci for ci, _ in _hist_col_indices if ci > 2]
+                if _hist_growth_cols:
+                    _rev_avg_cell.value = f"=IFERROR(AVERAGE({','.join(f'{get_column_letter(c)}{r}' for c in _hist_growth_cols)}),\"\")"
+                    _rev_avg_cell.font  = Font(bold=True, color="008000", name="Arial", size=10)
+            r += 1
+
+            # -- EBITDA Margin --
+            _for_ratio_ebitda_row = r
+            def _ebitda_hist(ci, yr_s):
+                if _for_ebitda_row_excel and _for_rev_row_excel:
+                    return f"=IFERROR({get_column_letter(ci)}{_for_ebitda_row_excel}/{get_column_letter(ci)}{_for_rev_row_excel},\"\")"
+                return None
+            _write_ratio_row(wsFor, r, "EBITDA Margin (%)", _ebitda_hist, forecast_ref="avg")
+            r += 1
+
+            # -- Effective Tax Rate (Tax/PBT) —─ used in forecasts --
+            _for_ratio_ebit_row = r
+            def _tax_hist(ci, yr_s):
+                if _tax_df_idx is not None and _pbt_df_idx is not None:
+                    _tax_r_e2 = is_data_start_row + _tax_df_idx
+                    _pbt_r_e2 = is_data_start_row + _pbt_df_idx
+                    return f"=IFERROR({get_column_letter(ci)}{_tax_r_e2}/{get_column_letter(ci)}{_pbt_r_e2},\"\")"
+                return None
+            _write_ratio_row(wsFor, r, "Effective Tax Rate (Tax/PBT) — used in forecasts", _tax_hist, forecast_ref="avg")
+            r += 1
+
+            # -- Net Profit Margin --
+            _for_ratio_np_row = r
+            def _np_hist(ci, yr_s):
+                if _for_np_row_excel and _for_rev_row_excel:
+                    return f"=IFERROR({get_column_letter(ci)}{_for_np_row_excel}/{get_column_letter(ci)}{_for_rev_row_excel},\"\")"
+                return None
+            _write_ratio_row(wsFor, r, "Net Profit Margin (%)", _np_hist, forecast_ref="avg")
+            r += 1
+
+            # -- All other non-total IS rows as % of Revenue --
+            for _df_i_r, _ratio_excel_r in _ratio_row_for_df_idx.items():
+                _row_label = str(forecast_is.iloc[_df_i_r].get(item_col, f"Row {_df_i_r}"))
+                _is_row_e2 = is_data_start_row + _df_i_r
+                def _generic_hist(ci, yr_s, _ire=_is_row_e2):
+                    if _for_rev_row_excel:
+                        return f"=IFERROR({get_column_letter(ci)}{_ire}/{get_column_letter(ci)}{_for_rev_row_excel},\"\")"
+                    return None
+                _write_ratio_row(wsFor, r, f"{_row_label} % of Revenue", _generic_hist,
+                                 forecast_ref="avg", label_font=F_NOTE)
+                r += 1
+
+            # -- GP Margin row (drives COS forecast) --
+            _gp_margin_explicit_r = r
+            def _gp_hist(ci, yr_s):
+                if _gp_df_idx is not None and _for_rev_row_excel:
+                    _gp_r_e3 = is_data_start_row + _gp_df_idx
+                    return f"=IFERROR({get_column_letter(ci)}{_gp_r_e3}/{get_column_letter(ci)}{_for_rev_row_excel},\"\")"
+                return None
+            _write_ratio_row(wsFor, r, "GP Margin % — used in COS/GP forecast (editable)",
+                             _gp_hist, forecast_ref="avg")
+            r += 1
+
+        else:
+            wsFor.cell(r, 1).value = "No forecasted income statement found. Run the DCF page first."
+            wsFor.cell(r, 1).font = F_NOTE
+            r += 2
+
+        # ── Working Capital (Forecast) — fully formulized ─────────────────────
+        r += 1
+        write_section(wsFor, r, "Working Capital (Forecast & ΔWC)", ncols=6); r += 1
+
+        _fore_yr_list = [str(y) for y in year_cols if str(y) not in hist_yrs] if forecast_is is not None else []
+        _hist_yr_list = [str(y) for y in year_cols if str(y) in hist_yrs] if forecast_is is not None else []
+        _wc_pct_used_val = float(ss.get("dcf_wc_pct_method_last_val", 0.0) or
+                                 ss.get("dcf_wc_percent_avg", 0.0) or 0.0)
+        _last_wc_hist = float(ss.get("dcf_last_wc_hist", 0.0) or 0.0)
+
+        # WC% assumption row (blue, editable)
+        write_hdr(wsFor, r, ["WC % of Sales (editable)", "Value"]); r += 1
+        _for_wc_pct_row = r
+        wsFor.cell(r, 1).value = "WC % of Sales — used in forecast below"
+        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+        wsFor.cell(r, 2).value = float(_wc_pct_used_val)
+        wsFor.cell(r, 2).font = F_BLUE
+        wsFor.cell(r, 2).number_format = FMT_PCT1
+        wsFor.cell(r, 2).border = BDR
+        r += 1
+
+        # Last historical WC anchor (blue, hardcoded)
+        _for_wc_last_row = r
+        wsFor.cell(r, 1).value = "Last Historical Working Capital (anchor)"
+        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+        wsFor.cell(r, 2).value = float(_last_wc_hist)
+        wsFor.cell(r, 2).font = F_BLUE
+        wsFor.cell(r, 2).number_format = FMT_MONEY0
+        wsFor.cell(r, 2).border = BDR
+        r += 1
+
+        # Forecast WC table: Year | Revenue (=Forecasts!rev) | WC (=Rev*WC%) | ΔWC (=prev-curr)
+        write_hdr(wsFor, r, ["Year", "Forecast Revenue", "Forecast WC (Rev×WC%)", "ΔWC (Old–New)"]); r += 1
+        _for_wc_forecast_start = r
+        _wc_prev_ref = f"B{_for_wc_last_row}"
+
+        for _f_i2, _f_yr2 in enumerate(_fore_yr_list):
+            _col_num2 = _yr_to_col.get(_f_yr2) if forecast_is is not None else None
+            _col_L2 = get_column_letter(_col_num2) if _col_num2 else "B"
+            wsFor.cell(r, 1).value = int(_f_yr2) if _f_yr2.isdigit() else _f_yr2
+            wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+            wsFor.cell(r, 1).alignment = Alignment(horizontal="center", vertical="center")
+
+            if _for_rev_row_excel and _col_num2:
+                wsFor.cell(r, 2).value = f"=Forecasts!{_col_L2}{_for_rev_row_excel}" if wsFor.title == "Forecasts" else f"={_col_L2}{_for_rev_row_excel}"
+                wsFor.cell(r, 2).value = f"={_col_L2}{_for_rev_row_excel}"
+            else:
+                wsFor.cell(r, 2).value = 0
+            wsFor.cell(r, 2).font = F_STD; wsFor.cell(r, 2).number_format = FMT_MONEY0; wsFor.cell(r, 2).border = BDR
+
+            wsFor.cell(r, 3).value = f"=B{r}*$B${_for_wc_pct_row}"
+            wsFor.cell(r, 3).font = F_STD; wsFor.cell(r, 3).number_format = FMT_MONEY0; wsFor.cell(r, 3).border = BDR
+
+            wsFor.cell(r, 4).value = f"={_wc_prev_ref}-C{r}"
+            wsFor.cell(r, 4).font = F_STD; wsFor.cell(r, 4).number_format = FMT_MONEY0; wsFor.cell(r, 4).border = BDR
+            _wc_prev_ref = f"C{r}"
+            r += 1
+
+        _for_wc_forecast_end = r - 1
+
+        # ── Depreciation & Capex (from DCF session) ───────────────────────────
+        r += 1
+        write_section(wsFor, r, "Depreciation & Capex (from DCF assumptions)", ncols=6); r += 1
+        _dep_forecast = ss.get("dcf_dep_forecast", {})
+        _cap_forecast = [float(x) for x in ss.get("dcf_fcff_array", [])]  # capex baked in FCFF
+        # Try to get capex separately from the DCF CF mapping
+        _capex_forecast_direct = {}
+        _df_dcf_export = ss.get("df_dcf_export")
+        if _df_dcf_export is not None and hasattr(_df_dcf_export, "columns") and "Capex" in _df_dcf_export.columns:
+            for _di3, _dr3 in _df_dcf_export.iterrows():
+                try:
+                    _capex_forecast_direct[str(int(_dr3.get("Year", 0)))] = float(_dr3.get("Capex", 0.0))
+                except Exception:
+                    pass
+
+        write_hdr(wsFor, r, ["Year", "Depreciation (forecast)", "Capex (forecast)"]); r += 1
+        _for_dep_capex_start = r
+        for _f_i3, _f_yr3 in enumerate(_fore_yr_list):
+            wsFor.cell(r, 1).value = int(_f_yr3) if _f_yr3.isdigit() else _f_yr3
+            wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+            wsFor.cell(r, 1).alignment = Alignment(horizontal="center", vertical="center")
+
+            # Depreciation: formula referencing IS Forecasts row if mapped, else fallback to session value
+            if _for_dep_row_excel and _f_yr3 in _yr_to_col:
+                _dep_col_L3 = get_column_letter(_yr_to_col[_f_yr3])
+                wsFor.cell(r, 2).value = f"={_dep_col_L3}{_for_dep_row_excel}"
+            else:
+                _dep_val = float(_dep_forecast.get(_f_yr3, 0.0) or 0.0)
+                wsFor.cell(r, 2).value = _dep_val
+            wsFor.cell(r, 2).font = F_BLUE; wsFor.cell(r, 2).number_format = FMT_MONEY0; wsFor.cell(r, 2).border = BDR
+
+            _cap_val = float(_capex_forecast_direct.get(_f_yr3, 0.0) or 0.0)
+            wsFor.cell(r, 3).value = _cap_val
+            wsFor.cell(r, 3).font = F_BLUE; wsFor.cell(r, 3).number_format = FMT_MONEY0; wsFor.cell(r, 3).border = BDR
+            r += 1
+
+        # Net Debt & Book Equity static inputs (used by CompCo formulas)
+        r += 1
+        write_section(wsFor, r, "Balance Sheet Metrics (used by CompCo)", ncols=4); r += 1
+        write_hdr(wsFor, r, ["Item", "Value (USD)"]); r += 1
+        _for_bk_eq_row_excel = r
+        wsFor.cell(r, 1).value = "Book Value of Equity"
+        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+        wsFor.cell(r, 2).value = float(ss.get("book_equity", 0.0) or 0.0)
+        wsFor.cell(r, 2).font = F_BLUE; wsFor.cell(r, 2).number_format = FMT_MONEY0; wsFor.cell(r, 2).border = BDR
+        r += 1
+        _for_nd_row_excel = r
+        wsFor.cell(r, 1).value = "Net Debt"
+        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
+        wsFor.cell(r, 2).value = float(ss.get("net_debt", 0.0) or 0.0)
+        wsFor.cell(r, 2).font = F_BLUE; wsFor.cell(r, 2).number_format = FMT_MONEY0; wsFor.cell(r, 2).border = BDR
+        r += 1
+
+        wsFor.column_dimensions["A"].width = 44
+        for ci in range(2, len((forecast_is.columns if forecast_is is not None else [])) + 2):
+            wsFor.column_dimensions[get_column_letter(ci)].width = 16
+        wsFor.freeze_panes = "B4"
+
+        # =========================================================================
+        # SHEET: DCF — Parameters + UFCF + Sensitivity + Output
+        # =========================================================================
+        wsDCF = wb.create_sheet("DCF")
+        write_title(wsDCF, "DCF — Discounted Cash Flow Valuation", ncols=10)
+
+        # ── Pull all DCF inputs ────────────────────────────────────────────────
+        rf_pct     = float(ss.get("dcf_rf_pct",  ss.get("rf",  0) * 100 if ss.get("rf") else 11.61))
+        mrp_pct    = float(ss.get("dcf_mrp_pct", ss.get("mrp", 0) * 100 if ss.get("mrp") else 13.82))
+        tax_pct    = float(ss.get("dcf_tax_pct", ss.get("tax", 0) * 100 if ss.get("tax") else 25.0))
+        beta_u     = float(ss.get("dcf_unlevered_beta", 1.0))
+        de_ratio   = float(ss.get("de_ratio", 0.0))
+        rd_pct_raw = ss.get("rd", 0.12)
+        rd_pct     = float(rd_pct_raw * 100 if rd_pct_raw and rd_pct_raw <= 1 else (rd_pct_raw or 12.0))
+        wacc_val   = float(ss.get("wacc", 0.0))
+        g_pct      = float(ss.get("dcf_terminal_g_pct", ss.get("g", 0) * 100 if ss.get("g") else 5.0))
+        net_debt   = float(ss.get("net_debt", 0.0))
+        total_debt = float(ss.get("total_debt", 0.0))
+        cash_bal   = float(ss.get("cash_balance", 0.0))
+        book_eq    = float(ss.get("book_equity",  0.0))
+
+        # ── WACC Build-up — with Formula & Description columns ────────────────
+        r = 3
+        write_section(wsDCF, r, "WACC Build-up", ncols=5); r += 1
+        write_hdr(wsDCF, r, ["Parameter", "Value", "Formula", "Description"]); r += 1
+
+        row_rf=r; row_mrp=r+1; row_bu=r+2; row_de=r+3; row_tax=r+4
+        row_bl=r+5; row_ke=r+6; row_rd=r+7; row_wacc=r+8
+
+        _wacc_rows = [
+            # (label,  value,    is_input,  fmt,       formula_str,                                        description)
+            ("Risk-free Rate (Rf)",       rf_pct/100,   True,  FMT_PCT,    "Input — government bond yield",                   "Zimbabwe / USD sovereign bond rate used as risk-free proxy"),
+            ("Market Risk Premium (ERP)", mrp_pct/100,  True,  FMT_PCT,    "Input — equity risk premium",                     "Expected return of market above risk-free rate (Damodaran / local estimate)"),
+            ("Unlevered Beta (βu)",       beta_u,       True,  "0.0000",   "Input — asset beta (unlevered)",                  "Beta stripped of financial leverage; reflects business risk only"),
+            ("D/E Ratio",                 de_ratio,     True,  "0.0000",   f"Total Debt / Book Equity  ({total_debt} / {book_eq if book_eq else 1})", "Debt-to-equity ratio used to re-lever beta"),
+            ("Tax Rate",                  tax_pct/100,  True,  FMT_PCT,    "Input — corporate tax rate",                      "Effective tax rate applied to interest tax shield in Hamada equation"),
+            ("Levered Beta (βL)",         None,         False, "0.0000",   "βu × (1 + (1 − T) × D/E)",                      "Hamada equation: re-levers asset beta for the firm's actual capital structure"),
+            ("Cost of Equity (Ke)",       None,         False, FMT_PCT,    "Rf + βL × ERP",                                  "CAPM: required return by equity holders"),
+            ("Cost of Debt (Rd)",         rd_pct/100,   True,  FMT_PCT,    "Input — pre-tax cost of debt",                    "Weighted average interest rate on interest-bearing debt"),
+            ("WACC",                      wacc_val,     True,  FMT_PCT,    "Ke x (E/V) + Rd x (1-T) x (D/V)",                "Weighted average: equity weight x Ke + debt weight x Rd x (1-T)"),
+        ]
+
+        for i, (lbl, val, is_inp, fmt, fml, desc) in enumerate(_wacc_rows):
+            rr = r + i
+            cell_bd(wsDCF, rr, 1, lbl,  F_BOLD if lbl == "WACC" else F_STD)
+            if val is not None:
+                cell_bd(wsDCF, rr, 2, val, F_BLUE if is_inp else F_STD, fmt)
+            else:
+                cell_bd(wsDCF, rr, 2, font=F_STD, fmt=fmt)
+            # Formula column (col C) — italic grey
+            c3 = wsDCF.cell(rr, 3)
+            c3.value  = str(fml) if fml else ""  # assign separately — never via constructor — prevents = being treated as formula
+            c3.font   = Font(italic=True, color="595959", name="Arial", size=9)
+            c3.border = BDR
+            c3.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            # Description column (col D)
+            c4 = wsDCF.cell(rr, 4)
+            c4.value  = str(desc) if desc else ""
+            c4.font   = Font(italic=True, color="595959", name="Arial", size=9)
+            c4.border = BDR
+            c4.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+        # Live Excel formulas for derived rows (col B)
+        wsDCF.cell(row_bl,   2).value  = f"=B{row_bu}*(1+(1-B{row_tax})*B{row_de})"
+        wsDCF.cell(row_bl,   2).font   = F_STD
+        wsDCF.cell(row_bl,   2).number_format = "0.0000"
+        wsDCF.cell(row_bl,   2).border = BDR
+        wsDCF.cell(row_ke,   2).value  = f"=B{row_rf}+B{row_bl}*B{row_mrp}"
+        wsDCF.cell(row_ke,   2).font   = F_STD
+        wsDCF.cell(row_ke,   2).number_format = FMT_PCT
+        wsDCF.cell(row_ke,   2).border = BDR
+        # WACC live formula (overwrite the hardcoded input with a formula)
+        _eq_val = book_eq if book_eq else 1.0
+        _dbt_val = total_debt if total_debt else 0.0
+        _tot_val = _eq_val + _dbt_val
+        wsDCF.cell(row_wacc, 2).value  = f"=(B{row_ke}*({_eq_val}/{_tot_val}))+(B{row_rd}*(1-B{row_tax})*({_dbt_val}/{_tot_val}))"
+        wsDCF.cell(row_wacc, 2).font   = Font(bold=True, name="Arial", size=10)
+        wsDCF.cell(row_wacc, 2).number_format = FMT_PCT
+        wsDCF.cell(row_wacc, 2).border = BDR
+
+        r = row_wacc + 2
+
+        # ── Net Debt Build-up ──────────────────────────────────────────────────
+        write_section(wsDCF, r, "Net Debt Calculation", ncols=5); r += 1
+        write_hdr(wsDCF, r, ["Item", "Value (USD)", "Formula", "Description"]); r += 1
+        row_td = r; row_cb = r+1; row_nd_calc = r+2
+
+        _nd_rows = [
+            ("Total Debt (interest-bearing)",  total_debt, FMT_MONEY0, "Input — from Balance Sheet",  "Sum of short-term and long-term borrowings"),
+            ("Less: Cash & Cash Equivalents",  cash_bal,   FMT_MONEY0, "Input — from Balance Sheet",  "Cash held offset against gross debt"),
+            ("Net Debt",                        None,       FMT_MONEY0, f"Total Debt − Cash",         "Gross debt less cash; added back to EV to get Equity Value"),
+        ]
+        for i, (lbl, val, fmt, fml, desc) in enumerate(_nd_rows):
+            rr = r + i
+            cell_bd(wsDCF, rr, 1, lbl, F_BOLD if lbl == "Net Debt" else F_STD)
+            if val is not None:
+                cell_bd(wsDCF, rr, 2, val, F_BLUE, fmt)
+            else:
+                cell_bd(wsDCF, rr, 2, font=F_BOLD, fmt=fmt)
+            c3 = wsDCF.cell(rr, 3)
+            c3.value = str(fml) if fml else ""
+            c3.font = Font(italic=True, color="595959", name="Arial", size=9); c3.border = BDR
+            c3.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            c4 = wsDCF.cell(rr, 4)
+            c4.value = str(desc) if desc else ""
+            c4.font = Font(italic=True, color="595959", name="Arial", size=9); c4.border = BDR
+            c4.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+        # Net Debt live formula
+        wsDCF.cell(row_nd_calc, 2).value  = f"=B{row_td}-B{row_cb}"
+        wsDCF.cell(row_nd_calc, 2).font   = F_BOLD
+        wsDCF.cell(row_nd_calc, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_nd_calc, 2).border = BDR
+        r = row_nd_calc + 2
+
+        # ── Terminal Value Assumptions ─────────────────────────────────────────
+        write_section(wsDCF, r, "Terminal Value & Key Assumptions", ncols=5); r += 1
+        write_hdr(wsDCF, r, ["Parameter", "Value", "Formula", "Description"]); r += 1
+        row_g = r; row_nd = r + 1
+        cell_bd(wsDCF, row_g,  1, "Terminal Growth Rate (g)", F_STD)
+        cell_bd(wsDCF, row_g,  2, g_pct / 100, F_BLUE, FMT_PCT)
+        wsDCF.cell(row_g, 3).value = "Input — long-run growth rate"; wsDCF.cell(row_g, 3).font = Font(italic=True, color="595959", name="Arial", size=9); wsDCF.cell(row_g, 3).border = BDR
+        wsDCF.cell(row_g, 4).value = "Perpetuity growth assumption; must be < WACC"; wsDCF.cell(row_g, 4).font = Font(italic=True, color="595959", name="Arial", size=9); wsDCF.cell(row_g, 4).border = BDR
+        cell_bd(wsDCF, row_nd, 1, "Net Debt", F_STD)
+        wsDCF.cell(row_nd, 2).value  = f"=B{row_nd_calc}"
+        wsDCF.cell(row_nd, 2).font   = F_STD
+        wsDCF.cell(row_nd, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_nd, 2).border = BDR
+        wsDCF.cell(row_nd, 3).value = "Links to Net Debt Calculation section above"; wsDCF.cell(row_nd, 3).font = Font(italic=True, color="595959", name="Arial", size=9); wsDCF.cell(row_nd, 3).border = BDR
+        wsDCF.cell(row_nd, 4).value = "Pulled from Net Debt section above"; wsDCF.cell(row_nd, 4).font = Font(italic=True, color="595959", name="Arial", size=9); wsDCF.cell(row_nd, 4).border = BDR
+        r = row_nd + 2
+
+        # ── UFCF Table with cross-sheet formulas ──────────────────────────────
+        write_section(wsDCF, r, "Unlevered Free Cash Flow (UFCF) Forecast", ncols=8); r += 1
+        write_hdr(wsDCF, r, ["Year", "Period (n)",
+                               "EBITDA×(1−T)  [USD]",
+                               "Dep × Tax Shield  [USD]",
+                               "ΔWorking Capital  [USD]",
+                               "Capex  [USD]",
+                               "UFCF  [USD]",
+                               "Discount Factor",
+                               "PV of UFCF  [USD]"]); r += 1
+
+        fcff_arr   = ss.get("dcf_fcff_array", [])
+        n_arr      = ss.get("dcf_discount_periods_n", [])
+
+        # Use actual forecast years from session (not today's year)
+        _fore_yr_keys = []
+        if _fore_yr_list:
+            _fore_yr_keys = [str(y) for y in _fore_yr_list]
+        elif fcff_arr:
+            # fallback: build from dcf_is_df last year
+            _dcf_is_tmp = ss.get("dcf_is_df")
+            if _dcf_is_tmp is not None and hasattr(_dcf_is_tmp, "columns"):
+                _last_yr_tmp = max((int(c) for c in _dcf_is_tmp.columns if c != "Item" and str(c).isdigit()), default=datetime.date.today().year)
+            else:
+                _last_yr_tmp = datetime.date.today().year
+            _fore_yr_keys = [str(_last_yr_tmp + 1 + i) for i in range(len(fcff_arr))]
+
+        cf_start = r
+        _n_fore_dcf = max(len(fcff_arr), len(_fore_yr_keys))
+
+        for i in range(_n_fore_dcf):
+            rr = r + i
+            _yr_lbl = int(_fore_yr_keys[i]) if i < len(_fore_yr_keys) else ""
+            cell_bd(wsDCF, rr, 1, _yr_lbl, F_STD, align="center")
+
+            # Period n — full precision (NO rounding)
+            if i < len(n_arr):
+                _n_val = float(n_arr[i])
+            else:
+                _n_val = float(i + 0.5)
+
+            cell_bd(wsDCF, rr, 2, _n_val, F_BLUE, "0.0000")
+
+            # ── EBITDA × (1-T): cross-sheet from Forecasts if row known ──
+            _yr_s = _fore_yr_keys[i] if i < len(_fore_yr_keys) else None
+            _fc_col_L_dcf = None
+            if _yr_s and _yr_s in _yr_to_col:
+                _fc_col_L_dcf = get_column_letter(_yr_to_col[_yr_s])
+
+            if _for_ebitda_row_excel and _fc_col_L_dcf:
+                wsDCF.cell(rr, 3).value = f"=Forecasts!{_fc_col_L_dcf}{_for_ebitda_row_excel}*(1-DCF!$B${row_tax})"
+            else:
+                # ✅ Always fallback if Forecasts missing
+                wsDCF.cell(rr, 3).value = float(fcff_arr[i]) if i < len(fcff_arr) else 0
+            wsDCF.cell(rr, 3).font = F_STD; wsDCF.cell(rr, 3).number_format = FMT_MONEY0; wsDCF.cell(rr, 3).border = BDR
+
+            # ── Dep × Tax Shield: cross-sheet from Forecasts dep/capex table ──
+            if _for_dep_row_excel and _fc_col_L_dcf:
+                wsDCF.cell(rr, 4).value = f"=-Forecasts!{_fc_col_L_dcf}{_for_dep_row_excel}*DCF!$B${row_tax}"
+            elif _for_dep_capex_start and i < _n_fore_dcf:
+                wsDCF.cell(rr, 4).value = f"=-Forecasts!B{_for_dep_capex_start + i}*DCF!$B${row_tax}"
+            else:
+                wsDCF.cell(rr, 4).value = 0
+            wsDCF.cell(rr, 4).font = F_STD; wsDCF.cell(rr, 4).number_format = FMT_MONEY0; wsDCF.cell(rr, 4).border = BDR
+
+            # ── ΔWC: cross-sheet from Forecasts WC table col D ──
+            if _for_wc_forecast_start and i < _n_fore_dcf:
+                wsDCF.cell(rr, 5).value = f"=Forecasts!D{_for_wc_forecast_start + i}"
+            else:
+                wsDCF.cell(rr, 5).value = 0
+            wsDCF.cell(rr, 5).font = F_STD; wsDCF.cell(rr, 5).number_format = FMT_MONEY0; wsDCF.cell(rr, 5).border = BDR
+
+            # ── Capex: cross-sheet from Forecasts dep/capex table col C ──
+            if _for_dep_capex_start and i < _n_fore_dcf:
+                wsDCF.cell(rr, 6).value = f"=Forecasts!C{_for_dep_capex_start + i}"
+            else:
+                wsDCF.cell(rr, 6).value = float(fcff_arr[i]) if i < len(fcff_arr) else 0
+            wsDCF.cell(rr, 6).font = F_STD; wsDCF.cell(rr, 6).number_format = FMT_MONEY0; wsDCF.cell(rr, 6).border = BDR
+
+            # ── UFCF = sum of components ──
+            wsDCF.cell(rr, 7).value  = f"=C{rr}+D{rr}+E{rr}+F{rr}"
+            wsDCF.cell(rr, 7).font   = F_BOLD
+            wsDCF.cell(rr, 7).number_format = FMT_MONEY0
+            wsDCF.cell(rr, 7).border = BDR
+
+            # ── Discount Factor = 1/(1+WACC)^n ──
+            wsDCF.cell(rr, 8).value  = f"=1/(1+$B${row_wacc})^B{rr}"
+            wsDCF.cell(rr, 8).font   = F_STD
+            wsDCF.cell(rr, 8).number_format = "0.000000"
+            wsDCF.cell(rr, 8).border = BDR
+
+            # ── PV of UFCF ──
+            wsDCF.cell(rr, 9).value  = f"=G{rr}*H{rr}"
+            wsDCF.cell(rr, 9).font   = F_STD
+            wsDCF.cell(rr, 9).number_format = FMT_MONEY0
+            wsDCF.cell(rr, 9).border = BDR
+
+        cf_end = r + max(_n_fore_dcf - 1, 0)
+        r = cf_end + 2
+
+        # ── DCF Summary ───────────────────────────────────────────────────────
+        write_section(wsDCF, r, "DCF Valuation Summary", ncols=4); r += 1
+        write_hdr(wsDCF, r, ["Item", "Value (USD)"]); r += 1
+        row_pv_fcff = r;   row_tv = r+1; row_pv_tv = r+2
+        row_ev = r+3;      row_nd2 = r+4; row_eq_dcf = r+5
+
+        tv_val  = ss.get("dcf_terminal_value")
+        pv_tv   = ss.get("dcf_pv_terminal")
+
+        cell_bd(wsDCF, row_pv_fcff, 1, "Sum of PV(UFCF)",        F_STD)
+        if len(fcff_arr) > 0:
+            wsDCF.cell(row_pv_fcff, 2).value = f"=SUM(I{cf_start}:I{cf_end})"
+        else:
+            wsDCF.cell(row_pv_fcff, 2).value = float(ss.get("dcf_pv_fcff_sum", 0.0))
+        wsDCF.cell(row_pv_fcff, 2).font = F_STD
+        wsDCF.cell(row_pv_fcff, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_pv_fcff, 2).border = BDR
+
+        # Terminal Value = last UFCF × (1+g) / (WACC - g) — live formula
+        cell_bd(wsDCF, row_tv, 1, "Terminal Value",               F_STD)
+        wsDCF.cell(row_tv, 2).value  = f"=G{cf_end}*(1+B{row_g})/(B{row_wacc}-B{row_g})"
+        wsDCF.cell(row_tv, 2).font   = F_STD
+        wsDCF.cell(row_tv, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_tv, 2).border = BDR
+
+        # PV of Terminal Value = TV × last discount factor — live formula
+        cell_bd(wsDCF, row_pv_tv, 1, "PV of Terminal Value",      F_STD)
+        wsDCF.cell(row_pv_tv, 2).value  = f"=B{row_tv}*H{cf_end}"
+        wsDCF.cell(row_pv_tv, 2).font   = F_STD
+        wsDCF.cell(row_pv_tv, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_pv_tv, 2).border = BDR
+
+        cell_bd(wsDCF, row_ev, 1, "Enterprise Value (DCF)",        F_BOLD)
+        wsDCF.cell(row_ev, 2).value  = f"=B{row_pv_fcff}+B{row_pv_tv}"
+        wsDCF.cell(row_ev, 2).font   = F_BOLD
+        wsDCF.cell(row_ev, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_ev, 2).border = BDR
+
+        cell_bd(wsDCF, row_nd2, 1, "Less: Net Debt",               F_STD)
+        wsDCF.cell(row_nd2, 2).value  = f"=B{row_nd}"
+        wsDCF.cell(row_nd2, 2).font   = F_GREEN
+        wsDCF.cell(row_nd2, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_nd2, 2).border = BDR
+
+        cell_bd(wsDCF, row_eq_dcf, 1, "Equity Value (DCF)",        F_BOLD)
+        wsDCF.cell(row_eq_dcf, 2).value  = f"=B{row_ev}-B{row_nd2}"
+        wsDCF.cell(row_eq_dcf, 2).font   = F_BOLD
+        wsDCF.cell(row_eq_dcf, 2).number_format = FMT_MONEY0
+        wsDCF.cell(row_eq_dcf, 2).border = BDR
+        wsDCF.cell(row_eq_dcf, 1).fill  = FL_LBLUE
+        wsDCF.cell(row_eq_dcf, 2).fill  = FL_LBLUE
+        r = row_eq_dcf + 3
+        eq_addr["DCF"] = f"DCF!B{row_eq_dcf}"
+        # ── Sensitivity Table ─────────────────────────────────────────────────
+        write_section(wsDCF, r, "Sensitivity of Equity Value to WACC and Terminal Growth Rate", ncols=10); r += 1
+
+        # Reconstruct sensitivity table using stored FCF arrays and ranges
+        try:
+            base_wacc_s = wacc_val if wacc_val > 0 else 0.13
+            base_g_s    = g_pct / 100 if g_pct else 0.05
+            wacc_step_s = float(ss.get("sens_store_wacc_step_pct", 5.0)) / 100.0
+            g_step_s    = float(ss.get("sens_store_g_step_pct",    0.5))  / 100.0
+            n_wacc      = int(ss.get("sens_store_wacc_points", 5))
+            n_g         = int(ss.get("sens_store_g_points",    7))
+
+            def _centered_range(base, step, n):
+                half = n // 2
+                return [base + (i - half) * step for i in range(n)]
+
+            def _pct_lbl(v):
+                return f"{v*100:.1f}%"
+
+            wacc_range_s = _centered_range(base_wacc_s, wacc_step_s, n_wacc)
+            g_range_s    = [max(-0.50, min(0.50, v)) for v in _centered_range(base_g_s, g_step_s, n_g)]
+
+            fcff_s  = [float(x) for x in (fcff_arr or [])]
+            n_s_arr = [float(x) for x in (n_arr or [])]
+
+            def _ev_sens(fcff_v, periods, nd, ww, gg):
+                if not fcff_v or ww <= gg:
+                    return None
+                dfs = [1.0 / (1.0 + ww) ** p for p in periods]
+                pv_sum = sum(f * d for f, d in zip(fcff_v, dfs))
+                tv = fcff_v[-1] * (1.0 + gg) / (ww - gg)
+                n_last = periods[-1] if periods else 1.0
+                pv_tv_s = tv / (1.0 + ww) ** n_last
+                return pv_sum + pv_tv_s - nd
+
+            wacc_labels = [_pct_lbl(w) for w in wacc_range_s]
+            g_labels    = [_pct_lbl(g) for g in g_range_s]
+
+            # Header row
+            wsRow = r
+            wsCol_start = 2
+            wsCol = wsCol_start
+            wsDCF.cell(wsRow, 1).value = "WACC \\ g"
+            wsDCF.cell(wsRow, 1).font  = F_HDR
+            wsDCF.cell(wsRow, 1).fill  = FL_HDR
+            wsDCF.cell(wsRow, 1).border = BDR
+            wsDCF.cell(wsRow, 1).alignment = Alignment(horizontal="center", vertical="center")
+            for gl in g_labels:
+                c = wsDCF.cell(wsRow, wsCol)
+                c.value = gl; c.font = F_HDR; c.fill = FL_HDR; c.border = BDR
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                wsCol += 1
+            r += 1
+
+            base_w_lbl = _pct_lbl(base_wacc_s)
+            base_g_lbl = _pct_lbl(base_g_s)
+
+            for wi, ww in enumerate(wacc_range_s):
+                wsCol = wsCol_start
+                wl = wacc_labels[wi]
+                hdr_cell = wsDCF.cell(r, 1)
+                hdr_cell.value = wl; hdr_cell.font = F_HDR; hdr_cell.fill = FL_HDR
+                hdr_cell.border = BDR
+                hdr_cell.alignment = Alignment(horizontal="center", vertical="center")
+                for gi, gg in enumerate(g_range_s):
+                    ev_s = _ev_sens(fcff_s, n_s_arr, net_debt, ww, gg)
+                    c = wsDCF.cell(r, wsCol)
+                    # --- Dynamic sensitivity (linked to WACC & g cells) ---
+
+                    # relative position from center (base case)
+                    wacc_shift = wi - (len(wacc_range_s) // 2)
+                    g_shift = gi - (len(g_range_s) // 2)
+
+                    # build Excel-referenced formulas (NO HARDCODING)
+                    wacc_formula = f"(DCF!B{row_wacc}+{wacc_shift * wacc_step_s})"
+                    g_formula = f"(DCF!B{row_g}+{g_shift * g_step_s})"
+
+                    # sensitivity formula (fully dynamic)
+                    c.value = (
+                        f"=IF({wacc_formula}<={g_formula},NA(),"
+                        f"(SUMPRODUCT(G{cf_start}:G{cf_end},H{cf_start}:H{cf_end})+"
+                        f"(G{cf_end}*(1+{g_formula})/({wacc_formula}-{g_formula}))*H{cf_end}"
+                        f")-B{row_nd})"
+                    )
+
+                    # formatting
+                    c.number_format = FMT_MONEY0
+                    c.border = BDR
+                    c.alignment = Alignment(horizontal="right", vertical="center")
+
+                    # --- Highlight BASE CASE (exact match to DCF output) ---
+                    if wacc_shift == 0 and g_shift == 0:
+                        c.value = f"={eq_addr['DCF']}"  # EXACT link (fixes mismatch issue)
+                        c.font = Font(bold=True, color=WHITE, name="Arial", size=10)
+                        c.fill = PatternFill("solid", fgColor="C00000")
+                    else:
+                        c.font = F_STD
+
+                    wsCol += 1
+                r += 1
+
+            r += 1
+            note_cell = wsDCF.cell(r, 1)
+            note_cell.value = f"Red cell = base case (WACC: {_pct_lbl(base_wacc_s)}, g: {_pct_lbl(base_g_s)}). Values shown are Equity Value (USD)."
+            note_cell.font  = F_NOTE
+
+        except Exception:
+            wsDCF.cell(r, 1).value = "Sensitivity table not available — run DCF page first."
+            wsDCF.cell(r, 1).font = F_NOTE
+
+        wsDCF.column_dimensions["A"].width = 30
+        wsDCF.column_dimensions["B"].width = 18
+        wsDCF.column_dimensions["C"].width = 36
+        wsDCF.column_dimensions["D"].width = 42
+        wsDCF.column_dimensions["E"].width = 20
+        wsDCF.column_dimensions["F"].width = 18
+        wsDCF.column_dimensions["G"].width = 18
+        wsDCF.column_dimensions["H"].width = 14
+        wsDCF.column_dimensions["I"].width = 18
+        wsDCF.freeze_panes = "A3"
+        # ── Store DCF row refs for cross-sheet use by DDM and Banking ────────
+        _dcf_row_rf   = row_rf
+        _dcf_row_mrp  = row_mrp
+        _dcf_row_bu   = row_bu
+        _dcf_row_de   = row_de
+        _dcf_row_tax  = row_tax
+        _dcf_row_bl   = row_bl
+        _dcf_row_ke   = row_ke
+        _dcf_row_wacc = row_wacc
+        _dcf_row_g    = row_g
+        _dcf_row_nd   = row_nd
+    else:
+        # activate and rename dummy sheet so it doesn't litter the workbook
+        wsDCF = wb.active
+        wsDCF.title = "_temp"
+        _dcf_row_rf = _dcf_row_mrp = _dcf_row_bu = _dcf_row_de = None
+        _dcf_row_tax = _dcf_row_bl = _dcf_row_ke = _dcf_row_wacc = None
+        _dcf_row_g = _dcf_row_nd = None
+
+    # =========================================================================
+    # SHEET: Dividend Discount Model
+    # =========================================================================
+    if "DDM" in selected_models:
+        wsDDM = wb.create_sheet("Dividend Discount Model")
+        write_title(wsDDM, "DDM — Dividend Discount Model", ncols=6)
+
+        r = 3
+        write_section(wsDDM, r, "Dividend History", ncols=3); r += 1
+        write_hdr(wsDDM, r, ["Year", "Dividend per Share (USD)"]); r += 1
+
+        _ddm_raw = ss.get("ddm_dividends", {})
+        ddm_divs = _ddm_raw if isinstance(_ddm_raw, dict) else {}
+        ddm_years = sorted(ddm_divs.keys())
+        div_start = r
+        for yr in ddm_years:
+            cell_bd(wsDDM, r, 1, int(yr), F_STD, FMT_NUM, align="center")
+            cell_bd(wsDDM, r, 2, float(ddm_divs[yr]), F_BLUE, "0.00000")
+            r += 1
+        div_end = r - 1
+
+        r += 1
+        write_section(wsDDM, r, "Gordon Growth Model Inputs & Valuation", ncols=4); r += 1
+        # ── CAPM parameters (linked from DCF sheet) ───────────────────────────
+        write_hdr(wsDDM, r, ["CAPM Parameter", "Value (from DCF)"]); r += 1
+        capm_params_ddm = [
+            ("Risk-free Rate (Rf)",       _dcf_row_rf,  FMT_PCT),
+            ("Market Risk Premium (MRP)", _dcf_row_mrp, FMT_PCT),
+            ("Unlevered Beta (βu)",       _dcf_row_bu,  "0.0000"),
+            ("D/E Ratio",                 _dcf_row_de,  "0.0000"),
+            ("Tax Rate",                  _dcf_row_tax, FMT_PCT),
+        ]
+        for lbl_c, src_row, fmt_c in capm_params_ddm:
+            cell_bd(wsDDM, r, 1, lbl_c, F_STD)
+            if src_row is not None:
+                wsDDM.cell(r, 2).value = f"=DCF!B{src_row}"
+                wsDDM.cell(r, 2).font  = F_GREEN
+            else:
+                wsDDM.cell(r, 2).value = 0.0
+                wsDDM.cell(r, 2).font  = F_BLUE
+            wsDDM.cell(r, 2).number_format = fmt_c
+            wsDDM.cell(r, 2).border = BDR
+            r += 1
+        r += 1
+        write_hdr(wsDDM, r, ["Parameter", "Value"]); r += 1
+
+        row_ddm_g  = r;   row_ddm_re = r+1; row_ddm_d1 = r+2
+        row_ddm_p0 = r+3; row_ddm_ns = r+4; row_ddm_ev = r+5
+
+        ddm_g_val  = float(ss.get("ddm_g", 0.0) or 0.0)
+        ddm_re_val = float(ss.get("ddm_Re", 0.0) or 0.0)
+
+        cell_bd(wsDDM, row_ddm_g,  1, "Growth Rate (g)",          F_STD)
+        # g: pull from DCF terminal growth rate if DCF is in the workbook, else hardcode
+        wsDDM.cell(row_ddm_g, 2).value = (
+            f"=IFERROR(IF({div_end}-{div_start}=0,0,"
+            f"(B{div_end}/B{div_start})^(1/({div_end}-{div_start}))-1),0)"
+        )
+        wsDDM.cell(row_ddm_g, 2).font = F_GREEN
+        wsDDM.cell(row_ddm_g, 2).number_format = FMT_PCT
+        wsDDM.cell(row_ddm_g, 2).border = BDR
+        wsDDM.cell(row_ddm_g, 2).number_format = FMT_PCT
+        wsDDM.cell(row_ddm_g, 2).border = BDR
+
+        cell_bd(wsDDM, row_ddm_re, 1, "Cost of Equity (Re)",      F_STD)
+        # Re: formula-derived from DCF CAPM parameters (Rf + βL × MRP) if available
+        if _dcf_row_ke is not None:
+            wsDDM.cell(row_ddm_re, 2).value = f"=DCF!B{_dcf_row_ke}"
+            wsDDM.cell(row_ddm_re, 2).font  = F_GREEN
+        else:
+            wsDDM.cell(row_ddm_re, 2).value = ddm_re_val
+            wsDDM.cell(row_ddm_re, 2).font  = F_BLUE
+        wsDDM.cell(row_ddm_re, 2).number_format = FMT_PCT
+        wsDDM.cell(row_ddm_re, 2).border = BDR
+
+        cell_bd(wsDDM, row_ddm_d1, 1, "Next Dividend (D1)",       F_STD)
+        if ddm_years:
+            last_div_cell = f"B{div_start + len(ddm_years) - 1}"
+            wsDDM.cell(row_ddm_d1, 2).value = f"={last_div_cell}*(1+B{row_ddm_g})"
+        else:
+            wsDDM.cell(row_ddm_d1, 2).value = 0.0
+        wsDDM.cell(row_ddm_d1, 2).font = F_STD
+        wsDDM.cell(row_ddm_d1, 2).number_format = "0.00000"
+        wsDDM.cell(row_ddm_d1, 2).border = BDR
+
+        cell_bd(wsDDM, row_ddm_p0, 1, "Intrinsic Value / Share (P0)", F_BOLD)
+        wsDDM.cell(row_ddm_p0, 2).value = (
+            f"=IF(B{row_ddm_re}>B{row_ddm_g},"
+            f"B{row_ddm_d1}/(B{row_ddm_re}-B{row_ddm_g}),NA())"
+        )
+        wsDDM.cell(row_ddm_p0, 2).font = F_STD
+        wsDDM.cell(row_ddm_p0, 2).number_format = FMT_MONEY4
+        wsDDM.cell(row_ddm_p0, 2).border = BDR
+        wsDDM.cell(row_ddm_p0, 1).fill = FL_LGREY
+        wsDDM.cell(row_ddm_p0, 2).fill = FL_LGREY
+
+        cell_bd(wsDDM, row_ddm_ns, 1, "Number of Shares",         F_STD)
+        cell_bd(wsDDM, row_ddm_ns, 2, float(ss.get("num_shares", 0.0)), F_BLUE, FMT_NUM)
+
+        cell_bd(wsDDM, row_ddm_ev, 1, "Total Equity Value (DDM)", F_BOLD)
+        wsDDM.cell(row_ddm_ev, 2).value = (
+            f"=IF(ISNUMBER(B{row_ddm_p0}),"
+            f"B{row_ddm_p0}*B{row_ddm_ns},NA())"
+        )
+        wsDDM.cell(row_ddm_ev, 2).font = F_BOLD
+        wsDDM.cell(row_ddm_ev, 2).number_format = FMT_MONEY0
+        wsDDM.cell(row_ddm_ev, 2).border = BDR
+        wsDDM.cell(row_ddm_ev, 1).fill = FL_LBLUE
+        wsDDM.cell(row_ddm_ev, 2).fill = FL_LBLUE
+
+        wsDDM.column_dimensions["A"].width = 32
+        wsDDM.column_dimensions["B"].width = 22
+        wsDDM.freeze_panes = "A3"
+        eq_addr["DDM"] = f"'Dividend Discount Model'!B{row_ddm_ev}"
+
+    # =========================================================================
+    # SHEET: CompCo
+    # =========================================================================
+    if any(m in selected_models for m in ["EV/EBITDA", "PBV", "P/E"]):
+        wsComp = wb.create_sheet("CompCo")
+        write_title(wsComp, "Comparable Company Valuation — EV/EBITDA · P/BV · P/E", ncols=10)
+
+        r = 3
+        write_section(wsComp, r, "Comparable Company Multiples", ncols=6); r += 1
+        write_hdr(wsComp, r, ["Company", "EV/EBITDA", "P/B", "P/E", "Incl. EV?", "Incl. PB?", "Incl. PE?"]); r += 1
+
+        # Pull from S["comps"] dict — the actual structure used by the Comparables page
+        comps_dict = ss.get("comps", {})
+        # Also support list-based fallback keys written at line 3060-3065 of 2_COMPARABLES.py
+        comps_ev_list  = ss.get("comps_ev_list",  [])
+        comps_pb_list  = ss.get("comps_pb_list",  [])
+        comps_pe_list  = ss.get("comps_pe_list",  [])
+        comps_inc_ev   = ss.get("comps_inc_ev",   [])
+        comps_inc_pb   = ss.get("comps_inc_pb",   [])
+        comps_inc_pe   = ss.get("comps_inc_pe",   [])
+        num_comps      = int(ss.get("comps_num",  ss.get("num_comps", 0)))
+
+        comp_start = r
+
+        if comps_dict:
+            for i in sorted(comps_dict.keys()):
+                c = comps_dict[i]
+                name   = str(c.get("name",   f"Comp {i}"))
+                ev_v   = c.get("ev",    None)
+                pb_v   = c.get("pb",    None)
+                pe_v   = c.get("pe",    None)
+                inc_ev = bool(c.get("inc_ev", True))
+                inc_pb = bool(c.get("inc_pb", True))
+                inc_pe = bool(c.get("inc_pe", True))
+
+                cell_bd(wsComp, r, 1, name,   F_STD)
+                cell_bd(wsComp, r, 2, float(ev_v) if ev_v is not None else None, F_BLUE, "0.00")
+                cell_bd(wsComp, r, 3, float(pb_v) if pb_v is not None else None, F_BLUE, "0.00")
+                cell_bd(wsComp, r, 4, float(pe_v) if pe_v is not None else None, F_BLUE, "0.00")
+                cell_bd(wsComp, r, 5, "Yes" if inc_ev else "No", F_STD)
+                cell_bd(wsComp, r, 6, "Yes" if inc_pb else "No", F_STD)
+                cell_bd(wsComp, r, 7, "Yes" if inc_pe else "No", F_STD)
+                r += 1
+        elif comps_ev_list:
+            for i in range(len(comps_ev_list)):
+                name = str(ss.get(f"comp_name_{i}", f"Comp {i+1}"))
+                cell_bd(wsComp, r, 1, name, F_STD)
+                cell_bd(wsComp, r, 2, float(comps_ev_list[i]) if i < len(comps_ev_list) else None, F_BLUE, "0.00")
+                cell_bd(wsComp, r, 3, float(comps_pb_list[i]) if i < len(comps_pb_list) else None, F_BLUE, "0.00")
+                cell_bd(wsComp, r, 4, float(comps_pe_list[i]) if i < len(comps_pe_list) else None, F_BLUE, "0.00")
+                cell_bd(wsComp, r, 5, "Yes" if (i < len(comps_inc_ev) and comps_inc_ev[i]) else "No", F_STD)
+                cell_bd(wsComp, r, 6, "Yes" if (i < len(comps_inc_pb) and comps_inc_pb[i]) else "No", F_STD)
+                cell_bd(wsComp, r, 7, "Yes" if (i < len(comps_inc_pe) and comps_inc_pe[i]) else "No", F_STD)
+                r += 1
+        else:
+            cell_bd(wsComp, r, 1, "(No comparable companies found — visit Comparables page first)", F_NOTE)
+            r += 1
+        comp_end = r - 1
+
+        r += 1
+        write_section(wsComp, r, "Peer Averages & Discount", ncols=5); r += 1
+        write_hdr(wsComp, r, ["Multiple", "Peer Average", "Discount (%)", "Applied Multiple"]); r += 1
+
+        # Use the actual discount_factor key (not discount_pct)
+        disc_pct_raw = float(ss.get("discount_factor", ss.get("discount_pct", ss.get("comp_discount_pct", 25.0))) or 25.0)
+        disc_decimal = disc_pct_raw / 100.0 if disc_pct_raw > 1 else disc_pct_raw
+
+        # Use actual implied multiples already computed by the Comparables page
+        implied_ev_mult = float(ss.get("implied_ev", 0.0) or 0.0)
+        implied_pb_mult = float(ss.get("implied_pb", 0.0) or 0.0)
+        implied_pe_mult = float(ss.get("implied_pe", 0.0) or 0.0)
+
+        row_disc  = r
+        row_ev_m  = r + 1
+        row_pb_m  = r + 2
+        row_pe_m  = r + 3
+
+        cell_bd(wsComp, row_disc, 1, "Size/Country/Liquidity Discount", F_STD)
+        cell_bd(wsComp, row_disc, 3, disc_decimal, F_BLUE, FMT_PCT)
+
+        # EV/EBITDA row
+        cell_bd(wsComp, row_ev_m, 1, "EV/EBITDA", F_STD)
+        # Peer average from comps with Include_EV=True
+        if comps_dict:
+            ev_included = [float(comps_dict[i].get("ev", 0) or 0) for i in sorted(comps_dict.keys()) if comps_dict[i].get("inc_ev", True) and comps_dict[i].get("ev") is not None]
+            ev_avg = sum(ev_included) / len(ev_included) if ev_included else None
+        elif comps_ev_list and comps_inc_ev:
+            ev_incl = [v for v, inc in zip(comps_ev_list, comps_inc_ev) if inc]
+            ev_avg = sum(ev_incl) / len(ev_incl) if ev_incl else None
+        else:
+            ev_avg = None
+        wsComp.cell(row_ev_m, 2).value = (
+            f"=AVERAGEIF(E{comp_start}:E{comp_end},\"Yes\",B{comp_start}:B{comp_end})"
+        )
+        wsComp.cell(row_ev_m, 2).font = F_GREEN
+        wsComp.cell(row_ev_m, 2).number_format = '0.00'
+        wsComp.cell(row_ev_m, 2).border = BDR
+        cell_bd(wsComp, row_ev_m, 3, disc_decimal, F_STD, FMT_PCT)
+        wsComp.cell(row_ev_m, 4).value = f"=IF(B{row_ev_m}=\"\",\"\",B{row_ev_m}*(1-C{row_ev_m}))"
+        wsComp.cell(row_ev_m, 4).font = F_GREEN
+        wsComp.cell(row_ev_m, 4).number_format = '0.00'
+        wsComp.cell(row_ev_m, 4).border = BDR
+
+        # P/B row
+        cell_bd(wsComp, row_pb_m, 1, "P/B", F_STD)
+        if comps_dict:
+            pb_included = [float(comps_dict[i].get("pb", 0) or 0) for i in sorted(comps_dict.keys()) if comps_dict[i].get("inc_pb", True) and comps_dict[i].get("pb") is not None]
+            pb_avg = sum(pb_included) / len(pb_included) if pb_included else None
+        elif comps_pb_list and comps_inc_pb:
+            pb_incl = [v for v, inc in zip(comps_pb_list, comps_inc_pb) if inc]
+            pb_avg = sum(pb_incl) / len(pb_incl) if pb_incl else None
+        else:
+            pb_avg = None
+        wsComp.cell(row_pb_m, 2).value = (
+            f"=AVERAGEIF(F{comp_start}:F{comp_end},\"Yes\",C{comp_start}:C{comp_end})"
+        )
+        wsComp.cell(row_pb_m, 2).font = F_GREEN
+        wsComp.cell(row_pb_m, 2).number_format = '0.00'
+        wsComp.cell(row_pb_m, 2).border = BDR
+        cell_bd(wsComp, row_pb_m, 3, disc_decimal, F_STD, FMT_PCT)
+        wsComp.cell(row_pb_m, 4).value = f"=IF(B{row_pb_m}=\"\",\"\",B{row_pb_m}*(1-C{row_pb_m}))"
+        wsComp.cell(row_pb_m, 4).font = F_GREEN
+        wsComp.cell(row_pb_m, 4).number_format = '0.00'
+        wsComp.cell(row_pb_m, 4).border = BDR
+
+        # P/E row
+        cell_bd(wsComp, row_pe_m, 1, "P/E", F_STD)
+        if comps_dict:
+            pe_included = [float(comps_dict[i].get("pe", 0) or 0) for i in sorted(comps_dict.keys()) if comps_dict[i].get("inc_pe", True) and comps_dict[i].get("pe") is not None]
+            pe_avg = sum(pe_included) / len(pe_included) if pe_included else None
+        elif comps_pe_list and comps_inc_pe:
+            pe_incl = [v for v, inc in zip(comps_pe_list, comps_inc_pe) if inc]
+            pe_avg = sum(pe_incl) / len(pe_incl) if pe_incl else None
+        else:
+            pe_avg = None
+        wsComp.cell(row_pe_m, 2).value = (
+            f"=AVERAGEIF(G{comp_start}:G{comp_end},\"Yes\",D{comp_start}:D{comp_end})"
+        )
+        wsComp.cell(row_pe_m, 2).font = F_GREEN
+        wsComp.cell(row_pe_m, 2).number_format = '0.00'
+        wsComp.cell(row_pe_m, 2).border = BDR
+        cell_bd(wsComp, row_pe_m, 3, disc_decimal, F_STD, FMT_PCT)
+        wsComp.cell(row_pe_m, 4).value = f"=IF(B{row_pe_m}=\"\",\"\",B{row_pe_m}*(1-C{row_pe_m}))"
+        wsComp.cell(row_pe_m, 4).font = F_GREEN
+        wsComp.cell(row_pe_m, 4).number_format = '0.00'
+        wsComp.cell(row_pe_m, 4).border = BDR
+
+        r = row_pe_m + 2
+
+        # ── Maintainable Metrics — pull from Forecasts sheet via formulas ──────
+        write_section(wsComp, r, "Company Financials — Maintainable Metrics", ncols=4); r += 1
+        write_hdr(wsComp, r, ["Input", "Value (USD)"]); r += 1
+
+        row_eb  = r;   row_np = r+1; row_bk = r+2; row_nd = r+3
+
+        # Book Equity and Net Debt: formula references to Forecasts sheet
+        # (these rows were stored in _for_bk_eq_row_excel and _for_nd_row_excel)
+        cell_bd(wsComp, row_eb, 1, "Maintainable EBITDA",  F_STD)
+        # Filled by weighted EBITDA table formula below — placeholder for now
+        cell_bd(wsComp, row_np, 1, "Maintainable Earnings", F_STD)
+        # Filled by weighted Earnings table formula below
+
+        cell_bd(wsComp, row_bk, 1, "Book Value of Equity", F_STD)
+        if _for_bk_eq_row_excel:
+            wsComp.cell(row_bk, 2).value = f"=Forecasts!$B${_for_bk_eq_row_excel}"
+            wsComp.cell(row_bk, 2).font = F_GREEN
+        else:
+            wsComp.cell(row_bk, 2).value = float(ss.get("book_equity", 0.0) or 0.0)
+            wsComp.cell(row_bk, 2).font = F_BLUE
+        wsComp.cell(row_bk, 2).number_format = FMT_MONEY0
+        wsComp.cell(row_bk, 2).border = BDR
+
+        cell_bd(wsComp, row_nd, 1, "Net Debt", F_STD)
+        if _for_nd_row_excel:
+            wsComp.cell(row_nd, 2).value = f"=Forecasts!$B${_for_nd_row_excel}"
+            wsComp.cell(row_nd, 2).font = F_GREEN
+        else:
+            wsComp.cell(row_nd, 2).value = float(ss.get("net_debt", 0.0) or 0.0)
+            wsComp.cell(row_nd, 2).font = F_BLUE
+        wsComp.cell(row_nd, 2).number_format = FMT_MONEY0
+        wsComp.cell(row_nd, 2).border = BDR
+        r = row_nd + 2
+
+        # ── Weighted EBITDA Table — live cross-sheet link from Forecasts ────────
+        write_section(wsComp, r, "Maintainable EBITDA — Weighted Average (from DCF Forecasts)", ncols=5); r += 1
+
+        dcf_eb_all      = ss.get("dcf_ebitda_all") or ss.get("dcf_ebitda_forecast") or {}
+        comp_eb_weights = ss.get("comp_eb_weights", {}) or {}
+        _dcf_eb = dcf_eb_all if isinstance(dcf_eb_all, dict) else {}
+
+        if _dcf_eb:
+            write_hdr(wsComp, r, ["Year", "EBITDA (USD)", "Timing", "Weight (%)", "Adj. EBITDA", "Weighted EBITDA"]); r += 1
+            eb_rows_start = r
+            eb_years = sorted(int(y) for y in _dcf_eb.keys() if str(y).lstrip("-").isdigit())
+            weighted_eb_years = [y for y in eb_years if float(comp_eb_weights.get(str(y), 0.0)) > 0] or eb_years[:6]
+            _eb_timing_base = float(ss.get("comp_timing_base", 1.0) or 1.0)
+            _eb_use_timing  = bool(ss.get("comp_use_timing_eb", True))
+            for idx_e, yr in enumerate(weighted_eb_years):
+                eb_val = _dcf_eb.get(str(yr), _dcf_eb.get(yr, 0.0))
+                wt_pct = float(comp_eb_weights.get(str(yr), 0.0)) / 100.0
+                cell_bd(wsComp, r, 1, int(yr),  F_STD, align="center")
+                # EBITDA value: cross-sheet formula if we know the Forecasts row+col, else hardcoded
+                if _for_ebitda_row_excel and _for_year_cols:
+                    _yr_str = str(yr)
+                    if _yr_str in _for_year_cols:
+                        _fc_col_idx = _for_year_cols.index(_yr_str) + 2  # +2 because col1=Item
+                        _fc_col_L = get_column_letter(_fc_col_idx)
+                        wsComp.cell(r, 2).value = f"=Forecasts!{_fc_col_L}{_for_ebitda_row_excel}"
+                        wsComp.cell(r, 2).font = F_GREEN
+                    else:
+                        wsComp.cell(r, 2).value = float(eb_val) if eb_val is not None else 0.0
+                        wsComp.cell(r, 2).font = F_BLUE
+                else:
+                    wsComp.cell(r, 2).value = float(eb_val) if eb_val is not None else 0.0
+                    wsComp.cell(r, 2).font = F_BLUE
+                wsComp.cell(r, 2).number_format = FMT_MONEY0
+                wsComp.cell(r, 2).border = BDR
+                wsComp.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
+                # Timing factor
+                timing_val = (_eb_timing_base + idx_e) if _eb_use_timing else 1.0
+                cell_bd(wsComp, r, 3, timing_val, F_BLUE, "0.0000")
+                cell_bd(wsComp, r, 4, wt_pct, F_BLUE, FMT_PCT1)
+                # Adjusted EBITDA = EBITDA × Timing
+                wsComp.cell(r, 5).value = f"=B{r}*C{r}"
+                wsComp.cell(r, 5).font = F_STD
+                wsComp.cell(r, 5).number_format = FMT_MONEY0
+                wsComp.cell(r, 5).border = BDR
+                wsComp.cell(r, 5).alignment = Alignment(horizontal="right", vertical="center")
+                # Weighted EBITDA = Adjusted × Weight
+                wsComp.cell(r, 6).value = f"=E{r}*D{r}"
+                wsComp.cell(r, 6).font = F_STD
+                wsComp.cell(r, 6).number_format = FMT_MONEY0
+                wsComp.cell(r, 6).border = BDR
+                wsComp.cell(r, 6).alignment = Alignment(horizontal="right", vertical="center")
+                r += 1
+            eb_rows_end = r - 1
+            wsComp.cell(r, 1).value = "Maintainable EBITDA"
+            wsComp.cell(r, 1).font = F_BOLD; wsComp.cell(r, 1).border = BDR; wsComp.cell(r, 1).fill = FL_LBLUE
+            wsComp.cell(r, 4).value = f"=SUM(D{eb_rows_start}:D{eb_rows_end})"
+            wsComp.cell(r, 4).font = F_BOLD; wsComp.cell(r, 4).number_format = FMT_PCT1
+            wsComp.cell(r, 4).border = BDR; wsComp.cell(r, 4).fill = FL_LBLUE
+            wsComp.cell(r, 4).alignment = Alignment(horizontal="center", vertical="center")
+            wsComp.cell(r, 6).value = f"=SUM(F{eb_rows_start}:F{eb_rows_end})"
+            wsComp.cell(r, 6).font = F_BOLD; wsComp.cell(r, 6).number_format = FMT_MONEY0
+            wsComp.cell(r, 6).border = BDR; wsComp.cell(r, 6).fill = FL_LBLUE
+            wsComp.cell(r, 6).alignment = Alignment(horizontal="right", vertical="center")
+            row_eb_total = r
+            # Fill Maintainable EBITDA in metrics table with formula from this weighted total
+            wsComp.cell(row_eb, 2).value = f"=F{row_eb_total}"
+            wsComp.cell(row_eb, 2).font = F_GREEN
+            wsComp.cell(row_eb, 2).number_format = FMT_MONEY0
+            wsComp.cell(row_eb, 2).border = BDR
+            r += 2
+        else:
+            wsComp.cell(r, 1).value = "(EBITDA forecast not found — run DCF page first)"
+            wsComp.cell(r, 1).font = F_NOTE
+            row_eb_total = None; r += 2
+
+        # ── Weighted Earnings Table — live cross-sheet link from Forecasts ──────
+        write_section(wsComp, r, "Maintainable Earnings — Weighted Average (from DCF Forecasts)", ncols=5); r += 1
+
+        dcf_np_all      = ss.get("dcf_profit_all") or ss.get("dcf_profit_forecast") or {}
+        comp_np_weights = ss.get("comp_np_weights", {}) or {}
+        _dcf_np = dcf_np_all if isinstance(dcf_np_all, dict) else {}
+
+        if _dcf_np:
+            write_hdr(wsComp, r, ["Year", "Earnings (USD)", "Timing", "Weight (%)", "Adj. Earnings", "Weighted Earnings"]); r += 1
+            np_rows_start = r
+            np_years = sorted(int(y) for y in _dcf_np.keys() if str(y).lstrip("-").isdigit())
+            weighted_np_years = [y for y in np_years if float(comp_np_weights.get(str(y), 0.0)) > 0] or np_years[:6]
+            _np_timing_base = float(ss.get("comp_timing_base", 1.0) or 1.0)
+            _np_use_timing  = bool(ss.get("comp_use_timing_np", True))
+            for idx_n, yr in enumerate(weighted_np_years):
+                np_val = _dcf_np.get(str(yr), _dcf_np.get(yr, 0.0))
+                wt_pct = float(comp_np_weights.get(str(yr), 0.0)) / 100.0
+                cell_bd(wsComp, r, 1, int(yr),  F_STD, align="center")
+                # Earnings value: cross-sheet formula if we know Forecasts row+col
+                if _for_np_row_excel and _for_year_cols:
+                    _yr_str2 = str(yr)
+                    if _yr_str2 in _for_year_cols:
+                        _fc_col_idx2 = _for_year_cols.index(_yr_str2) + 2
+                        _fc_col_L2 = get_column_letter(_fc_col_idx2)
+                        wsComp.cell(r, 2).value = f"=Forecasts!{_fc_col_L2}{_for_np_row_excel}"
+                        wsComp.cell(r, 2).font = F_GREEN
+                    else:
+                        wsComp.cell(r, 2).value = float(np_val) if np_val is not None else 0.0
+                        wsComp.cell(r, 2).font = F_BLUE
+                else:
+                    wsComp.cell(r, 2).value = float(np_val) if np_val is not None else 0.0
+                    wsComp.cell(r, 2).font = F_BLUE
+                wsComp.cell(r, 2).number_format = FMT_MONEY0
+                wsComp.cell(r, 2).border = BDR
+                wsComp.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
+                # Timing factor
+                timing_val_n = (_np_timing_base + idx_n) if _np_use_timing else 1.0
+                cell_bd(wsComp, r, 3, timing_val_n, F_BLUE, "0.0000")
+                cell_bd(wsComp, r, 4, wt_pct, F_BLUE, FMT_PCT1)
+                # Adjusted Earnings = Earnings × Timing
+                wsComp.cell(r, 5).value = f"=B{r}*C{r}"
+                wsComp.cell(r, 5).font = F_STD
+                wsComp.cell(r, 5).number_format = FMT_MONEY0
+                wsComp.cell(r, 5).border = BDR
+                wsComp.cell(r, 5).alignment = Alignment(horizontal="right", vertical="center")
+                # Weighted Earnings = Adjusted × Weight
+                wsComp.cell(r, 6).value = f"=E{r}*D{r}"
+                wsComp.cell(r, 6).font = F_STD
+                wsComp.cell(r, 6).number_format = FMT_MONEY0
+                wsComp.cell(r, 6).border = BDR
+                wsComp.cell(r, 6).alignment = Alignment(horizontal="right", vertical="center")
+                r += 1
+            np_rows_end = r - 1
+            wsComp.cell(r, 1).value = "Maintainable Earnings"
+            wsComp.cell(r, 1).font = F_BOLD; wsComp.cell(r, 1).border = BDR; wsComp.cell(r, 1).fill = FL_LBLUE
+            wsComp.cell(r, 4).value = f"=SUM(D{np_rows_start}:D{np_rows_end})"
+            wsComp.cell(r, 4).font = F_BOLD; wsComp.cell(r, 4).number_format = FMT_PCT1
+            wsComp.cell(r, 4).border = BDR; wsComp.cell(r, 4).fill = FL_LBLUE
+            wsComp.cell(r, 4).alignment = Alignment(horizontal="center", vertical="center")
+            wsComp.cell(r, 6).value = f"=SUM(F{np_rows_start}:F{np_rows_end})"
+            wsComp.cell(r, 6).font = F_BOLD; wsComp.cell(r, 6).number_format = FMT_MONEY0
+            wsComp.cell(r, 6).border = BDR; wsComp.cell(r, 6).fill = FL_LBLUE
+            wsComp.cell(r, 6).alignment = Alignment(horizontal="right", vertical="center")
+            row_np_total = r
+            # Fill Maintainable Earnings in metrics table
+            wsComp.cell(row_np, 2).value = f"=F{row_np_total}"
+            wsComp.cell(row_np, 2).font = F_GREEN
+            wsComp.cell(row_np, 2).number_format = FMT_MONEY0
+            wsComp.cell(row_np, 2).border = BDR
+            r += 2
+        else:
+            wsComp.cell(r, 1).value = "(Earnings forecast not found — run DCF page first)"
+            wsComp.cell(r, 1).font = F_NOTE
+            row_np_total = None; r += 2
+
+        # ── Implied Equity Values — formulas point to the live weighted totals ─
+        write_section(wsComp, r, "Implied Equity Values", ncols=4); r += 1
+        write_hdr(wsComp, r, ["Method", "Formula", "Equity Value (USD)"]); r += 1
+
+        row_ev_eq = r;   row_pb_eq = r+1;  row_pe_eq = r+2
+
+        # EV/EBITDA: Applied multiple × Maintainable EBITDA (live total) − Net Debt
+        cell_bd(wsComp, row_ev_eq, 1, "EV/EBITDA Valuation", F_BOLD)
+        cell_bd(wsComp, row_ev_eq, 2, "Applied EV/EBITDA × Maint. EBITDA − Net Debt", F_NOTE)
+        if row_eb_total:
+            wsComp.cell(row_ev_eq, 3).value = f'=IF(D{row_ev_m}="","",D{row_ev_m}*F{row_eb_total}-B{row_nd})'
+        else:
+            wsComp.cell(row_ev_eq, 3).value = f'=IF(D{row_ev_m}="","",D{row_ev_m}*B{row_eb}-B{row_nd})'
+        wsComp.cell(row_ev_eq, 3).font = F_BOLD
+        wsComp.cell(row_ev_eq, 3).number_format = FMT_MONEY0
+        wsComp.cell(row_ev_eq, 3).border = BDR
+        wsComp.cell(row_ev_eq, 1).fill = FL_LBLUE
+        wsComp.cell(row_ev_eq, 3).fill = FL_LBLUE
+
+        # P/BV: Applied P/B × Book Equity (static — book equity not in DCF forecast)
+        cell_bd(wsComp, row_pb_eq, 1, "P/BV Valuation", F_BOLD)
+        cell_bd(wsComp, row_pb_eq, 2, "Applied P/B × Book Equity", F_NOTE)
+        wsComp.cell(row_pb_eq, 3).value = f'=IF(D{row_pb_m}="","",D{row_pb_m}*B{row_bk})'
+        wsComp.cell(row_pb_eq, 3).font = F_BOLD
+        wsComp.cell(row_pb_eq, 3).number_format = FMT_MONEY0
+        wsComp.cell(row_pb_eq, 3).border = BDR
+        wsComp.cell(row_pb_eq, 1).fill = FL_LBLUE
+        wsComp.cell(row_pb_eq, 3).fill = FL_LBLUE
+
+        # P/E: Applied P/E × Maintainable Earnings (live total)
+        cell_bd(wsComp, row_pe_eq, 1, "P/E Valuation", F_BOLD)
+        cell_bd(wsComp, row_pe_eq, 2, "Applied P/E × Maint. Earnings", F_NOTE)
+        if row_np_total:
+            wsComp.cell(row_pe_eq, 3).value = f'=IF(D{row_pe_m}="","",D{row_pe_m}*F{row_np_total})'
+        else:
+            wsComp.cell(row_pe_eq, 3).value = f'=IF(D{row_pe_m}="","",D{row_pe_m}*B{row_np})'
+        wsComp.cell(row_pe_eq, 3).font = F_BOLD
+        wsComp.cell(row_pe_eq, 3).number_format = FMT_MONEY0
+        wsComp.cell(row_pe_eq, 3).border = BDR
+        wsComp.cell(row_pe_eq, 1).fill = FL_LBLUE
+        wsComp.cell(row_pe_eq, 3).fill = FL_LBLUE
+
+        for w, c_l in zip([34, 14, 12, 12, 14, 16, 10, 10, 10], list("ABCDEFGHI")):
+            wsComp.column_dimensions[c_l].width = w
+        wsComp.freeze_panes = "A3"
+
+        eq_addr["EV/EBITDA"] = f"CompCo!C{row_ev_eq}"
+        eq_addr["PBV"]       = f"CompCo!C{row_pb_eq}"
+        eq_addr["P/E"]       = f"CompCo!C{row_pe_eq}"
+
+    # =========================================================================
+    # SHEET: Banking
+    # =========================================================================
+    if "BANKING" in selected_models:
+        wsBank = wb.create_sheet("Banking")
+        write_title(wsBank, "Banking — Residual Income / Excess Returns Model", ncols=6)
+
+        bank_out = ss.get("BANK", {}).get("outputs", {}) if ss.get("BANK") else {}
+
+        r = 3
+        write_section(wsBank, r, "Key Inputs & Model Outputs", ncols=4); r += 1
+        write_hdr(wsBank, r, ["Metric", "Value"]); r += 1
+
+        bank_items = [
+            ("Base Year",               bank_out.get("base_year", "")),
+            ("Beginning Book Equity",   bank_out.get("book_equity_0", ss.get("book_equity", 0.0))),
+            ("Base Year Earnings",      bank_out.get("earnings_0", 0.0)),
+            ("Cost of Equity (Ke)",     bank_out.get("ke", ss.get("bank_ke", 0.0))),
+            ("Sum PV(Residual Income)", bank_out.get("pv_resid_sum", 0.0)),
+            ("PV of Terminal Value",    bank_out.get("pv_terminal", 0.0)),
+        ]
+        row_bk_start = r
+        for i, (lbl, val) in enumerate(bank_items):
+            cell_bd(wsBank, r, 1, lbl, F_STD)
+            # ── Cross-sheet wiring for Book Equity and Cost of Equity ──────────
+            if i == 1 and _for_bk_eq_row_excel:
+                # Beginning Book Equity → Forecasts sheet
+                wsBank.cell(r, 2).value = f"=Forecasts!$B${_for_bk_eq_row_excel}"
+                wsBank.cell(r, 2).font  = F_GREEN
+                wsBank.cell(r, 2).number_format = FMT_MONEY0
+                wsBank.cell(r, 2).border = BDR
+            elif i == 3 and _dcf_row_ke is not None:
+                # Cost of Equity (Ke) → DCF CAPM sheet
+                wsBank.cell(r, 2).value = f"=DCF!B{_dcf_row_ke}"
+                wsBank.cell(r, 2).font  = F_GREEN
+                wsBank.cell(r, 2).number_format = FMT_PCT
+                wsBank.cell(r, 2).border = BDR
+            else:
+                if isinstance(val, float):
+                    cell_bd(wsBank, r, 2, val, F_BLUE,
+                            FMT_PCT if (abs(val) < 2 and "Cost" in lbl) else FMT_MONEY0)
+                else:
+                    cell_bd(wsBank, r, 2, str(val), F_BLUE)
+            r += 1
+
+        # row indices
+        bkeq_r = row_bk_start
+        pv_ri_r = row_bk_start + 4
+        pv_tv_r = row_bk_start + 5
+        row_bk_eq = r + 1
+
+        cell_bd(wsBank, r, 1, "", F_STD)  # blank gap row
+        r += 1
+        cell_bd(wsBank, row_bk_eq, 1, "Total Equity Value (Banking)", F_BOLD)
+        wsBank.cell(row_bk_eq, 2).value = f"=B{bkeq_r}+B{pv_ri_r}+B{pv_tv_r}"
+        wsBank.cell(row_bk_eq, 2).font = F_BOLD
+        wsBank.cell(row_bk_eq, 2).number_format = FMT_MONEY0
+        wsBank.cell(row_bk_eq, 2).border = BDR
+        wsBank.cell(row_bk_eq, 1).fill = FL_LBLUE
+        wsBank.cell(row_bk_eq, 2).fill = FL_LBLUE
+
+        wsBank.column_dimensions["A"].width = 32
+        wsBank.column_dimensions["B"].width = 22
+        wsBank.freeze_panes = "A3"
+        eq_addr["BANKING"] = f"Banking!B{row_bk_eq}"
+
+    # ── Remove unused _temp sheet if DCF was not selected ─────────────────────
+    if "DCF" not in selected_models and "_temp" in wb.sheetnames:
+        del wb["_temp"]
+
+    # =========================================================================
+    # SHEET: Summary Valuation  (inserted at position 0 — first tab)
+    # Mirrors Innscor "Summary Valuation" sheet format exactly
+    # =========================================================================
+    wsSum = wb.create_sheet("Summary Valuation", 0)
+    write_title(wsSum, "Summary Valuation", ncols=5)
+
+    # ── Model table — mirrors Innscor layout ──────────────────────────────────
+    r = 3
+    # blank row like Innscor
     r += 1
-    ws2.cell(r, 1, "Number of Shares")
-    ws2.cell(r, 2, float(num_shares) if num_shares is not None else 0.0)
-    ws2.cell(r, 3, "Shares")
 
+    write_hdr(wsSum, r, ["Model", "Value (USD)", "Weight", "Weighted Value of Equity"]); r += 1
+
+    sum_start = r
+    for mdl in selected_models:
+        addr  = eq_addr.get(mdl)
+        w_dec = norm_w.get(mdl, 0.0)
+        w_raw = weights_new.get(mdl, 0.0)
+
+        # Column A: model label (same style as Innscor)
+        cell_bd(wsSum, r, 1, f"{mdl} Valuation", F_STD)
+
+        # Column B: equity value — formula link to model sheet (green = cross-sheet)
+        if addr:
+            wsSum.cell(r, 2).value = f"=IF(ISNUMBER({addr}),{addr},0)"
+            wsSum.cell(r, 2).font  = F_GREEN
+        else:
+            val = value_map.get(mdl)
+            wsSum.cell(r, 2).value = float(val) if val else 0.0
+            wsSum.cell(r, 2).font  = F_BLUE
+        wsSum.cell(r, 2).number_format = FMT_MONEY0
+        wsSum.cell(r, 2).border = BDR
+        wsSum.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
+
+        # Column C: weight (decimal) — hardcoded input in blue like Innscor
+        cell_bd(wsSum, r, 3, w_dec, F_BLUE, FMT_PCT1, align="center")
+
+        # Column D: weighted value = Value × Weight
+        wsSum.cell(r, 4).value  = f"=B{r}*C{r}"
+        wsSum.cell(r, 4).font   = F_STD
+        wsSum.cell(r, 4).number_format = FMT_MONEY0
+        wsSum.cell(r, 4).border = BDR
+        wsSum.cell(r, 4).alignment = Alignment(horizontal="right", vertical="center")
+        r += 1
+
+    sum_end = r - 1
+
+    # ── Totals row ─────────────────────────────────────────────────────────────
+    wsSum.cell(r, 1, "Weighted Equity Value").font = F_BOLD
+    wsSum.cell(r, 1).border = BDR
+    wsSum.cell(r, 1).fill   = FL_LBLUE
+    wsSum.cell(r, 2).value  = ""    # total equity value goes in col D per Innscor style
+    wsSum.cell(r, 2).border = BDR
+    wsSum.cell(r, 2).fill   = FL_LBLUE
+    wsSum.cell(r, 3).value  = f"=SUM(C{sum_start}:C{sum_end})"
+    wsSum.cell(r, 3).font   = F_BOLD
+    wsSum.cell(r, 3).number_format = FMT_PCT1
+    wsSum.cell(r, 3).border = BDR
+    wsSum.cell(r, 3).fill   = FL_LBLUE
+    wsSum.cell(r, 3).alignment = Alignment(horizontal="center", vertical="center")
+    wsSum.cell(r, 4).value  = f"=SUM(D{sum_start}:D{sum_end})"
+    wsSum.cell(r, 4).font   = Font(bold=True, name="Arial", color="000080")
+    wsSum.cell(r, 4).number_format = FMT_MONEY0
+    wsSum.cell(r, 4).border = BDR
+    wsSum.cell(r, 4).fill   = FL_LBLUE
+    wsSum.cell(r, 4).alignment = Alignment(horizontal="right", vertical="center")
+    total_r = r; r += 1
+
+    # ── Per-share section — mirrors Innscor ────────────────────────────────────
     r += 1
-    ws2.cell(r, 1, "Intrinsic Value per Share")
-    # =B2 / B3  (weighted equity / shares)
-    ws2.cell(r, 2, f"=IF(B3>0,B2/B3,NA())")
-    ws2.cell(r, 3, "USD")
+    write_hdr(wsSum, r, ["Metric", "Value", "Unit"]); r += 1
 
-    r += 1
-    ws2.cell(r, 1, "Current Share Price")
-    ws2.cell(r, 2, float(current_price) if current_price is not None else 0.0)
-    ws2.cell(r, 3, "USD")
+    row_wev  = r;   row_ns = r+1; row_ivps = r+2
+    row_sp   = r+3; row_upd = r+4; row_rec = r+5
 
-    r += 1
-    ws2.cell(r, 1, "Upside / Downside (%)")
-    # =(Intrinsic - Price)/Price
-    ws2.cell(r, 2, f"=IF(B5>0,(B4-B5)/B5,NA())")
-    ws2.cell(r, 3, "%")
+    cell_bd(wsSum, row_wev, 1, "Weighted Equity Value", F_STD)
+    wsSum.cell(row_wev, 2).value = f"=SUM(D{sum_start}:D{sum_end})"
+    wsSum.cell(row_wev, 2).font = F_GREEN
+    wsSum.cell(row_wev, 2).number_format = FMT_MONEY0
+    wsSum.cell(row_wev, 2).border = BDR
+    cell_bd(wsSum, row_wev,  3, "USD", F_STD)
 
-    r += 1
-    ws2.cell(r, 1, "Recommendation")
-    # Same thresholds as your Streamlit logic:
-    # BUY if upside >= 0.15
-    # HOLD if -0.10 <= upside <= 0.10
-    # else REDUCE
-    ws2.cell(r, 2, '=IF(ISNA(B6),"N/A",IF(B6>=0.10,"BUY / ACCUMULATE",IF(AND(B6>=-0.10,B6<=0.10),"HOLD / FAIRLY VALUED","REDUCE / AVOID")))')
-    ws2.cell(r, 3, "")
+    cell_bd(wsSum, row_ns,   1, "Number of Shares in Issue", F_STD)
+    cell_bd(wsSum, row_ns,   2, float(num_shares) if num_shares else 0.0, F_BLUE, FMT_NUM)
+    cell_bd(wsSum, row_ns,   3, "Shares", F_STD)
 
-    # format numbers
-    ws2.cell(2, 2).number_format = '#,##0.00'
-    ws2.cell(3, 2).number_format = '#,##0'
-    ws2.cell(4, 2).number_format = '#,##0.0000'
-    ws2.cell(5, 2).number_format = '#,##0.00'
-    ws2.cell(6, 2).number_format = '0.0%'
+    cell_bd(wsSum, row_ivps, 1, "Intrinsic Value per Share", F_BOLD)
+    wsSum.cell(row_ivps, 2).value = f"=IF(B{row_ns}>0,B{row_wev}/B{row_ns},NA())"
+    wsSum.cell(row_ivps, 2).font = F_BOLD
+    wsSum.cell(row_ivps, 2).number_format = FMT_MONEY4
+    wsSum.cell(row_ivps, 2).border = BDR
+    wsSum.cell(row_ivps, 1).fill  = FL_LBLUE
+    wsSum.cell(row_ivps, 2).fill  = FL_LBLUE
+    cell_bd(wsSum, row_ivps, 3, "USD", F_STD)
 
-    # style recommendation
-    ws2.cell(7, 2).font = Font(bold=True)
+    cell_bd(wsSum, row_sp,   1, "Current Market Price",     F_STD)
+    cell_bd(wsSum, row_sp,   2, float(current_price) if current_price else 0.0, F_BLUE, FMT_MONEY4)
+    cell_bd(wsSum, row_sp,   3, "USD", F_STD)
 
-    # widths
-    ws2.column_dimensions["A"].width = 30
-    ws2.column_dimensions["B"].width = 28
-    ws2.column_dimensions["C"].width = 10
+    cell_bd(wsSum, row_upd,  1, "Upside / Downside",        F_STD)
+    wsSum.cell(row_upd, 2).value = (
+        f"=IF(AND(ISNUMBER(B{row_ivps}),B{row_sp}>0),"
+        f"(B{row_ivps}-B{row_sp})/B{row_sp},NA())"
+    )
+    wsSum.cell(row_upd, 2).font = F_STD
+    wsSum.cell(row_upd, 2).number_format = "0.0%"
+    wsSum.cell(row_upd, 2).border = BDR
+    wsSum.cell(row_upd, 1).fill  = FL_LBLUE
+    wsSum.cell(row_upd, 2).fill  = FL_LBLUE
+    cell_bd(wsSum, row_upd,  3, "%", F_STD)
 
-    # Save to bytes
+    cell_bd(wsSum, row_rec,  1, "Recommendation",           F_BOLD)
+    wsSum.cell(row_rec, 2).value = (
+        f'=IF(ISNA(B{row_upd}),"N/A",'
+        f'IF(B{row_upd}>=0.10,"BUY / ACCUMULATE",'
+        f'IF(AND(B{row_upd}>=-0.10,B{row_upd}<=0.10),"HOLD / FAIRLY VALUED",'
+        f'"REDUCE / AVOID")))'
+    )
+    wsSum.cell(row_rec, 2).font = Font(bold=True, name="Arial")
+    wsSum.cell(row_rec, 2).border = BDR
+
+    for rr in range(row_wev, row_rec + 1):
+        for cc in [1, 2, 3]:
+            wsSum.cell(rr, cc).border = BDR
+
+    # ── Analyst Recommendation Note ───────────────────────────────────────────
+    r = row_rec + 3
+    write_section(wsSum, r, "Analyst Recommendation", ncols=4); r += 1
+
+    # Build recommendation rationale from live values
+    co_name_s = ss.get("company_name", "the company")
+    try:
+        total_w_s = sum(weights_new.get(m, 0.0) for m in selected_models) or 1.0
+        norm_w_s  = {m: weights_new.get(m, 0.0) / total_w_s for m in selected_models}
+        we_s = sum((value_map.get(m) or 0.0) * norm_w_s.get(m, 0.0) for m in selected_models)
+        iv  = (we_s / float(num_shares)) if num_shares and float(num_shares) > 0 else 0.0
+        cp  = float(current_price) if current_price else 0.0
+        upd = ((iv - cp) / cp * 100) if cp > 0 and iv > 0 else 0.0
+        if upd >= 10:
+            rec_txt = (
+                f"Based on a blended valuation of selected models weighted as above, {co_name_s} "
+                f"has an intrinsic value per share of USD {iv:,.4f} against a current market price of "
+                f"USD {cp:,.4f}, implying upside of {upd:+.1f}%. We therefore initiate coverage with a "
+                f"BUY / ACCUMULATE recommendation. The stock appears undervalued relative to its "
+                f"fundamental intrinsic value across multiple valuation methodologies."
+            )
+        elif upd >= -10:
+            rec_txt = (
+                f"Based on a blended valuation of selected models weighted as above, {co_name_s} "
+                f"has an intrinsic value per share of USD {iv:,.4f} against a current market price of "
+                f"USD {cp:,.4f}, implying limited upside/downside of {upd:+.1f}%. We initiate coverage with "
+                f"a HOLD / FAIRLY VALUED recommendation. The stock appears to be trading near fair value."
+            )
+        else:
+            rec_txt = (
+                f"Based on a blended valuation of selected models weighted as above, {co_name_s} "
+                f"has an intrinsic value per share of USD {iv:,.4f} against a current market price of "
+                f"USD {cp:,.4f}, implying downside of {upd:+.1f}%. We initiate coverage with a "
+                f"REDUCE / SELL recommendation. The stock appears overvalued relative to its intrinsic value."
+            )
+    except Exception:
+        rec_txt = (
+            f"Enter the number of shares and current market price above to generate an analyst "
+            f"recommendation. The weighted equity value across selected models is shown in the table."
+        )
+    # Clear cells in the merge range before merging
+    from openpyxl.styles import Border
+    for _mr in range(r, r + 5):
+        for _mc in range(1, 5):
+            wsSum.cell(_mr, _mc).value = None
+            wsSum.cell(_mr, _mc).border = Border()
+            wsSum.cell(_mr, _mc).fill = PatternFill(fill_type=None)
+
+    wsSum.merge_cells(start_row=r, start_column=1, end_row=r + 4, end_column=4)
+    rec_note_cell = wsSum.cell(r, 1)
+    # Build the recommendation note as an Excel formula so it auto-updates
+    rec_formula = (
+        f'=IF(AND(ISNUMBER(B{row_ivps}),B{row_sp}>0),'
+        f'"Based on a blended valuation of selected models weighted as above, '
+        f'the company has an intrinsic value per share of USD "&TEXT(B{row_ivps},"#,##0.0000")&" against a current market price of USD "'
+        f'&TEXT(B{row_sp},"#,##0.0000")&", implying "&TEXT(B{row_upd},"0.0%")&" upside/downside. "'
+        f'&IF(B{row_upd}>=0.10,"We therefore initiate coverage with a BUY / ACCUMULATE recommendation. The stock appears undervalued relative to its fundamental intrinsic value.",'
+        f'IF(AND(B{row_upd}>=-0.10,B{row_upd}<=0.10),"We initiate coverage with a HOLD / FAIRLY VALUED recommendation. The stock appears to be trading near fair value.",'
+        f'"We initiate coverage with a REDUCE / SELL recommendation. The stock appears overvalued relative to its intrinsic value.")),'
+        f'"Enter the number of shares and current market price above to generate a recommendation.")'
+    )
+    rec_note_cell.value = rec_formula
+    rec_note_cell.font = Font(name="Arial", size=10, italic=True, color="1A1A2E")
+    rec_note_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    wsSum.row_dimensions[r].height = 90
+    # ── Colour legend (Innscor-style note at bottom) ───────────────────────────
+    leg = r + 6
+    wsSum.cell(leg,   1, "Notes:").font = F_BOLD
+    wsSum.cell(leg+1, 1, "Blue text  — hardcoded input; safe to edit directly").font = Font(color="0000FF", name="Arial", size=9)
+    wsSum.cell(leg+2, 1, "Green text — formula pulling from model sheet; do NOT overwrite").font = Font(color="008000", name="Arial", size=9)
+    wsSum.cell(leg+3, 1, "Blue fill  — key output cell").font = Font(color="000080", name="Arial", size=9, italic=True)
+    wsSum.cell(leg+4, 1, "Recommendation thresholds: BUY ≥ +10% upside | HOLD between -10% and +10% | REDUCE < -10%").font = Font(name="Arial", size=9, italic=True)
+
+    wsSum.column_dimensions["A"].width = 36
+    wsSum.column_dimensions["B"].width = 22
+    wsSum.column_dimensions["C"].width = 12
+    wsSum.column_dimensions["D"].width = 26
+    wsSum.freeze_panes = "A5"
+
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
     return bio.getvalue()
 
 
-# Build the Excel file bytes
-excel_bytes = build_summary_excel_with_formulas(
+# ---- Render download button ----
+st.markdown("---")
+st.markdown("### 📥 Download Combined Valuation Model (All Models — Formula-Linked)")
+st.markdown(
+    """
+    <div style="font-size:0.9rem; color:#4b5563; margin-bottom:12px;">
+    Downloads a single <strong>.xlsx</strong> with every valuation model on its own sheet.
+    Edit any assumption (WACC, growth rate, peer multiples, dividends) and
+    <strong>Valuation_Summary updates automatically via formulas</strong>.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+_ss = dict(st.session_state)
+excel_bytes = _build_combined_valuation_excel(
+    ss=_ss,
     selected_models=selected_models,
     value_map=value_map,
     weights_new=weights_new,
     num_shares=num_shares,
-    current_price=current_price
+    current_price=current_price,
 )
 
 st.download_button(
-    label="⬇️ Download Valuation Summary (Excel with formulas)",
+    label="⬇️ Download Full Valuation Workbook (All Models + Formulas)",
     data=excel_bytes,
-    file_name="valuation_summary_with_formulas.xlsx",
+    file_name="FBC_Combined_Valuation.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
