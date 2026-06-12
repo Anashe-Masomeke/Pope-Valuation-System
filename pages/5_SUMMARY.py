@@ -2306,8 +2306,9 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
 
             # -- Revenue Growth --
             _for_ratio_rev_row = r
+            _growth_mode = ss.get("dcf_rev_growth_mode", "Uniform (same % each year)")
             _yearly_g_pct = ss.get("dcf_yearly_growth_pct", {}) or {}
-            _uniform_g    = ss.get("dcf_avg_g", ss.get("avg_g", None))
+            _uniform_g = ss.get("dcf_rev_growth_override") or ss.get("dcf_avg_g", ss.get("avg_g", None))
             wsFor.cell(r, 1).value = "Revenue Growth (%)"
             wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
 
@@ -2318,20 +2319,23 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
                 cell.number_format = FMT_PCT1
                 _is_fc_g = (forecast_start_yr and str(yr).isdigit() and int(str(yr)) >= forecast_start_yr)
                 if _is_fc_g:
-                    # ── FIX: always hardcode forecast growth as a plain value (no formula)
-                    # Using a formula that derives growth from the revenue row causes a
-                    # circular reference because the revenue row itself references this cell.
                     _yr_key = str(yr)
-                    _g_val = _yearly_g_pct.get(_yr_key)
-                    if _g_val is None and _uniform_g is not None:
-                        _g_val = float(_uniform_g)
-                    if _g_val is None:
-                        # no stored growth rate — use 0 as safe fallback (blue, editable)
-                        cell.value = 0.0
-                    else:
-                        _g_dec = float(_g_val) / 100.0 if abs(float(_g_val)) > 1 else float(_g_val)
+                    if _growth_mode.startswith("Uniform"):
+                        # Always use the uniform average for ALL forecast years
+                        _g_val = float(_uniform_g) if _uniform_g is not None else 0.0
+                        _g_dec = _g_val / 100.0 if abs(_g_val) > 1 else _g_val
                         cell.value = _g_dec
-                    cell.font = F_BLUE  # blue = hardcoded input, safe to edit
+                    else:
+                        # Different growth per year — use per-year value
+                        _g_val = _yearly_g_pct.get(_yr_key)
+                        if _g_val is None and _uniform_g is not None:
+                            _g_val = float(_uniform_g)
+                        if _g_val is None:
+                            cell.value = 0.0
+                        else:
+                            _g_dec = float(_g_val) / 100.0 if abs(float(_g_val)) > 1 else float(_g_val)
+                            cell.value = _g_dec
+                    cell.font = F_BLUE
                 else:
                     # historical columns: derive YoY growth from actual uploaded values
                     # (both prior and current year are hardcoded numbers — no circular ref)
