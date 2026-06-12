@@ -382,7 +382,7 @@ if colB.button("💰 Dividend Discount Model",  use_container_width=True): st.sw
 if colC.button("📈 Comparables",             use_container_width=True): st.switch_page("pages/2_COMPARABLES.py")
 if colD.button("🏦 Banking (RIM)",            use_container_width=True): st.switch_page("pages/4_BANKING.py")
 if colE.button("🧾 Summary",                  use_container_width=True): st.switch_page("pages/5_SUMMARY.py")
-if colF.button("🧭 User Guide",               use_container_width=True): st.switch_page("pages/6_USER_GUIDE.py")
+if colF.button("🧭 User Guide",               use_container_width=True): st.switch_page("pages/6_USER GUIDE.py")
 
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
