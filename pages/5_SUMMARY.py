@@ -2316,29 +2316,29 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
                 cell.number_format = FMT_PCT1
                 _is_fc_g = (forecast_start_yr and str(yr).isdigit() and int(str(yr)) >= forecast_start_yr)
                 if _is_fc_g:
+                    # ── FIX: always hardcode forecast growth as a plain value (no formula)
+                    # Using a formula that derives growth from the revenue row causes a
+                    # circular reference because the revenue row itself references this cell.
                     _yr_key = str(yr)
                     _g_val = _yearly_g_pct.get(_yr_key)
                     if _g_val is None and _uniform_g is not None:
                         _g_val = float(_uniform_g)
                     if _g_val is None:
-                        if ci > 2 and _for_rev_row_excel:
-                            prev_col_L = get_column_letter(ci - 1)
-                            cur_col_L  = get_column_letter(ci)
-                            cell.value = f"=IFERROR(({cur_col_L}{_for_rev_row_excel}-{prev_col_L}{_for_rev_row_excel})/ABS({prev_col_L}{_for_rev_row_excel}),\"\")"
-                        else:
-                            cell.value = None
+                        # no stored growth rate — use 0 as safe fallback (blue, editable)
+                        cell.value = 0.0
                     else:
                         _g_dec = float(_g_val) / 100.0 if abs(float(_g_val)) > 1 else float(_g_val)
                         cell.value = _g_dec
-                        cell.font = F_BLUE
+                    cell.font = F_BLUE  # blue = hardcoded input, safe to edit
                 else:
+                    # historical columns: derive YoY growth from actual uploaded values
+                    # (both prior and current year are hardcoded numbers — no circular ref)
                     if ci > 2 and _for_rev_row_excel:
                         prev_col_L = get_column_letter(ci - 1)
-                        cur_col_L  = get_column_letter(ci)
+                        cur_col_L = get_column_letter(ci)
                         cell.value = f"=IFERROR(({cur_col_L}{_for_rev_row_excel}-{prev_col_L}{_for_rev_row_excel})/ABS({prev_col_L}{_for_rev_row_excel}),\"\")"
                     else:
                         cell.value = None
-
             # Avg of historical revenue growths
             _rev_avg_cell = wsFor.cell(r, _avg_col_num)
             _rev_avg_cell.border = BDR
@@ -3779,3 +3779,4 @@ st.download_button(
     data=excel_bytes,
     file_name="FBC_Combined_Valuation.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
