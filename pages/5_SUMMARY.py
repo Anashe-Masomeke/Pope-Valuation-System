@@ -1266,7 +1266,8 @@ _timing_base = float(S.get("comp_timing_base", 1.0) or 1.0)
 _use_timing_eb = bool(S.get("comp_use_timing_eb", True))
 if _dcf_eb_all and _comp_eb_weights:
     _eb_years = sorted(int(y) for y in _dcf_eb_all.keys()
-                       if str(y).strip().isdigit() and len(str(y).strip()) == 4)
+                   if str(y).strip().isdigit() and len(str(y).strip()) == 4
+                   and float(_comp_eb_weights.get(str(int(y)), 0.0)) > 0)
     _weighted_eb = 0.0
     for _idx_e, _yr in enumerate(_eb_years):
         _wt = float(_comp_eb_weights.get(str(_yr), 0.0)) / 100.0
@@ -1284,7 +1285,8 @@ _comp_np_weights = S.get("comp_np_weights") or {}
 _use_timing_np = bool(S.get("comp_use_timing_np", True))
 if _dcf_np_all and _comp_np_weights:
     _np_years = sorted(int(y) for y in _dcf_np_all.keys()
-                       if str(y).strip().isdigit() and len(str(y).strip()) == 4)
+                   if str(y).strip().isdigit() and len(str(y).strip()) == 4
+                   and float(_comp_np_weights.get(str(int(y)), 0.0)) > 0)
     _weighted_np = 0.0
     for _idx_n, _yr in enumerate(_np_years):
         _wt = float(_comp_np_weights.get(str(_yr), 0.0)) / 100.0
