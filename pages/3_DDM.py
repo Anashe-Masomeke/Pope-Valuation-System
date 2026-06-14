@@ -1014,18 +1014,22 @@ st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # across tab switches — even before a Save has been done.
 # ── When NOT in manual override, always pull fresh from DCF ──────────
 # When in manual override, use saved DDM values (or fall back to DCF)
-_use_custom_now = bool(st.session_state.get("ddm_use_custom_params_store", False))
+# Use store flag AND verify saved values actually exist (not cleared)
+_use_custom_now = (
+    bool(st.session_state.get("ddm_use_custom_params_store", False))
+    and "ddm_saved_rf" in st.session_state  # saved values must exist
+)
 
 if _use_custom_now:
     # Manual override mode: use saved DDM overrides, fall back to DCF
-    rf = st.session_state.get("ddm_saved_rf",
-         st.session_state.get("dcf_rf_pct", 0.0)) / 100
-    mrp = st.session_state.get("ddm_saved_mrp",
-          st.session_state.get("dcf_mrp_pct", 0.0)) / 100
-    tax_rate = st.session_state.get("ddm_saved_tax",
-               st.session_state.get("dcf_tax_pct", 0.0)) / 100
-    unlevered_beta = st.session_state.get("ddm_saved_beta",
-                     st.session_state.get("dcf_unlevered_beta", 0.0))
+    rf = float(st.session_state.get("ddm_saved_rf",
+         st.session_state.get("dcf_rf_pct", 0.0))) / 100
+    mrp = float(st.session_state.get("ddm_saved_mrp",
+          st.session_state.get("dcf_mrp_pct", 0.0))) / 100
+    tax_rate = float(st.session_state.get("ddm_saved_tax",
+               st.session_state.get("dcf_tax_pct", 0.0))) / 100
+    unlevered_beta = float(st.session_state.get("ddm_saved_beta",
+                     st.session_state.get("dcf_unlevered_beta", 0.0)))
 else:
     # Auto mode: ALWAYS pull directly from DCF, ignore any saved DDM overrides
     rf = float(st.session_state.get("dcf_rf_pct", 0.0)) / 100
@@ -1119,10 +1123,13 @@ st.session_state["unlevered_beta"] = unlevered_beta
 st.session_state["de_ratio"] = de_ratio
 
 # ── Clear stale DDM overrides when auto mode is active ───────────────
-if not _use_custom_now:
+# Use the CURRENT checkbox value (use_custom), not the pre-render _use_custom_now
+if not use_custom:
     for _k in ["ddm_saved_rf", "ddm_saved_mrp", "ddm_saved_tax", "ddm_saved_beta"]:
         if _k in st.session_state:
             del st.session_state[_k]
+    # Also clear the store flag so next render starts fresh from DCF
+    st.session_state["ddm_use_custom_params_store"] = False
 
 # CAPM Re
 levered_beta = unlevered_beta * (1 + (1 - tax_rate) * de_ratio)
