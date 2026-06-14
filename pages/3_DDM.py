@@ -1054,7 +1054,6 @@ use_custom = st.checkbox(
 
 # Always write back to the persistent store key immediately
 st.session_state["ddm_use_custom_params_store"] = bool(use_custom)
-st.session_state["ddm_use_custom_params"] = bool(use_custom)
 
 if use_custom:
     cA, cB = st.columns(2)
