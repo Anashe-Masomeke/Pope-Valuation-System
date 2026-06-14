@@ -1012,18 +1012,27 @@ st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # Pull saved DDM overrides first; fall back to DCF keys; then zero.
 # This preserves whatever the user typed in the override boxes below
 # across tab switches — even before a Save has been done.
-rf = st.session_state.get("ddm_saved_rf",
-     st.session_state.get("dcf_rf_pct",
-     st.session_state.get("rf", 0.0))) / 100
-mrp = st.session_state.get("ddm_saved_mrp",
-      st.session_state.get("dcf_mrp_pct",
-      st.session_state.get("erp", 0.0))) / 100
-tax_rate = st.session_state.get("ddm_saved_tax",
-           st.session_state.get("dcf_tax_pct",
-           st.session_state.get("tax_rate", 0.0))) / 100
-unlevered_beta = st.session_state.get("ddm_saved_beta",
-                 st.session_state.get("dcf_unlevered_beta",
-                 st.session_state.get("unlevered_beta", 0.0)))
+# ── When NOT in manual override, always pull fresh from DCF ──────────
+# When in manual override, use saved DDM values (or fall back to DCF)
+_use_custom_now = st.session_state.get("ddm_use_custom_params", False)
+
+if _use_custom_now:
+    # Manual override mode: use saved DDM overrides, fall back to DCF
+    rf = st.session_state.get("ddm_saved_rf",
+         st.session_state.get("dcf_rf_pct", 0.0)) / 100
+    mrp = st.session_state.get("ddm_saved_mrp",
+          st.session_state.get("dcf_mrp_pct", 0.0)) / 100
+    tax_rate = st.session_state.get("ddm_saved_tax",
+               st.session_state.get("dcf_tax_pct", 0.0)) / 100
+    unlevered_beta = st.session_state.get("ddm_saved_beta",
+                     st.session_state.get("dcf_unlevered_beta", 0.0))
+else:
+    # Auto mode: ALWAYS pull directly from DCF, ignore any saved DDM overrides
+    rf = float(st.session_state.get("dcf_rf_pct", 0.0)) / 100
+    mrp = float(st.session_state.get("dcf_mrp_pct", 0.0)) / 100
+    tax_rate = float(st.session_state.get("dcf_tax_pct", 0.0)) / 100
+    unlevered_beta = float(st.session_state.get("dcf_unlevered_beta", 0.0))
+
 de_ratio = st.session_state.get("de_ratio", 0.0)
 
 # Store back normalised keys
@@ -1101,6 +1110,12 @@ st.session_state["erp"] = mrp
 st.session_state["tax_rate"] = tax_rate
 st.session_state["unlevered_beta"] = unlevered_beta
 st.session_state["de_ratio"] = de_ratio
+
+# ── Clear stale DDM overrides when auto mode is active ───────────────
+if not _use_custom_now:
+    for _k in ["ddm_saved_rf", "ddm_saved_mrp", "ddm_saved_tax", "ddm_saved_beta"]:
+        if _k in st.session_state:
+            del st.session_state[_k]
 
 # CAPM Re
 levered_beta = unlevered_beta * (1 + (1 - tax_rate) * de_ratio)
