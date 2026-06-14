@@ -2974,6 +2974,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         div_start = r
         for yr in ddm_years:
             cell_bd(wsDDM, r, 1, int(yr), F_STD, FMT_NUM, align="center")
+            wsDDM.cell(r, 1).number_format = '0'  # ← fix 2,021 → 2021
             cell_bd(wsDDM, r, 2, float(ddm_divs[yr]), F_BLUE, "0.00000")
             r += 1
         div_end = r - 1
@@ -2982,26 +2983,57 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         write_section(wsDDM, r, "Gordon Growth Model Inputs & Valuation", ncols=4); r += 1
         # ── CAPM parameters (linked from DCF sheet) ───────────────────────────
         write_hdr(wsDDM, r, ["CAPM Parameter", "Value (from DCF)"]); r += 1
+        # Detect manual override mode
+        _ddm_use_custom = bool(ss.get("ddm_use_custom_params", False))
+
+        # Pull manual override values if used, else fall back to DCF values
+        if _ddm_use_custom:
+            _ddm_rf_val = float(ss.get("ddm_saved_rf", ss.get("dcf_rf_pct", 0.0))) / 100.0
+            _ddm_mrp_val = float(ss.get("ddm_saved_mrp", ss.get("dcf_mrp_pct", 0.0))) / 100.0
+            _ddm_bu_val = float(ss.get("ddm_saved_beta", ss.get("dcf_unlevered_beta", 0.0)))
+            _ddm_de_val = float(ss.get("de_ratio", 0.0))
+            _ddm_tax_val = float(ss.get("ddm_saved_tax", ss.get("dcf_tax_pct", 0.0))) / 100.0
+        else:
+            _ddm_rf_val = float(ss.get("dcf_rf_pct", 0.0)) / 100.0
+            _ddm_mrp_val = float(ss.get("dcf_mrp_pct", 0.0)) / 100.0
+            _ddm_bu_val = float(ss.get("dcf_unlevered_beta", 0.0))
+            _ddm_de_val = float(ss.get("de_ratio", 0.0))
+            _ddm_tax_val = float(ss.get("dcf_tax_pct", 0.0)) / 100.0
+
         capm_params_ddm = [
-            ("Risk-free Rate (Rf)",       _dcf_row_rf,  FMT_PCT),
-            ("Market Risk Premium (MRP)", _dcf_row_mrp, FMT_PCT),
-            ("Unlevered Beta (βu)",       _dcf_row_bu,  "0.0000"),
-            ("D/E Ratio",                 _dcf_row_de,  "0.0000"),
-            ("Tax Rate",                  _dcf_row_tax, FMT_PCT),
+            ("Risk-free Rate (Rf)", _dcf_row_rf, FMT_PCT, _ddm_rf_val),
+            ("Market Risk Premium (MRP)", _dcf_row_mrp, FMT_PCT, _ddm_mrp_val),
+            ("Unlevered Beta (βu)", _dcf_row_bu, "0.0000", _ddm_bu_val),
+            ("D/E Ratio", _dcf_row_de, "0.0000", _ddm_de_val),
+            ("Tax Rate", _dcf_row_tax, FMT_PCT, _ddm_tax_val),
         ]
-        for lbl_c, src_row, fmt_c in capm_params_ddm:
+
+        # Track which row each CAPM param lands on (for formula references below)
+        _ddm_capm_rows = {}
+        _capm_keys = ["rf", "mrp", "bu", "de", "tax"]
+
+        for (lbl_c, src_row, fmt_c, manual_val), _key in zip(capm_params_ddm, _capm_keys):
             cell_bd(wsDDM, r, 1, lbl_c, F_STD)
-            if src_row is not None:
-                wsDDM.cell(r, 2).value = f"=DCF!B{src_row}"
-                wsDDM.cell(r, 2).font  = F_GREEN
+            if _ddm_use_custom:
+                # Blue hardcoded input — user typed these manually
+                wsDDM.cell(r, 2).value = float(manual_val)
+                wsDDM.cell(r, 2).font = F_BLUE
             else:
-                wsDDM.cell(r, 2).value = 0.0
-                wsDDM.cell(r, 2).font  = F_BLUE
+                # Green cross-sheet link from DCF
+                if src_row is not None:
+                    wsDDM.cell(r, 2).value = f"=DCF!B{src_row}"
+                    wsDDM.cell(r, 2).font = F_GREEN
+                else:
+                    wsDDM.cell(r, 2).value = float(manual_val)
+                    wsDDM.cell(r, 2).font = F_BLUE
             wsDDM.cell(r, 2).number_format = fmt_c
             wsDDM.cell(r, 2).border = BDR
+            _ddm_capm_rows[_key] = r
             r += 1
+
         r += 1
-        write_hdr(wsDDM, r, ["Parameter", "Value"]); r += 1
+        write_hdr(wsDDM, r, ["Parameter", "Value"]);
+        r += 1
 
         row_ddm_g  = r;   row_ddm_re = r+1; row_ddm_d1 = r+2
         row_ddm_p0 = r+3; row_ddm_ns = r+4; row_ddm_ev = r+5
@@ -3021,14 +3053,34 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         wsDDM.cell(row_ddm_g, 2).number_format = FMT_PCT
         wsDDM.cell(row_ddm_g, 2).border = BDR
 
-        cell_bd(wsDDM, row_ddm_re, 1, "Cost of Equity (Re)",      F_STD)
-        # Re: formula-derived from DCF CAPM parameters (Rf + βL × MRP) if available
-        if _dcf_row_ke is not None:
+        cell_bd(wsDDM, row_ddm_re, 1, "Cost of Equity (Re)", F_STD)
+        if _ddm_use_custom:
+            # Build CAPM chain using the manually entered rows above:
+            # Levered Beta = βu × (1 + (1-T) × D/E)
+            # Re = Rf + βL × MRP
+            _r_bu = _ddm_capm_rows.get("bu")
+            _r_de = _ddm_capm_rows.get("de")
+            _r_tax = _ddm_capm_rows.get("tax")
+            _r_rf = _ddm_capm_rows.get("rf")
+            _r_mrp = _ddm_capm_rows.get("mrp")
+            if all(v is not None for v in [_r_bu, _r_de, _r_tax, _r_rf, _r_mrp]):
+                # Insert a hidden Levered Beta row just above Re
+                # We write it into row_ddm_re and push Re one row down
+                # Instead, compute Re inline as a single formula:
+                # Re = Rf + (βu*(1+(1-T)*DE)) * MRP
+                wsDDM.cell(row_ddm_re, 2).value = (
+                    f"=B{_r_rf}+(B{_r_bu}*(1+(1-B{_r_tax})*B{_r_de}))*B{_r_mrp}"
+                )
+                wsDDM.cell(row_ddm_re, 2).font = F_GREEN
+            else:
+                wsDDM.cell(row_ddm_re, 2).value = ddm_re_val
+                wsDDM.cell(row_ddm_re, 2).font = F_BLUE
+        elif _dcf_row_ke is not None:
             wsDDM.cell(row_ddm_re, 2).value = f"=DCF!B{_dcf_row_ke}"
-            wsDDM.cell(row_ddm_re, 2).font  = F_GREEN
+            wsDDM.cell(row_ddm_re, 2).font = F_GREEN
         else:
             wsDDM.cell(row_ddm_re, 2).value = ddm_re_val
-            wsDDM.cell(row_ddm_re, 2).font  = F_BLUE
+            wsDDM.cell(row_ddm_re, 2).font = F_BLUE
         wsDDM.cell(row_ddm_re, 2).number_format = FMT_PCT
         wsDDM.cell(row_ddm_re, 2).border = BDR
 
