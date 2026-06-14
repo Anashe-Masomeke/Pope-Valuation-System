@@ -2983,8 +2983,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         write_section(wsDDM, r, "Gordon Growth Model Inputs & Valuation", ncols=4); r += 1
         # ── CAPM parameters (linked from DCF sheet) ───────────────────────────
         write_hdr(wsDDM, r, ["CAPM Parameter", "Value (from DCF)"]); r += 1
-        # Detect manual override mode
-        _ddm_use_custom = bool(ss.get("ddm_use_custom_params", False))
+        # Detect manual override mode — use the persistent store key, not the widget key
+        _ddm_use_custom = (
+                bool(ss.get("ddm_use_custom_params_store", False))
+                and "ddm_saved_rf" in ss  # saved values must actually exist
+        )
 
         # Pull manual override values if used, else fall back to DCF values
         if _ddm_use_custom:
