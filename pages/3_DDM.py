@@ -1014,7 +1014,7 @@ st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 # across tab switches — even before a Save has been done.
 # ── When NOT in manual override, always pull fresh from DCF ──────────
 # When in manual override, use saved DDM values (or fall back to DCF)
-_use_custom_now = st.session_state.get("ddm_use_custom_params", False)
+_use_custom_now = bool(st.session_state.get("ddm_use_custom_params_store", False))
 
 if _use_custom_now:
     # Manual override mode: use saved DDM overrides, fall back to DCF
@@ -1043,11 +1043,18 @@ st.session_state["unlevered_beta"] = unlevered_beta
 
 st.write("Using parameters loaded from the DCF page (you can override them below).")
 
+# ── Persist checkbox state explicitly (survives tab switches) ─────────
+_ddm_custom_default = bool(st.session_state.get("ddm_use_custom_params_store", False))
+
 use_custom = st.checkbox(
     "Manually override parameters",
-    value=st.session_state.get("ddm_use_custom_params", False),
+    value=_ddm_custom_default,
     key="ddm_use_custom_params",
 )
+
+# Always write back to the persistent store key immediately
+st.session_state["ddm_use_custom_params_store"] = bool(use_custom)
+st.session_state["ddm_use_custom_params"] = bool(use_custom)
 
 if use_custom:
     cA, cB = st.columns(2)
@@ -1098,11 +1105,12 @@ if use_custom:
             / 100
         )
 
-    # Persist overrides so they survive tab switches without autosave
-    st.session_state["ddm_saved_rf"]   = rf   * 100
-    st.session_state["ddm_saved_mrp"]  = mrp  * 100
-    st.session_state["ddm_saved_tax"]  = tax_rate * 100
-    st.session_state["ddm_saved_beta"] = unlevered_beta
+# Persist overrides AND the checkbox state so everything survives tab switches
+    st.session_state["ddm_saved_rf"]           = rf   * 100
+    st.session_state["ddm_saved_mrp"]          = mrp  * 100
+    st.session_state["ddm_saved_tax"]          = tax_rate * 100
+    st.session_state["ddm_saved_beta"]         = unlevered_beta
+    st.session_state["ddm_use_custom_params_store"] = True
 
 # Save final values
 st.session_state["rf"] = rf
