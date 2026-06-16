@@ -2414,66 +2414,166 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
             wsFor.cell(r, 1).value = "No forecasted income statement found. Run the DCF page first."
             wsFor.cell(r, 1).font = F_NOTE
             r += 2
-
-        # ── Working Capital (Forecast) — fully formulized ─────────────────────
-        r += 1
-        write_section(wsFor, r, "Working Capital (Forecast & ΔWC)", ncols=6); r += 1
-
-        _fore_yr_list = [str(y) for y in year_cols if str(y) not in hist_yrs] if forecast_is is not None else []
-        _hist_yr_list = [str(y) for y in year_cols if str(y) in hist_yrs] if forecast_is is not None else []
-        _wc_pct_used_val = float(ss.get("dcf_wc_pct_method_last_val", 0.0) or
-                                 ss.get("dcf_wc_percent_avg", 0.0) or 0.0)
-        _last_wc_hist = float(ss.get("dcf_last_wc_hist", 0.0) or 0.0)
-
-        # WC% assumption row (blue, editable)
-        write_hdr(wsFor, r, ["WC % of Sales (editable)", "Value"]); r += 1
-        _for_wc_pct_row = r
-        wsFor.cell(r, 1).value = "WC % of Sales — used in forecast below"
-        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
-        wsFor.cell(r, 2).value = float(_wc_pct_used_val)
-        wsFor.cell(r, 2).font = F_BLUE
-        wsFor.cell(r, 2).number_format = FMT_PCT1
-        wsFor.cell(r, 2).border = BDR
-        r += 1
-
-        # Last historical WC anchor (blue, hardcoded)
-        _for_wc_last_row = r
-        wsFor.cell(r, 1).value = "Last Historical Working Capital (anchor)"
-        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
-        wsFor.cell(r, 2).value = float(_last_wc_hist)
-        wsFor.cell(r, 2).font = F_BLUE
-        wsFor.cell(r, 2).number_format = FMT_MONEY0
-        wsFor.cell(r, 2).border = BDR
-        r += 1
-
-        # Forecast WC table: Year | Revenue (=Forecasts!rev) | WC (=Rev*WC%) | ΔWC (=prev-curr)
-        write_hdr(wsFor, r, ["Year", "Forecast Revenue", "Forecast WC (Rev×WC%)", "ΔWC (Old–New)"]); r += 1
-        _for_wc_forecast_start = r
-        _wc_prev_ref = f"B{_for_wc_last_row}"
-
-        for _f_i2, _f_yr2 in enumerate(_fore_yr_list):
-            _col_num2 = _yr_to_col.get(_f_yr2) if forecast_is is not None else None
-            _col_L2 = get_column_letter(_col_num2) if _col_num2 else "B"
-            wsFor.cell(r, 1).value = int(_f_yr2) if _f_yr2.isdigit() else _f_yr2
-            wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
-            wsFor.cell(r, 1).alignment = Alignment(horizontal="center", vertical="center")
-
-            if _for_rev_row_excel and _col_num2:
-                wsFor.cell(r, 2).value = f"=Forecasts!{_col_L2}{_for_rev_row_excel}" if wsFor.title == "Forecasts" else f"={_col_L2}{_for_rev_row_excel}"
-                wsFor.cell(r, 2).value = f"={_col_L2}{_for_rev_row_excel}"
-            else:
-                wsFor.cell(r, 2).value = 0
-            wsFor.cell(r, 2).font = F_STD; wsFor.cell(r, 2).number_format = FMT_MONEY0; wsFor.cell(r, 2).border = BDR
-
-            wsFor.cell(r, 3).value = f"=B{r}*$B${_for_wc_pct_row}"
-            wsFor.cell(r, 3).font = F_STD; wsFor.cell(r, 3).number_format = FMT_MONEY0; wsFor.cell(r, 3).border = BDR
-
-            wsFor.cell(r, 4).value = f"={_wc_prev_ref}-C{r}"
-            wsFor.cell(r, 4).font = F_STD; wsFor.cell(r, 4).number_format = FMT_MONEY0; wsFor.cell(r, 4).border = BDR
-            _wc_prev_ref = f"C{r}"
+            # ── Working Capital (Forecast) — fully formulized ─────────────────────
+            r += 1
+            write_section(wsFor, r, "Working Capital (Forecast & ΔWC)", ncols=6);
             r += 1
 
-        _for_wc_forecast_end = r - 1
+            _fore_yr_list = [str(y) for y in year_cols if str(y) not in hist_yrs] if forecast_is is not None else []
+            _hist_yr_list = [str(y) for y in year_cols if str(y) in hist_yrs] if forecast_is is not None else []
+            _wc_pct_used_val = float(ss.get("dcf_wc_pct_method_last_val", 0.0) or
+                                     ss.get("dcf_wc_percent_avg", 0.0) or 0.0)
+            _last_wc_hist = float(ss.get("dcf_last_wc_hist", 0.0) or 0.0)
+
+            # ── HISTORICAL WC% TABLE (live formulas using BS data) ───────────────
+            _bs_df_exp = ss.get("dcf_bs_df")
+            _ca_labels = ss.get("dcf_mapping", {}).get("ca", [])
+            _cl_labels = ss.get("dcf_mapping", {}).get("cl", [])
+
+            _wc_hist_data = {}  # {year_str: (ca, cl, wc)}
+
+            if _bs_df_exp is not None and _ca_labels and _cl_labels:
+                _ca_rows_exp = [int(str(l).split(":")[0]) - 1
+                                for l in _ca_labels
+                                if str(l).split(":")[0].strip().isdigit()]
+                _cl_rows_exp = [int(str(l).split(":")[0]) - 1
+                                for l in _cl_labels
+                                if str(l).split(":")[0].strip().isdigit()]
+                for _yr_h in _hist_yr_list:
+                    try:
+                        if _yr_h in _bs_df_exp.columns:
+                            _ca_v = float(_bs_df_exp.iloc[_ca_rows_exp][_yr_h].sum()) if _ca_rows_exp else 0.0
+                            _cl_v = float(_bs_df_exp.iloc[_cl_rows_exp][_yr_h].sum()) if _cl_rows_exp else 0.0
+                            _wc_hist_data[_yr_h] = (_ca_v, _cl_v, _ca_v - _cl_v)
+                    except Exception:
+                        pass
+
+            # Write historical WC analysis table
+            write_hdr(wsFor, r, ["Year", "Current Assets", "Current Liabilities",
+                                 "WC (CA−CL)", "Revenue", "WC % of Sales"]);
+            r += 1
+            _hist_wc_pct_cells = []
+            _hist_wc_table_start = r
+
+            for _yr_h2 in _hist_yr_list:
+                wsFor.cell(r, 1).value = int(_yr_h2) if _yr_h2.isdigit() else _yr_h2
+                wsFor.cell(r, 1).font = F_STD
+                wsFor.cell(r, 1).border = BDR
+                wsFor.cell(r, 1).number_format = '0'
+                wsFor.cell(r, 1).alignment = Alignment(horizontal="center", vertical="center")
+
+                if _yr_h2 in _wc_hist_data:
+                    _ca_v2, _cl_v2, _wc_v2 = _wc_hist_data[_yr_h2]
+                    # CA hardcoded (blue)
+                    wsFor.cell(r, 2).value = float(_ca_v2)
+                    wsFor.cell(r, 2).font = F_BLUE
+                    # CL hardcoded (blue)
+                    wsFor.cell(r, 3).value = float(_cl_v2)
+                    wsFor.cell(r, 3).font = F_BLUE
+                    # WC = CA - CL (formula, green)
+                    wsFor.cell(r, 4).value = f"=B{r}-C{r}"
+                    wsFor.cell(r, 4).font = F_GREEN
+                    # Revenue: cross-reference IS row above
+                    _rev_col_num_h = _yr_to_col.get(_yr_h2)
+                    if _rev_col_num_h and _for_rev_row_excel:
+                        _rev_col_L_h = get_column_letter(_rev_col_num_h)
+                        wsFor.cell(r, 5).value = f"={_rev_col_L_h}{_for_rev_row_excel}"
+                        wsFor.cell(r, 5).font = F_GREEN
+                    else:
+                        wsFor.cell(r, 5).value = 0
+                        wsFor.cell(r, 5).font = F_BLUE
+                    # WC% = WC / Revenue (formula, green)
+                    wsFor.cell(r, 6).value = f"=IFERROR(D{r}/E{r},0)"
+                    wsFor.cell(r, 6).font = F_GREEN
+                    _hist_wc_pct_cells.append(f"F{r}")
+                else:
+                    for _c in range(2, 7):
+                        wsFor.cell(r, _c).value = 0
+                        wsFor.cell(r, _c).font = F_BLUE
+
+                for _c in range(2, 7):
+                    wsFor.cell(r, _c).border = BDR
+                    wsFor.cell(r, _c).alignment = Alignment(horizontal="right", vertical="center")
+                    wsFor.cell(r, _c).number_format = FMT_MONEY0 if _c < 6 else FMT_PCT1
+                r += 1
+
+            # WC% assumption — now a live AVERAGE formula (green)
+            write_hdr(wsFor, r, ["WC % of Sales", "Value"]);
+            r += 1
+            _for_wc_pct_row = r
+            wsFor.cell(r, 1).value = "WC % of Sales — used in forecast below (avg of history above)"
+            wsFor.cell(r, 1).font = F_BOLD
+            wsFor.cell(r, 1).border = BDR
+            wsFor.cell(r, 1).fill = FL_LBLUE
+
+            if _hist_wc_pct_cells:
+                wsFor.cell(r, 2).value = f"=IFERROR(AVERAGE({','.join(_hist_wc_pct_cells)}),{_wc_pct_used_val})"
+                wsFor.cell(r, 2).font = Font(bold=True, color="008000", name="Arial", size=10)
+            else:
+                # Fallback: hardcoded session value
+                wsFor.cell(r, 2).value = float(_wc_pct_used_val)
+                wsFor.cell(r, 2).font = F_BLUE
+
+            wsFor.cell(r, 2).number_format = FMT_PCT1
+            wsFor.cell(r, 2).border = BDR
+            wsFor.cell(r, 2).fill = FL_LBLUE
+            wsFor.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
+            r += 1
+
+            # Last historical WC anchor — formula referencing WC column of last hist row
+            _for_wc_last_row = r
+            wsFor.cell(r, 1).value = "Last Historical Working Capital (anchor for ΔWC)"
+            wsFor.cell(r, 1).font = F_STD
+            wsFor.cell(r, 1).border = BDR
+
+            if _hist_wc_pct_cells:
+                _last_hist_wc_row = _hist_wc_table_start + len(_hist_yr_list) - 1
+                wsFor.cell(r, 2).value = f"=D{_last_hist_wc_row}"
+                wsFor.cell(r, 2).font = F_GREEN
+            else:
+                wsFor.cell(r, 2).value = float(_last_wc_hist)
+                wsFor.cell(r, 2).font = F_BLUE
+
+            wsFor.cell(r, 2).number_format = FMT_MONEY0
+            wsFor.cell(r, 2).border = BDR
+            r += 1
+
+            # Forecast WC table
+            write_hdr(wsFor, r, ["Year", "Forecast Revenue", "Forecast WC (Rev×WC%)", "ΔWC (Old–New)"]);
+            r += 1
+            _for_wc_forecast_start = r
+            _wc_prev_ref = f"B{_for_wc_last_row}"
+
+            for _f_i2, _f_yr2 in enumerate(_fore_yr_list):
+                _col_num2 = _yr_to_col.get(_f_yr2) if forecast_is is not None else None
+                _col_L2 = get_column_letter(_col_num2) if _col_num2 else "B"
+                wsFor.cell(r, 1).value = int(_f_yr2) if _f_yr2.isdigit() else _f_yr2
+                wsFor.cell(r, 1).font = F_STD;
+                wsFor.cell(r, 1).border = BDR
+                wsFor.cell(r, 1).alignment = Alignment(horizontal="center", vertical="center")
+
+                if _for_rev_row_excel and _col_num2:
+                    wsFor.cell(r, 2).value = f"={_col_L2}{_for_rev_row_excel}"
+                else:
+                    wsFor.cell(r, 2).value = 0
+                wsFor.cell(r, 2).font = F_STD;
+                wsFor.cell(r, 2).number_format = FMT_MONEY0;
+                wsFor.cell(r, 2).border = BDR
+
+                # WC% references the live AVERAGE formula cell above
+                wsFor.cell(r, 3).value = f"=B{r}*$B${_for_wc_pct_row}"
+                wsFor.cell(r, 3).font = F_STD;
+                wsFor.cell(r, 3).number_format = FMT_MONEY0;
+                wsFor.cell(r, 3).border = BDR
+
+                wsFor.cell(r, 4).value = f"={_wc_prev_ref}-C{r}"
+                wsFor.cell(r, 4).font = F_STD;
+                wsFor.cell(r, 4).number_format = FMT_MONEY0;
+                wsFor.cell(r, 4).border = BDR
+                _wc_prev_ref = f"C{r}"
+                r += 1
+
+            _for_wc_forecast_end = r - 1
 
         # ── Depreciation & Capex (from DCF session) ───────────────────────────
         r += 1
