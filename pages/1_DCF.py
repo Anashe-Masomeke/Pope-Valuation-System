@@ -3819,12 +3819,13 @@ if ca_idx_list and cl_idx_list:
 
     # ✅ UPDATE SESSION STATE EXPLICITLY
     if "average" in wc_choice.lower():
-        st.session_state["dcf_wc_pct_method"] = "average"
+        st.session_state["dcf_wc_pct_method"] = "avg"        # ✅ FIXED
         wc_percent_avg = wc_percent_mean
         st.session_state["dcf_wc_pct_method_last_val"] = wc_percent_avg
         st.success(f"✅ Using historical average WC% of Sales = {wc_percent_avg:.2%}")
+
     else:
-        st.session_state["dcf_wc_pct_method"] = "last"
+        st.session_state["dcf_wc_pct_method"] = "recent"     # ✅ FIXED
         wc_percent_avg = wc_percent_last
         st.session_state["dcf_wc_pct_method_last_val"] = wc_percent_avg
         st.info(f"📌 Using most recent WC% of Sales ({last_year}) = {wc_percent_avg:.2%}")
