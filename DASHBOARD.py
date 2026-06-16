@@ -156,7 +156,10 @@ section[data-testid="stSidebar"] hr {
     font-size: 15px !important;
     padding: 10px 24px !important;
     box-shadow: 0 4px 14px rgba(0,51,153,0.30) !important;
-    transition: all 0.2s ease !important;
+}
+
+.stButton > button * {
+    color: #ffffff !important;
 }
 .stButton > button:hover {
     transform: translateY(-2px) !important;
