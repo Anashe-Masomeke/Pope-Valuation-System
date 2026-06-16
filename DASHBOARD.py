@@ -28,32 +28,19 @@ st.markdown("""
 
 /* ── 1. GLOBAL TYPOGRAPHY ─────────────────────────────────── */
 html, body, .stApp, .block-container,
-p, label,
+p, div, label,
 h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small,
 .stDataFrame, .stTable {
   font-family: "EB Garamond", Georgia, "Times New Roman", serif !important;
-    color: #1a1a2e !important;
-}
-/* ✅ Only fix buttons */
-.stButton > button * {
-    color: #ffffff !important;
-}
-
-/* ✅ Only fix the page header text (NOT everything globally) */
-.fbc-page-header-title,
-.fbc-page-header-sub {
-    color: #ffffff !important;
+  color: #1a1a2e;
 }
 h1, h2, h3, h4, .fbc-heading, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   font-family: "Playfair Display", Georgia, serif !important;
   font-weight: 700 !important;
   letter-spacing: -0.01em !important;
 }
-/* Ensure top nav text stays white */
-.top-nav * {
-    color: #ffffff !important;
-}
+
 /* ── 2. PAGE BACKGROUND ───────────────────────────────────── */
 .stApp { background: #f5f7fb !important; }
 .main .block-container { background: #f5f7fb !important; padding-top: 1.5rem !important; }
@@ -171,11 +158,6 @@ section[data-testid="stSidebar"] hr {
     box-shadow: 0 4px 14px rgba(0,51,153,0.30) !important;
     transition: all 0.2s ease !important;
 }
-/* 🔥 FORCE button text to stay white */
-.stButton > button * {
-    color: #ffffff !important;
-}
-
 .stButton > button:hover {
     transform: translateY(-2px) !important;
     box-shadow: 0 8px 22px rgba(0,51,153,0.40) !important;
@@ -358,12 +340,10 @@ st.markdown(f"""
         <div style="display:flex; align-items:center;">
             {_logo_tag}
             <div style="line-height:1.25;">
-                
                 <div style="
                     font-family: 'Playfair Display', serif;
                     font-size: 22px; font-weight: 900;
-                    color: #ffffff !important;
-
+                    color: #ffffff;
                     letter-spacing: -0.01em;
                     text-shadow: 0 2px 8px rgba(0,0,0,0.30);">
                     🏛️ FBC Valuation Dashboard
@@ -371,7 +351,7 @@ st.markdown(f"""
                 <div style="
                     font-family: 'EB Garamond', serif;
                     font-size: 13px; font-style: italic;
-                    color: rgba(255,255,255,0.65) !important;
+                    color: rgba(255,255,255,0.65);
                     margin-top: 2px;">
                     Investment Research &amp; Valuation Platform
                 </div>
