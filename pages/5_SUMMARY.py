@@ -3000,8 +3000,8 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
                     # sensitivity formula (fully dynamic)
                     c.value = (
                         f"=IF({wacc_formula}<={g_formula},NA(),"
-                        f"(SUMPRODUCT(G{cf_start}:G{cf_end},H{cf_start}:H{cf_end})+"
-                        f"(G{cf_end}*(1+{g_formula})/({wacc_formula}-{g_formula}))*H{cf_end}"
+                        f"(SUMPRODUCT(G{cf_start}:G{cf_end},(1+{wacc_formula})^(-B{cf_start}:B{cf_end}))+"
+                        f"(G{cf_end}*(1+{g_formula})/({wacc_formula}-{g_formula}))/(1+{wacc_formula})^B{cf_end}"
                         f")-B{row_nd})"
                     )
 
