@@ -28,7 +28,7 @@ st.markdown("""
 
 /* ── 1. GLOBAL TYPOGRAPHY ─────────────────────────────────── */
 html, body, .stApp, .block-container,
-p, div, label,
+p, label,
 h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small,
 .stDataFrame, .stTable {
@@ -358,10 +358,12 @@ st.markdown(f"""
         <div style="display:flex; align-items:center;">
             {_logo_tag}
             <div style="line-height:1.25;">
-                <div style="
+                
+                  <div style="
                     font-family: 'Playfair Display', serif;
                     font-size: 22px; font-weight: 900;
-                    color: #ffffff;
+                    color: #ffffff !important;
+
                     letter-spacing: -0.01em;
                     text-shadow: 0 2px 8px rgba(0,0,0,0.30);">
                     🏛️ FBC Valuation Dashboard
@@ -369,7 +371,7 @@ st.markdown(f"""
                 <div style="
                     font-family: 'EB Garamond', serif;
                     font-size: 13px; font-style: italic;
-                    color: rgba(255,255,255,0.65);
+                    color: rgba(255,255,255,0.65) !important;
                     margin-top: 2px;">
                     Investment Research &amp; Valuation Platform
                 </div>
