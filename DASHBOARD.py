@@ -50,7 +50,10 @@ h1, h2, h3, h4, .fbc-heading, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   font-weight: 700 !important;
   letter-spacing: -0.01em !important;
 }
-
+/* Ensure top nav text stays white */
+.top-nav * {
+    color: #ffffff !important;
+}
 /* ── 2. PAGE BACKGROUND ───────────────────────────────────── */
 .stApp { background: #f5f7fb !important; }
 .main .block-container { background: #f5f7fb !important; padding-top: 1.5rem !important; }
