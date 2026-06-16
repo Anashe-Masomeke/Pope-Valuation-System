@@ -35,9 +35,14 @@ li, ul, ol, a, small,
   font-family: "EB Garamond", Georgia, "Times New Roman", serif !important;
     color: #1a1a2e !important;
 }
-/* 🔥 Override for buttons and header */
-.fbc-page-header *,
+/* ✅ Only fix buttons */
 .stButton > button * {
+    color: #ffffff !important;
+}
+
+/* ✅ Only fix the page header text (NOT everything globally) */
+.fbc-page-header-title,
+.fbc-page-header-sub {
     color: #ffffff !important;
 }
 h1, h2, h3, h4, .fbc-heading, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
