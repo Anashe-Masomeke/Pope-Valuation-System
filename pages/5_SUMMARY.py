@@ -2491,17 +2491,35 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
                 wsFor.cell(r, _c).number_format = FMT_MONEY0 if _c < 6 else FMT_PCT1
             r += 1
 
-        # WC% assumption — live AVERAGE formula
-        write_hdr(wsFor, r, ["WC % of Sales", "Value"]); r += 1
+        # WC% assumption — dynamic (AVG vs MOST RECENT)
+        write_hdr(wsFor, r, ["WC % of Sales", "Value"]);
+        r += 1
         _for_wc_pct_row = r
-        wsFor.cell(r, 1).value = "WC % of Sales — used in forecast below (avg of history above)"
+
+        _wc_method = ss.get("dcf_wc_pct_method", "avg")  # ✅ CRITICAL
+
+        # Label changes dynamically
+        if _wc_method == "recent":
+            label = "WC % of Sales — used (most recent year)"
+        else:
+            label = "WC % of Sales — used (average of history)"
+
+        wsFor.cell(r, 1).value = label
         wsFor.cell(r, 1).font = F_BOLD
         wsFor.cell(r, 1).border = BDR
         wsFor.cell(r, 1).fill = FL_LBLUE
 
         if _hist_wc_pct_cells:
-            wsFor.cell(r, 2).value = f"=IFERROR(AVERAGE({','.join(_hist_wc_pct_cells)}),{_wc_pct_used_val})"
+            if _wc_method == "recent":
+                # ✅ TAKE LAST YEAR WC% (e.g. F2025)
+                _last_wc_pct_cell = _hist_wc_pct_cells[-1]
+                wsFor.cell(r, 2).value = f"=IFERROR({_last_wc_pct_cell},{_wc_pct_used_val})"
+            else:
+                # ✅ AVERAGE
+                wsFor.cell(r, 2).value = f"=IFERROR(AVERAGE({','.join(_hist_wc_pct_cells)}),{_wc_pct_used_val})"
+
             wsFor.cell(r, 2).font = Font(bold=True, color="008000", name="Arial", size=10)
+
         else:
             wsFor.cell(r, 2).value = float(_wc_pct_used_val)
             wsFor.cell(r, 2).font = F_BLUE
@@ -2510,6 +2528,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         wsFor.cell(r, 2).border = BDR
         wsFor.cell(r, 2).fill = FL_LBLUE
         wsFor.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
+
         r += 1
 
         # Last historical WC anchor
