@@ -85,7 +85,10 @@ section[data-testid="stSidebar"] hr {
     border-top: 1px solid rgba(245,180,0,0.25) !important;
     margin: 12px 0 !important;
 }
-
+/* ✅ Make model buttons/text white */
+.stButton > button {
+    color: #ffffff !important;
+}
 /* ✅ Ensure Material Icons render correctly */
 .material-icons,
 .material-icons-outlined,
