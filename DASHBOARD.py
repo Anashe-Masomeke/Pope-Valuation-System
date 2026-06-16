@@ -33,7 +33,12 @@ h1, h2, h3, h4, h5, h6,
 li, ul, ol, a, small,
 .stDataFrame, .stTable {
   font-family: "EB Garamond", Georgia, "Times New Roman", serif !important;
-  color: #1a1a2e;
+    color: #1a1a2e !important;
+}
+/* 🔥 Override for buttons and header */
+.fbc-page-header *,
+.stButton > button * {
+    color: #ffffff !important;
 }
 h1, h2, h3, h4, .fbc-heading, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   font-family: "Playfair Display", Georgia, serif !important;
@@ -85,10 +90,7 @@ section[data-testid="stSidebar"] hr {
     border-top: 1px solid rgba(245,180,0,0.25) !important;
     margin: 12px 0 !important;
 }
-/* ✅ Make model buttons/text white */
-.stButton > button {
-    color: #ffffff !important;
-}
+
 /* ✅ Ensure Material Icons render correctly */
 .material-icons,
 .material-icons-outlined,
@@ -161,6 +163,11 @@ section[data-testid="stSidebar"] hr {
     box-shadow: 0 4px 14px rgba(0,51,153,0.30) !important;
     transition: all 0.2s ease !important;
 }
+/* 🔥 FORCE button text to stay white */
+.stButton > button * {
+    color: #ffffff !important;
+}
+
 .stButton > button:hover {
     transform: translateY(-2px) !important;
     box-shadow: 0 8px 22px rgba(0,51,153,0.40) !important;
