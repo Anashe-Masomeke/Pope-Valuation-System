@@ -359,7 +359,7 @@ st.markdown(f"""
             {_logo_tag}
             <div style="line-height:1.25;">
                 
-                  <div style="
+                <div style="
                     font-family: 'Playfair Display', serif;
                     font-size: 22px; font-weight: 900;
                     color: #ffffff !important;
