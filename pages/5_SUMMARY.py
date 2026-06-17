@@ -3906,7 +3906,25 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+# ---- Ask which company is being valued (drives in-sheet title + filename) ----
+import re as _re_fn
 
+_default_company_name = st.session_state.get("company_name", "")
+company_name_input = st.text_input(
+    "Company being valued (used in the report and filename):",
+    value=_default_company_name,
+    key="summary_company_name_input",
+    placeholder="e.g. Innscor Africa Limited",
+)
+st.session_state["company_name"] = (company_name_input or "Company").strip() or "Company"
+
+def _safe_filename(name: str) -> str:
+    name = name.strip() or "Company"
+    name = _re_fn.sub(r'[\\/*?:"<>|]', "", name)   # strip characters illegal in filenames
+    name = _re_fn.sub(r"\s+", "_", name)            # spaces -> underscores
+    return name[:80]
+
+_excel_filename = f"{_safe_filename(st.session_state['company_name'])}_Valuation.xlsx"
 # ── Attempt to restore project session if not already loaded ──────────
 _active_pid = st.session_state.get("active_project_id")
 if _active_pid and not st.session_state.get("_project_data_loaded"):
@@ -3940,6 +3958,6 @@ excel_bytes = _build_combined_valuation_excel(
 st.download_button(
     label="⬇️ Download Full Valuation Workbook (All Models + Formulas)",
     data=excel_bytes,
-    file_name="FBC_Combined_Valuation.xlsx",
+    file_name=_excel_filename,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
