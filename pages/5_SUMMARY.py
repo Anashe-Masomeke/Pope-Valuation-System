@@ -3892,7 +3892,6 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     bio.seek(0)
     return bio.getvalue()
 
-
 # ---- Render download button ----
 st.markdown("---")
 st.markdown("### 📥 Download Combined Valuation Model (All Models — Formula-Linked)")
@@ -3906,25 +3905,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-# ---- Ask which company is being valued (drives in-sheet title + filename) ----
-import re as _re_fn
 
-_default_company_name = st.session_state.get("company_name", "")
-company_name_input = st.text_input(
-    "Company being valued (used in the report and filename):",
-    value=_default_company_name,
-    key="summary_company_name_input",
-    placeholder="e.g. Innscor Africa Limited",
-)
-st.session_state["company_name"] = (company_name_input or "Company").strip() or "Company"
-
-def _safe_filename(name: str) -> str:
-    name = name.strip() or "Company"
-    name = _re_fn.sub(r'[\\/*?:"<>|]', "", name)   # strip characters illegal in filenames
-    name = _re_fn.sub(r"\s+", "_", name)            # spaces -> underscores
-    return name[:80]
-
-_excel_filename = f"{_safe_filename(st.session_state['company_name'])}_Valuation.xlsx"
 # ── Attempt to restore project session if not already loaded ──────────
 _active_pid = st.session_state.get("active_project_id")
 if _active_pid and not st.session_state.get("_project_data_loaded"):
@@ -3945,19 +3926,49 @@ if _active_pid and not st.session_state.get("_project_data_loaded"):
     except Exception:
         pass
 
-_ss = dict(st.session_state)
-excel_bytes = _build_combined_valuation_excel(
-    ss=_ss,
-    selected_models=selected_models,
-    value_map=value_map,
-    weights_new=weights_new,
-    num_shares=num_shares,
-    current_price=current_price,
-)
+import re as _re_fn
 
-st.download_button(
-    label="⬇️ Download Full Valuation Workbook (All Models + Formulas)",
-    data=excel_bytes,
-    file_name=_excel_filename,
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+def _safe_filename(name: str) -> str:
+    name = (name or "").strip() or "Company"
+    name = _re_fn.sub(r'[\\/*?:"<>|]', "", name)   # strip illegal filename characters
+    name = _re_fn.sub(r"\s+", "_", name)            # spaces -> underscores
+    return name[:80]
+
+@st.dialog("Which company are you valuing?")
+def _ask_company_and_build():
+    name = st.text_input(
+        "Company name",
+        key="dl_company_name_input",
+        placeholder="e.g. Innscor Africa Limited",
+    )
+    if st.button("Confirm & Prepare Download", key="dl_company_confirm_btn"):
+        if not name or not name.strip():
+            st.warning("Please enter a company name.")
+        else:
+            st.session_state["company_name"] = name.strip()
+            _ss2 = dict(st.session_state)
+            _excel_bytes2 = _build_combined_valuation_excel(
+                ss=_ss2,
+                selected_models=selected_models,
+                value_map=value_map,
+                weights_new=weights_new,
+                num_shares=num_shares,
+                current_price=current_price,
+            )
+            st.session_state["_pending_excel_bytes"] = _excel_bytes2
+            st.session_state["_pending_excel_filename"] = f"{_safe_filename(name)}_Valuation.xlsx"
+            st.session_state["_show_download_ready"] = True
+            st.rerun()
+
+if st.button("📥 Download Full Valuation Workbook (All Models + Formulas)", key="open_company_dialog_btn"):
+    _ask_company_and_build()
+
+if st.session_state.get("_show_download_ready") and st.session_state.get("_pending_excel_bytes"):
+    st.success(f"Workbook ready as **{st.session_state['_pending_excel_filename']}** — click below to save it.")
+    st.download_button(
+        label="⬇️ Click here to download",
+        data=st.session_state["_pending_excel_bytes"],
+        file_name=st.session_state["_pending_excel_filename"],
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="final_download_btn",
+    )
