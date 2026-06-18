@@ -3771,51 +3771,38 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     r += 1
     write_hdr(wsSum, r, ["Metric", "Value", "Unit"]); r += 1
 
-    row_wev = r;
+    row_wev = r
     row_ns = r + 1
-    row_ivlow = r + 2;
-    row_ivhigh = r + 3;
-    row_ivps = r + 4
-    row_sp = r + 5;
-    row_upd = r + 6;
-    row_rec = r + 7
+    row_ivps = r + 2
+    row_sp = r + 3
+    row_upd = r + 4
+    row_rec = r + 5
+
     cell_bd(wsSum, row_wev, 1, "Weighted Equity Value", F_STD)
     wsSum.cell(row_wev, 2).value = f"=SUM(D{sum_start}:D{sum_end})"
     wsSum.cell(row_wev, 2).font = F_GREEN
     wsSum.cell(row_wev, 2).number_format = FMT_MONEY0
     wsSum.cell(row_wev, 2).border = BDR
-    cell_bd(wsSum, row_wev,  3, "USD", F_STD)
+    cell_bd(wsSum, row_wev, 3, "USD", F_STD)
 
-    cell_bd(wsSum, row_ns,   1, "Number of Shares in Issue", F_STD)
-    cell_bd(wsSum, row_ns,   2, float(num_shares) if num_shares else 0.0, F_BLUE, FMT_NUM)
-    cell_bd(wsSum, row_ns,   3, "Shares", F_STD)
-    cell_bd(wsSum, row_ivlow, 1, "Intrinsic Value per Share — Low", F_STD)
-    wsSum.cell(row_ivlow, 2).value = f"=IF(B{row_ns}>0,MIN(B{sum_start}:B{sum_end})/B{row_ns},NA())"
-    wsSum.cell(row_ivlow, 2).font = F_GREEN
-    wsSum.cell(row_ivlow, 2).number_format = FMT_MONEY4
-    wsSum.cell(row_ivlow, 2).border = BDR
-    cell_bd(wsSum, row_ivlow, 3, "USD", F_STD)
+    cell_bd(wsSum, row_ns, 1, "Number of Shares in Issue", F_STD)
+    cell_bd(wsSum, row_ns, 2, float(num_shares) if num_shares else 0.0, F_BLUE, FMT_NUM)
+    cell_bd(wsSum, row_ns, 3, "Shares", F_STD)
 
-    cell_bd(wsSum, row_ivhigh, 1, "Intrinsic Value per Share — High", F_STD)
-    wsSum.cell(row_ivhigh, 2).value = f"=IF(B{row_ns}>0,MAX(B{sum_start}:B{sum_end})/B{row_ns},NA())"
-    wsSum.cell(row_ivhigh, 2).font = F_GREEN
-    wsSum.cell(row_ivhigh, 2).number_format = FMT_MONEY4
-    wsSum.cell(row_ivhigh, 2).border = BDR
-    cell_bd(wsSum, row_ivhigh, 3, "USD", F_STD)
-    cell_bd(wsSum, row_ivps, 1, "Intrinsic Value per Share — Weighted", F_BOLD)
+    cell_bd(wsSum, row_ivps, 1, "Intrinsic Value per Share", F_BOLD)
     wsSum.cell(row_ivps, 2).value = f"=IF(B{row_ns}>0,B{row_wev}/B{row_ns},NA())"
     wsSum.cell(row_ivps, 2).font = F_BOLD
     wsSum.cell(row_ivps, 2).number_format = FMT_MONEY4
     wsSum.cell(row_ivps, 2).border = BDR
-    wsSum.cell(row_ivps, 1).fill  = FL_LBLUE
-    wsSum.cell(row_ivps, 2).fill  = FL_LBLUE
+    wsSum.cell(row_ivps, 1).fill = FL_LBLUE
+    wsSum.cell(row_ivps, 2).fill = FL_LBLUE
     cell_bd(wsSum, row_ivps, 3, "USD", F_STD)
 
-    cell_bd(wsSum, row_sp,   1, "Current Market Price",     F_STD)
-    cell_bd(wsSum, row_sp,   2, float(current_price) if current_price else 0.0, F_BLUE, FMT_MONEY4)
-    cell_bd(wsSum, row_sp,   3, "USD", F_STD)
+    cell_bd(wsSum, row_sp, 1, "Current Market Price", F_STD)
+    cell_bd(wsSum, row_sp, 2, float(current_price) if current_price else 0.0, F_BLUE, FMT_MONEY4)
+    cell_bd(wsSum, row_sp, 3, "USD", F_STD)
 
-    cell_bd(wsSum, row_upd,  1, "Upside / Downside",        F_STD)
+    cell_bd(wsSum, row_upd, 1, "Upside / Downside", F_STD)
     wsSum.cell(row_upd, 2).value = (
         f"=IF(AND(ISNUMBER(B{row_ivps}),B{row_sp}>0),"
         f"(B{row_ivps}-B{row_sp})/B{row_sp},NA())"
@@ -3823,11 +3810,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     wsSum.cell(row_upd, 2).font = F_STD
     wsSum.cell(row_upd, 2).number_format = "0.0%"
     wsSum.cell(row_upd, 2).border = BDR
-    wsSum.cell(row_upd, 1).fill  = FL_LBLUE
-    wsSum.cell(row_upd, 2).fill  = FL_LBLUE
-    cell_bd(wsSum, row_upd,  3, "%", F_STD)
+    wsSum.cell(row_upd, 1).fill = FL_LBLUE
+    wsSum.cell(row_upd, 2).fill = FL_LBLUE
+    cell_bd(wsSum, row_upd, 3, "%", F_STD)
 
-    cell_bd(wsSum, row_rec,  1, "Recommendation",           F_BOLD)
+    cell_bd(wsSum, row_rec, 1, "Recommendation", F_BOLD)
     wsSum.cell(row_rec, 2).value = (
         f'=IF(ISNA(B{row_upd}),"N/A",'
         f'IF(B{row_upd}>=0.10,"BUY / ACCUMULATE",'
@@ -3892,16 +3879,19 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     wsSum.merge_cells(start_row=r, start_column=1, end_row=r + 4, end_column=4)
     rec_note_cell = wsSum.cell(r, 1)
     # Build the recommendation note as an Excel formula so it auto-updates
+    rng_low = f'MIN(B{sum_start}:B{sum_end})/B{row_ns}'
+    rng_high = f'MAX(B{sum_start}:B{sum_end})/B{row_ns}'
+
     rec_formula = (
         f'=IF(AND(ISNUMBER(B{row_ivps}),B{row_sp}>0),'
         f'"Across the selected valuation methods, intrinsic value per share ranges from USD "'
-        f'&TEXT(B{row_ivlow},"#,##0.0000")&" to USD "&TEXT(B{row_ivhigh},"#,##0.0000")'
+        f'&TEXT({rng_low},"#,##0.0000")&" to USD "&TEXT({rng_high},"#,##0.0000")'
         f'&", with a weighted blended estimate of USD "&TEXT(B{row_ivps},"#,##0.0000")&". "'
         f'&"The current market price of USD "&TEXT(B{row_sp},"#,##0.0000")&" implies "'
-        f'&TEXT(B{row_upd},"0.0%")&" upside/downside versus the blended estimate. "'
-        f'&IF(B{row_sp}<B{row_ivlow},"The current price sits below the full range produced by the selected models. ",'
-        f'IF(B{row_sp}>B{row_ivhigh},"The current price sits above the full range produced by the selected models. ",'
-        f'"The current price sits within the range produced by the selected models. "))'
+        f'&TEXT(ABS(B{row_upd}),"0.0%")&IF(B{row_upd}>=0," upside"," downside")&" versus the blended estimate. "'
+        f'&IF(B{row_sp}<{rng_low},"The current price sits below the full range produced by the selected models, implying every method points to greater value than the market is currently pricing in. ",'
+        f'IF(B{row_sp}>{rng_high},"The current price sits above the full range produced by the selected models, implying every method points to less value than the market is currently pricing in. ",'
+        f'"The current price sits within the range produced by the selected models, reflecting mixed signals depending on which method is weighted most heavily. "))'
         f'&IF(B{row_upd}>=0.10,"Recommendation: BUY / ACCUMULATE.",'
         f'IF(AND(B{row_upd}>=-0.10,B{row_upd}<=0.10),"Recommendation: HOLD / FAIRLY VALUED.",'
         f'"Recommendation: REDUCE / SELL.")),'
