@@ -1441,8 +1441,13 @@ def auto_map_bs(bs_df):
     for row_i, raw_name in enumerate(items):
         name_n = _norm_label(raw_name)
         for k, kw_list in BS_KEYWORDS.items():
-            if any(_norm_label(kw) in name_n for kw in kw_list):
-                result[k].append(f"{row_i + 1}: {raw_name}")
+            if k == "equity":
+                # Exact match only — prevent "total equity and liabilities" from matching
+                if any(name_n == _norm_label(kw) for kw in kw_list):
+                    result[k].append(f"{row_i + 1}: {raw_name}")
+            else:
+                if any(_norm_label(kw) in name_n for kw in kw_list):
+                    result[k].append(f"{row_i + 1}: {raw_name}")
     return result
 
 CF_KEYWORDS = {
