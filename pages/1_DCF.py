@@ -1388,7 +1388,79 @@ def find_single_row(df: pd.DataFrame, keywords):
     if idx < 0 or idx >= len(df): return (None, None)
     return (idx, df.iloc[idx])
 
+import re as _re_map
 
+def _norm_label(s):
+    return _re_map.sub(r"[^a-z0-9 ]", "", str(s).lower()).strip()
+
+IS_CORE_KEYWORDS = [
+    ("rev",    ["revenue", "turnover", "net sales", "sales"]),
+    ("cos",    ["cost of sales", "cost of goods sold", "raw materials and consumables"]),
+    ("gp",     ["gross profit", "gross margin"]),
+    ("ebitda", ["ebitda"]),
+    ("dep",    ["depreciation and amortisation", "depreciation and amortization", "depreciation  amortisation"]),
+    ("op",     ["operating profit", "profit from operations", "operating result"]),
+    ("pbt",    ["profit before tax", "profit before taxation"]),
+    ("tax",    ["income tax expense", "taxation", "income tax"]),
+    ("np",     ["profit for the year", "profit after tax", "net profit for the year", "profit attributable"]),
+]
+
+def auto_map_is_core(is_df):
+    """
+    Single top-to-bottom scan: each row is offered to whichever core
+    line is still unfilled and whose keyword matches. Scanning in
+    statement order automatically preserves the top-to-bottom ordering
+    your validation step already requires (Revenue -> GP -> EBITDA ->
+    OP -> PBT -> Tax -> NP).
+    """
+    items = list(is_df["Item"].astype(str))
+    assigned = {k: None for k, _ in IS_CORE_KEYWORDS}
+
+    for row_i, raw_name in enumerate(items):
+        name_n = _norm_label(raw_name)
+        for k, kw_list in IS_CORE_KEYWORDS:
+            if assigned[k] is not None:
+                continue
+            if any(_norm_label(kw) in name_n for kw in kw_list):
+                assigned[k] = f"{row_i + 1}: {raw_name}"
+                break
+
+    return assigned
+
+BS_KEYWORDS = {
+    "debt":   ["borrowings", "interest-bearing loans", "bank loans", "loans payable", "finance lease liabilit"],
+    "cash":   ["cash and cash equivalents", "cash  cash equivalents", "bank balances and cash"],
+    "ca":     ["total current assets"],          # only the clean subtotal — never guess components
+    "cl":     ["total current liabilities"],
+    "equity": ["total equity", "total shareholders equity", "shareholders funds"],
+}
+
+def auto_map_bs(bs_df):
+    items = list(bs_df["Item"].astype(str))
+    result = {k: [] for k in BS_KEYWORDS}
+    for row_i, raw_name in enumerate(items):
+        name_n = _norm_label(raw_name)
+        for k, kw_list in BS_KEYWORDS.items():
+            if any(_norm_label(kw) in name_n for kw in kw_list):
+                result[k].append(f"{row_i + 1}: {raw_name}")
+    return result
+
+CF_KEYWORDS = {
+    "dep":      ["depreciation", "amortisation", "amortization"],
+    "capex":    ["purchase of property", "purchase of plant", "additions to property",
+                 "acquisition of property", "capital expenditure"],
+    "interest": ["interest paid", "finance costs paid"],
+}
+
+def auto_map_cf(cf_df):
+    items = list(cf_df["Item"].astype(str))
+    result = {k: [] for k in CF_KEYWORDS}
+    for row_i, raw_name in enumerate(items):
+        name_n = _norm_label(raw_name)
+        for k, kw_list in CF_KEYWORDS.items():
+            if any(_norm_label(kw) in name_n for kw in kw_list):
+                result[k].append(f"{row_i + 1}: {raw_name}")
+    return result
 def convert_df_yearwise(df: pd.DataFrame, year_rates: dict) -> pd.DataFrame:
     df2 = df.copy()
     for col in df2.columns:
@@ -2414,15 +2486,13 @@ last_hist_year = int(str(last_hist_label))   # int 2025
 
 # --- Persistent dictionary for DCF row mappings ---
 if "dcf_mapping" not in st.session_state:
-    st.session_state["dcf_mapping"] = {
-        "debt": [],
-        "cash": [],
-        "ca": [],
-        "cl": [],
-        "dep": [],
-        "capex": [],
-        "interest": []
-    }
+    _auto_bs = auto_map_bs(bs_df)
+    _auto_cf = auto_map_cf(cf_df)
+    st.session_state["dcf_mapping"] = {**_auto_bs, "equity": _auto_bs.get("equity", []), **_auto_cf}
+    st.session_state["bs_cf_auto_mapped_flag"] = True
+
+if st.session_state.get("bs_cf_auto_mapped_flag"):
+    st.info("🤖 Balance Sheet and Cash Flow rows have been auto-mapped where a clear match was found (Debt, Cash, Equity, Depreciation, Capex, Interest). Current Assets and Current Liabilities are only auto-filled if your statement has a clean 'Total Current Assets/Liabilities' subtotal — otherwise please select the component rows manually below.")
 def clean_defaults(default_list, options):
     """
     Keep only those default values that still exist in options.
@@ -2747,7 +2817,8 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
 
     # init state once
     if "is_core_mapping" not in st.session_state:
-        st.session_state["is_core_mapping"] = {k: None for k, _ in CORE_LINES}
+        st.session_state["is_core_mapping"] = auto_map_is_core(is_df)
+        st.session_state["is_core_auto_mapped_flag"] = True
     else:
         # Re-anchor any saved label strings to the current Excel's actual row numbers.
         # "16: Revenue" from Project A becomes "5: Revenue" for Project B automatically.
@@ -2755,7 +2826,10 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
 
     if "is_map_step" not in st.session_state:
         st.session_state["is_map_step"] = 0
-
+    if st.session_state.get("is_core_auto_mapped_flag"):
+        _filled = sum(1 for k, _ in CORE_LINES if st.session_state["is_core_mapping"].get(k))
+        st.info(
+            f"🤖 Auto-mapped {_filled}/{len(CORE_LINES)} income statement lines from your headings. Please review each step below and correct anything that's wrong or missing.")
     # progress
     mapped = sum(1 for k, _ in CORE_LINES if st.session_state["is_core_mapping"].get(k))
     st.progress(mapped / len(CORE_LINES))
