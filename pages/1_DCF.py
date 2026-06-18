@@ -1344,9 +1344,7 @@ BS_LINES = [
 ]
 
 CF_LINES = [
-    ("dep",      "Depreciation & Amortisation (multi-select)"),
     ("capex",    "Capex  (multi-select)"),
-    ("interest", "Interest paid (if using CF for interest) (multi-select)"),
 ]
 
 
@@ -1451,9 +1449,7 @@ def auto_map_bs(bs_df):
     return result
 
 CF_KEYWORDS = {
-    "dep":      ["depreciation", "amortisation", "amortization"],
     "capex":    ["Capex"],
-    "interest": ["interest paid", "finance costs paid"],
 }
 
 def auto_map_cf(cf_df):
