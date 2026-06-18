@@ -3813,7 +3813,7 @@ if ca_idx_list and cl_idx_list:
             f"Use average of historical WC% ({wc_percent_mean:.2%})",
             f"Use most recent WC% ({last_year}) = {wc_percent_last:.2%}"
         ],
-        index=0 if st.session_state["dcf_wc_pct_method"] == "average" else 1,
+        index=0 if st.session_state["dcf_wc_pct_method"] == "avg" else 1,
         key="dcf_wc_pct_method_radio"
     )
 
