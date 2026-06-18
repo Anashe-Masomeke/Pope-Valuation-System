@@ -1847,8 +1847,13 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     norm_w = {m: (weights_new.get(m, 0.0) / total_w) for m in selected_models}
 
     wb = Workbook()
-    # We'll track cross-sheet equity value cell addresses for each model
-    eq_addr = {}   # model → "SheetName!CellAddress"  (absolute)
+    eq_addr = {}
+
+    # Canonical row positions for Total Debt and Net Debt on the DCF sheet.
+    # Forecasts/CompCo link here instead of duplicating the values — edit
+    # Total Debt or Cash once, and everything downstream updates.
+    DCF_TOTAL_DEBT_ROW = 17
+    DCF_NET_DEBT_ROW = 19
 
     # =========================================================================
     # SHEET: Forecasts — Full Income Statement + Ratios (always created if DCF selected)
@@ -2625,9 +2630,12 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         r += 1
         _for_nd_row_excel = r
         wsFor.cell(r, 1).value = "Net Debt"
-        wsFor.cell(r, 1).font = F_STD; wsFor.cell(r, 1).border = BDR
-        wsFor.cell(r, 2).value = float(ss.get("net_debt", 0.0) or 0.0)
-        wsFor.cell(r, 2).font = F_BLUE; wsFor.cell(r, 2).number_format = FMT_MONEY0; wsFor.cell(r, 2).border = BDR
+        wsFor.cell(r, 1).font = F_STD;
+        wsFor.cell(r, 1).border = BDR
+        wsFor.cell(r, 2).value = f"=DCF!B{DCF_NET_DEBT_ROW}"  # was: float(ss.get("net_debt", 0.0) or 0.0)
+        wsFor.cell(r, 2).font = F_GREEN  # was: F_BLUE
+        wsFor.cell(r, 2).number_format = FMT_MONEY0;
+        wsFor.cell(r, 2).border = BDR
         r += 1
 
         wsFor.column_dimensions["A"].width = 44
@@ -2669,7 +2677,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
             ("Risk-free Rate (Rf)",       rf_pct/100,   True,  FMT_PCT,    "Input — government bond yield",                   "Zimbabwe / USD sovereign bond rate used as risk-free proxy"),
             ("Market Risk Premium (ERP)", mrp_pct/100,  True,  FMT_PCT,    "Input — equity risk premium",                     "Expected return of market above risk-free rate (Damodaran / local estimate)"),
             ("Unlevered Beta (βu)",       beta_u,       True,  "0.0000",   "Input — asset beta (unlevered)",                  "Beta stripped of financial leverage; reflects business risk only"),
-            ("D/E Ratio",                 de_ratio,     True,  "0.0000",   f"Total Debt / Book Equity  ({total_debt} / {book_eq if book_eq else 1})", "Debt-to-equity ratio used to re-lever beta"),
+            ("D/E Ratio", None, False, "0.0000", "Total Debt ÷ Book Equity (live formula)", "Debt-to-equity ratio used to re-lever beta; updates automatically from Total Debt and Book Equity"),
             ("Tax Rate",                  tax_pct/100,  True,  FMT_PCT,    "Input — corporate tax rate",                      "Effective tax rate applied to interest tax shield in Hamada equation"),
             ("Levered Beta (βL)",         None,         False, "0.0000",   "βu × (1 + (1 − T) × D/E)",                      "Hamada equation: re-levers asset beta for the firm's actual capital structure"),
             ("Cost of Equity (Ke)",       None,         False, FMT_PCT,    "Rf + βL × ERP",                                  "CAPM: required return by equity holders"),
@@ -2696,7 +2704,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
             c4.font   = Font(italic=True, color="595959", name="Arial", size=9)
             c4.border = BDR
             c4.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-
+        # Live Excel formulas for derived rows (col B)
+        wsDCF.cell(row_de, 2).value  = f"=B{DCF_TOTAL_DEBT_ROW}/Forecasts!B{_for_bk_eq_row_excel}"
+        wsDCF.cell(row_de, 2).font   = F_STD
+        wsDCF.cell(row_de, 2).number_format = "0.0000"
+        wsDCF.cell(row_de, 2).border = BDR
         # Live Excel formulas for derived rows (col B)
         wsDCF.cell(row_bl,   2).value  = f"=B{row_bu}*(1+(1-B{row_tax})*B{row_de})"
         wsDCF.cell(row_bl,   2).font   = F_STD
@@ -2717,10 +2729,14 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
 
         r = row_wacc + 2
 
-        # ── Net Debt Build-up ──────────────────────────────────────────────────
-        write_section(wsDCF, r, "Net Debt Calculation", ncols=5); r += 1
-        write_hdr(wsDCF, r, ["Item", "Value (USD)", "Formula", "Description"]); r += 1
-        row_td = r; row_cb = r+1; row_nd_calc = r+2
+        write_section(wsDCF, r, "Net Debt Calculation", ncols=5);
+        r += 1
+        write_hdr(wsDCF, r, ["Item", "Value (USD)", "Formula", "Description"]);
+        r += 1
+        assert r == DCF_TOTAL_DEBT_ROW, f"Layout shifted — DCF_TOTAL_DEBT_ROW should be {r}, not {DCF_TOTAL_DEBT_ROW}"
+        row_td = r;
+        row_cb = r + 1;
+        row_nd_calc = r + 2
 
         _nd_rows = [
             ("Total Debt (interest-bearing)",  total_debt, FMT_MONEY0, "Input — from Balance Sheet",  "Sum of short-term and long-term borrowings"),
@@ -3755,9 +3771,14 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     r += 1
     write_hdr(wsSum, r, ["Metric", "Value", "Unit"]); r += 1
 
-    row_wev  = r;   row_ns = r+1; row_ivps = r+2
-    row_sp   = r+3; row_upd = r+4; row_rec = r+5
-
+    row_wev = r;
+    row_ns = r + 1
+    row_ivlow = r + 2;
+    row_ivhigh = r + 3;
+    row_ivps = r + 4
+    row_sp = r + 5;
+    row_upd = r + 6;
+    row_rec = r + 7
     cell_bd(wsSum, row_wev, 1, "Weighted Equity Value", F_STD)
     wsSum.cell(row_wev, 2).value = f"=SUM(D{sum_start}:D{sum_end})"
     wsSum.cell(row_wev, 2).font = F_GREEN
@@ -3768,8 +3789,20 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     cell_bd(wsSum, row_ns,   1, "Number of Shares in Issue", F_STD)
     cell_bd(wsSum, row_ns,   2, float(num_shares) if num_shares else 0.0, F_BLUE, FMT_NUM)
     cell_bd(wsSum, row_ns,   3, "Shares", F_STD)
+    cell_bd(wsSum, row_ivlow, 1, "Intrinsic Value per Share — Low", F_STD)
+    wsSum.cell(row_ivlow, 2).value = f"=IF(B{row_ns}>0,MIN(B{sum_start}:B{sum_end})/B{row_ns},NA())"
+    wsSum.cell(row_ivlow, 2).font = F_GREEN
+    wsSum.cell(row_ivlow, 2).number_format = FMT_MONEY4
+    wsSum.cell(row_ivlow, 2).border = BDR
+    cell_bd(wsSum, row_ivlow, 3, "USD", F_STD)
 
-    cell_bd(wsSum, row_ivps, 1, "Intrinsic Value per Share", F_BOLD)
+    cell_bd(wsSum, row_ivhigh, 1, "Intrinsic Value per Share — High", F_STD)
+    wsSum.cell(row_ivhigh, 2).value = f"=IF(B{row_ns}>0,MAX(B{sum_start}:B{sum_end})/B{row_ns},NA())"
+    wsSum.cell(row_ivhigh, 2).font = F_GREEN
+    wsSum.cell(row_ivhigh, 2).number_format = FMT_MONEY4
+    wsSum.cell(row_ivhigh, 2).border = BDR
+    cell_bd(wsSum, row_ivhigh, 3, "USD", F_STD)
+    cell_bd(wsSum, row_ivps, 1, "Intrinsic Value per Share — Weighted", F_BOLD)
     wsSum.cell(row_ivps, 2).value = f"=IF(B{row_ns}>0,B{row_wev}/B{row_ns},NA())"
     wsSum.cell(row_ivps, 2).font = F_BOLD
     wsSum.cell(row_ivps, 2).number_format = FMT_MONEY4
@@ -3861,12 +3894,17 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     # Build the recommendation note as an Excel formula so it auto-updates
     rec_formula = (
         f'=IF(AND(ISNUMBER(B{row_ivps}),B{row_sp}>0),'
-        f'"Based on a blended valuation of selected models weighted as above, '
-        f'the company has an intrinsic value per share of USD "&TEXT(B{row_ivps},"#,##0.0000")&" against a current market price of USD "'
-        f'&TEXT(B{row_sp},"#,##0.0000")&", implying "&TEXT(B{row_upd},"0.0%")&" upside/downside. "'
-        f'&IF(B{row_upd}>=0.10,"We therefore initiate coverage with a BUY / ACCUMULATE recommendation. The stock appears undervalued relative to its fundamental intrinsic value.",'
-        f'IF(AND(B{row_upd}>=-0.10,B{row_upd}<=0.10),"We initiate coverage with a HOLD / FAIRLY VALUED recommendation. The stock appears to be trading near fair value.",'
-        f'"We initiate coverage with a REDUCE / SELL recommendation. The stock appears overvalued relative to its intrinsic value.")),'
+        f'"Across the selected valuation methods, intrinsic value per share ranges from USD "'
+        f'&TEXT(B{row_ivlow},"#,##0.0000")&" to USD "&TEXT(B{row_ivhigh},"#,##0.0000")'
+        f'&", with a weighted blended estimate of USD "&TEXT(B{row_ivps},"#,##0.0000")&". "'
+        f'&"The current market price of USD "&TEXT(B{row_sp},"#,##0.0000")&" implies "'
+        f'&TEXT(B{row_upd},"0.0%")&" upside/downside versus the blended estimate. "'
+        f'&IF(B{row_sp}<B{row_ivlow},"The current price sits below the full range produced by the selected models. ",'
+        f'IF(B{row_sp}>B{row_ivhigh},"The current price sits above the full range produced by the selected models. ",'
+        f'"The current price sits within the range produced by the selected models. "))'
+        f'&IF(B{row_upd}>=0.10,"Recommendation: BUY / ACCUMULATE.",'
+        f'IF(AND(B{row_upd}>=-0.10,B{row_upd}<=0.10),"Recommendation: HOLD / FAIRLY VALUED.",'
+        f'"Recommendation: REDUCE / SELL.")),'
         f'"Enter the number of shares and current market price above to generate a recommendation.")'
     )
     rec_note_cell.value = rec_formula
