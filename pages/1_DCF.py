@@ -1398,11 +1398,11 @@ IS_CORE_KEYWORDS = [
     ("cos",    ["cost of sales", "cost of goods sold", "raw materials and consumables"]),
     ("gp",     ["gross profit", "gross margin"]),
     ("ebitda", ["ebitda"]),
-    ("dep",    ["depreciation and amortisation", "depreciation and amortization", "depreciation  amortisation"]),
+    ("dep",    ["depreciation and amortisation", "depreciation and amortization", "depreciation  amortisation","depreciation"]),
     ("op",     ["operating profit", "profit from operations", "operating result"]),
     ("pbt",    ["profit before tax", "profit before taxation"]),
     ("tax",    ["income tax expense", "taxation", "income tax"]),
-    ("np",     ["profit for the year", "profit after tax", "net profit for the year", "profit attributable"]),
+    ("np",     ["profit for the year", "profit after tax", "net profit for the year", "profit attributable","profit for the period"]),
 ]
 
 def auto_map_is_core(is_df):
@@ -1428,11 +1428,11 @@ def auto_map_is_core(is_df):
     return assigned
 
 BS_KEYWORDS = {
-    "debt":   ["borrowings", "interest-bearing loans", "bank loans", "loans payable", "finance lease liabilit"],
+    "debt":   ["borrowings", "interest-bearing loans", "bank loans", "loans payable", "finance lease liabilities"],
     "cash":   ["cash and cash equivalents", "cash  cash equivalents", "bank balances and cash"],
     "ca":     ["total current assets"],          # only the clean subtotal — never guess components
     "cl":     ["total current liabilities"],
-    "equity": ["total equity", "total shareholders equity", "shareholders funds"],
+    "equity": ["total equity", "total shareholders equity", "shareholders funds","Total capital and reserves"],
 }
 
 def auto_map_bs(bs_df):
@@ -1447,8 +1447,7 @@ def auto_map_bs(bs_df):
 
 CF_KEYWORDS = {
     "dep":      ["depreciation", "amortisation", "amortization"],
-    "capex":    ["purchase of property", "purchase of plant", "additions to property",
-                 "acquisition of property", "capital expenditure"],
+    "capex":    ["Capex"],
     "interest": ["interest paid", "finance costs paid"],
 }
 
