@@ -1395,11 +1395,11 @@ def _norm_label(s):
 
 IS_CORE_KEYWORDS = [
     ("rev",    ["revenue", "turnover", "net sales", "sales"]),
-    ("cos",    ["cost of sales", "cost of goods sold", "raw materials and consumables"]),
+    ("cos",    ["cost of sales", "cost of goods sold", "raw materials and consumables","Cost of raw materials"]),
     ("gp",     ["gross profit", "gross margin"]),
     ("ebitda", ["ebitda"]),
     ("dep",    ["depreciation and amortisation", "depreciation and amortization", "depreciation  amortisation","depreciation"]),
-    ("op",     ["operating profit", "profit from operations", "operating result"]),
+    ("op",     ["operating profit", "profit from operations", "EBIT without adjusting for fair value gains","EBIT"]),
     ("pbt",    ["profit before tax", "profit before taxation"]),
     ("tax",    ["income tax expense", "taxation", "income tax"]),
     ("np",     ["profit for the year", "profit after tax", "net profit for the year", "profit attributable","profit for the period"]),
