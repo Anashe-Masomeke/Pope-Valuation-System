@@ -3306,7 +3306,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
 
         r += 1
         write_section(wsComp, r, "Peer Averages & Discount", ncols=5); r += 1
-        write_hdr(wsComp, r, ["Multiple", "Peer Average", "Discount (%)", "Applied Multiple"]); r += 1
+        write_hdr(wsComp, r, ["Multiple", "Peer Average", "Discount (%)", "Implied Multiple"]); r += 1
 
         # Use the actual discount_factor key (not discount_pct)
         disc_pct_raw = float(ss.get("discount_factor", ss.get("discount_pct", ss.get("comp_discount_pct", 25.0))) or 25.0)
@@ -3586,7 +3586,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
 
         # EV/EBITDA: Applied multiple × Maintainable EBITDA (live total) − Net Debt
         cell_bd(wsComp, row_ev_eq, 1, "EV/EBITDA Valuation", F_BOLD)
-        cell_bd(wsComp, row_ev_eq, 2, "Applied EV/EBITDA × Maint. EBITDA − Net Debt", F_NOTE)
+        cell_bd(wsComp, row_ev_eq, 2, "Implied EV/EBITDA × Maint. EBITDA − Net Debt", F_NOTE)
         if row_eb_total:
             wsComp.cell(row_ev_eq, 3).value = f'=IF(D{row_ev_m}="","",D{row_ev_m}*F{row_eb_total}-B{row_nd})'
         else:
@@ -3599,7 +3599,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
 
         # P/BV: Applied P/B × Book Equity (static — book equity not in DCF forecast)
         cell_bd(wsComp, row_pb_eq, 1, "P/BV Valuation", F_BOLD)
-        cell_bd(wsComp, row_pb_eq, 2, "Applied P/B × Book Equity", F_NOTE)
+        cell_bd(wsComp, row_pb_eq, 2, "Implied P/B × Book Equity", F_NOTE)
         wsComp.cell(row_pb_eq, 3).value = f'=IF(D{row_pb_m}="","",D{row_pb_m}*B{row_bk})'
         wsComp.cell(row_pb_eq, 3).font = F_BOLD
         wsComp.cell(row_pb_eq, 3).number_format = FMT_MONEY0
@@ -3609,7 +3609,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
 
         # P/E: Applied P/E × Maintainable Earnings (live total)
         cell_bd(wsComp, row_pe_eq, 1, "P/E Valuation", F_BOLD)
-        cell_bd(wsComp, row_pe_eq, 2, "Applied P/E × Maint. Earnings", F_NOTE)
+        cell_bd(wsComp, row_pe_eq, 2, "Implied P/E × Maint. Earnings", F_NOTE)
         if row_np_total:
             wsComp.cell(row_pe_eq, 3).value = f'=IF(D{row_pe_m}="","",D{row_pe_m}*F{row_np_total})'
         else:
