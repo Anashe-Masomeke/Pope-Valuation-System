@@ -1432,7 +1432,7 @@ BS_KEYWORDS = {
     "cash":   ["cash and cash equivalents", "cash  cash equivalents", "bank balances and cash"],
     "ca":     ["total current assets"],          # only the clean subtotal — never guess components
     "cl":     ["total current liabilities"],
-    "equity": ["total equity", "total shareholders equity", "shareholders funds","Total capital and reserves"],
+    "equity": ["total equity", "total shareholders equity", "Shareholders' equity","Shareholders equity","Total capital and reserves"],
 }
 
 def auto_map_bs(bs_df):
