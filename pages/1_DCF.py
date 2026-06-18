@@ -1344,7 +1344,9 @@ BS_LINES = [
 ]
 
 CF_LINES = [
+    ("dep",      "Depreciation & Amortisation (multi-select)"),
     ("capex",    "Capex  (multi-select)"),
+    ("interest", "Interest paid (if using CF for interest) (multi-select)"),
 ]
 
 
