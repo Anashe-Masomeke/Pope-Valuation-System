@@ -2525,6 +2525,68 @@ def map_bs_wizard(bs_df, year_cols_bs):
 
     # --- progress
     mapped = sum(1 for k, _ in BS_LINES if len(st.session_state["dcf_mapping"].get(k, [])) > 0)
+    _missing_bs = len(BS_LINES) - mapped
+
+    # ── BS visual review cards ──────────────────────────────
+    st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#001a5c,#003399);
+                    border-radius:14px;padding:16px 20px;margin-bottom:14px;
+                    border-bottom:3px solid #f5b400;">
+            <div style="color:white;font-family:'Playfair Display',serif;
+                        font-size:17px;font-weight:700;margin-bottom:4px;">
+                🤖 Balance Sheet Mapping Review — {mapped}/{len(BS_LINES)} mapped
+            </div>
+            <div style="color:rgba(255,255,255,0.80);font-size:13px;">
+                Green = mapped · Red = missing · Grey = optional
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    _bs_optional = ()  # all BS lines are required
+    _bs_cols = st.columns(3)
+    for _bci, (k, title) in enumerate(BS_LINES):
+        _sel = st.session_state["dcf_mapping"].get(k, [])
+        _mapped = len(_sel) > 0
+        _is_optional = k in _bs_optional
+
+        if _mapped:
+            _card_bg = "linear-gradient(135deg,#052e16,#166534)"
+            _border = "#22c55e"
+            _icon = "✅"
+            _joined = ", ".join([s.split(":", 1)[1].strip() if ":" in s else s for s in _sel])
+            _status = f'<div style="color:#86efac;font-size:11px;margin-top:4px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{_joined}">{_joined}</div>'
+        elif _is_optional:
+            _card_bg = "linear-gradient(135deg,#1c1917,#44403c)"
+            _border = "#a8a29e"
+            _icon = "⚪"
+            _status = '<div style="color:#a8a29e;font-size:11px;margin-top:4px;font-style:italic;">Optional — not mapped</div>'
+        else:
+            _card_bg = "linear-gradient(135deg,#450a0a,#991b1b)"
+            _border = "#ef4444"
+            _icon = "❌"
+            _status = '<div style="color:#fca5a5;font-size:11px;margin-top:4px;font-weight:700;">⚠️ Required — please map below</div>'
+
+        with _bs_cols[_bci % 3]:
+            st.markdown(f"""
+                <div style="background:{_card_bg};
+                            border:1px solid {_border};
+                            border-left:4px solid {_border};
+                            border-radius:10px;
+                            padding:10px 14px;
+                            margin-bottom:10px;">
+                    <div style="color:white;font-size:12px;font-weight:700;
+                                font-family:'Playfair Display',serif;">
+                        {_icon} {title}
+                    </div>
+                    {_status}
+                </div>
+                """, unsafe_allow_html=True)
+
+    if _missing_bs > 0:
+        st.error(f"❌ **{_missing_bs} BS line(s) not yet mapped** — select rows in the wizard below.")
+    else:
+        st.success("✅ All Balance Sheet lines mapped!")
+
     st.progress(mapped / len(BS_LINES))
     st.caption(f"Mapped: {mapped}/{len(BS_LINES)}")
 
@@ -2644,6 +2706,74 @@ def map_cf_wizard(cf_df, year_cols_cf):
         st.session_state["cf_map_step"] = 0
 
     mapped = sum(1 for k, _ in CF_LINES if len(st.session_state["dcf_mapping"].get(k, [])) > 0)
+    _missing_cf = len(CF_LINES) - mapped
+
+    # ── CF visual review cards ──────────────────────────────
+    st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#001a5c,#003399);
+                    border-radius:14px;padding:16px 20px;margin-bottom:14px;
+                    border-bottom:3px solid #f5b400;">
+            <div style="color:white;font-family:'Playfair Display',serif;
+                        font-size:17px;font-weight:700;margin-bottom:4px;">
+                🤖 Cash Flow Mapping Review — {mapped}/{len(CF_LINES)} mapped
+            </div>
+            <div style="color:rgba(255,255,255,0.80);font-size:13px;">
+                Green = mapped · Red = missing · Grey = optional
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    _cf_optional = ("interest",)  # interest is optional
+    _cf_cols = st.columns(3)
+    for _cci, (k, title) in enumerate(CF_LINES):
+        _sel = st.session_state["dcf_mapping"].get(k, [])
+        _mapped = len(_sel) > 0
+        _is_optional = k in _cf_optional
+
+        if _mapped:
+            _card_bg = "linear-gradient(135deg,#052e16,#166534)"
+            _border = "#22c55e"
+            _icon = "✅"
+            _joined = ", ".join([s.split(":", 1)[1].strip() if ":" in s else s for s in _sel])
+            _status = f'<div style="color:#86efac;font-size:11px;margin-top:4px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{_joined}">{_joined}</div>'
+        elif _is_optional:
+            _card_bg = "linear-gradient(135deg,#1c1917,#44403c)"
+            _border = "#a8a29e"
+            _icon = "⚪"
+            _status = '<div style="color:#a8a29e;font-size:11px;margin-top:4px;font-style:italic;">Optional — not mapped</div>'
+        else:
+            _card_bg = "linear-gradient(135deg,#450a0a,#991b1b)"
+            _border = "#ef4444"
+            _icon = "❌"
+            _status = '<div style="color:#fca5a5;font-size:11px;margin-top:4px;font-weight:700;">⚠️ Required — please map below</div>'
+
+        with _cf_cols[_cci % 3]:
+            st.markdown(f"""
+                <div style="background:{_card_bg};
+                            border:1px solid {_border};
+                            border-left:4px solid {_border};
+                            border-radius:10px;
+                            padding:10px 14px;
+                            margin-bottom:10px;">
+                    <div style="color:white;font-size:12px;font-weight:700;
+                                font-family:'Playfair Display',serif;">
+                        {_icon} {title}
+                    </div>
+                    {_status}
+                </div>
+                """, unsafe_allow_html=True)
+
+    if _missing_cf > 0:
+        _required_cf_missing = [
+            title for k, title in CF_LINES
+            if not st.session_state["dcf_mapping"].get(k) and k not in _cf_optional
+        ]
+        if _required_cf_missing:
+            st.error(
+                f"❌ **{len(_required_cf_missing)} required CF line(s) not mapped:** " + ", ".join(_required_cf_missing))
+    else:
+        st.success("✅ All Cash Flow lines mapped!")
+
     st.progress(mapped / len(CF_LINES))
     st.caption(f"Mapped: {mapped}/{len(CF_LINES)}")
 
