@@ -2494,7 +2494,8 @@ if "dcf_mapping" not in st.session_state:
     st.session_state["bs_cf_auto_mapped_flag"] = True
 
 if st.session_state.get("bs_cf_auto_mapped_flag"):
-    st.info("🤖 Balance Sheet and Cash Flow rows have been auto-mapped where a clear match was found (Debt, Cash, Equity, Depreciation, Capex, Interest). Current Assets and Current Liabilities are only auto-filled if your statement has a clean 'Total Current Assets/Liabilities' subtotal — otherwise please select the component rows manually below.")
+    if st.session_state.get("bs_cf_auto_mapped_flag"):
+        st.info( "🤖 Income Statement, Balance Sheet, and Cash Flow rows have been auto-mapped where a clear match was found. Please review each card below and correct anything that wasn't matched correctly.")
 def clean_defaults(default_list, options):
     """
     Keep only those default values that still exist in options.
