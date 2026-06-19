@@ -1430,7 +1430,7 @@ def auto_map_is_core(is_df):
 BS_KEYWORDS = {
     "debt":   ["borrowings", "interest-bearing loans", "bank loans", "loans payable", "finance lease liabilities"],
     "cash":   ["cash and cash equivalents", "cash  cash equivalents", "bank balances and cash"],
-    "ca":     ["Inventories","Trade and other receivables"],        
+    "ca":     ["Inventories","Trade and other receivables"],
     "cl":     ["Trade and other payables","Prepayments","Prepayment"],
     "equity": ["total equity", "total shareholders equity", "Shareholders' equity","Shareholders equity","Total capital and reserves"],
 }
@@ -2828,10 +2828,79 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
 
     if "is_map_step" not in st.session_state:
         st.session_state["is_map_step"] = 0
-    if st.session_state.get("is_core_auto_mapped_flag"):
+        # Always show mapping review (not just on first auto-map)
+        _show_review = True
+    if _show_review:
         _filled = sum(1 for k, _ in CORE_LINES if st.session_state["is_core_mapping"].get(k))
-        st.info(
-            f"🤖 Auto-mapped {_filled}/{len(CORE_LINES)} income statement lines from your headings. Please review each step below and correct anything that's wrong or missing.")
+        _missing = len(CORE_LINES) - _filled
+
+        # ── Build visual review cards ──────────────────────────────
+        st.markdown(f"""
+            <div style="background:linear-gradient(135deg,#001a5c,#003399);
+                        border-radius:14px;padding:16px 20px;margin-bottom:14px;
+                        border-bottom:3px solid #f5b400;">
+                <div style="color:white;font-family:'Playfair Display',serif;
+                            font-size:17px;font-weight:700;margin-bottom:4px;">
+                    🤖 Auto-Mapping Review — {_filled}/{len(CORE_LINES)} mapped
+                </div>
+                <div style="color:rgba(255,255,255,0.80);font-size:13px;">
+                    Green = successfully mapped · Red = missing, action required
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        _cols = st.columns(3)
+        for _ci, (k, title) in enumerate(CORE_LINES):
+            _val = st.session_state["is_core_mapping"].get(k)
+            _mapped = bool(_val)
+            _row_label = _val.split(":", 1)[1].strip() if _val else None
+            _is_optional = k in ("cos",)  # COS is optional
+
+            if _mapped:
+                _card_bg = "linear-gradient(135deg,#052e16,#166534)"
+                _border = "#22c55e"
+                _icon = "✅"
+                _status = f'<div style="color:#86efac;font-size:11px;margin-top:4px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{_row_label}">{_row_label}</div>'
+            elif _is_optional:
+                _card_bg = "linear-gradient(135deg,#1c1917,#44403c)"
+                _border = "#a8a29e"
+                _icon = "⚪"
+                _status = '<div style="color:#a8a29e;font-size:11px;margin-top:4px;font-style:italic;">Optional — not mapped</div>'
+            else:
+                _card_bg = "linear-gradient(135deg,#450a0a,#991b1b)"
+                _border = "#ef4444"
+                _icon = "❌"
+                _status = '<div style="color:#fca5a5;font-size:11px;margin-top:4px;font-weight:700;">⚠️ Required — please map below</div>'
+
+            with _cols[_ci % 3]:
+                st.markdown(f"""
+                    <div style="background:{_card_bg};
+                                border:1px solid {_border};
+                                border-left:4px solid {_border};
+                                border-radius:10px;
+                                padding:10px 14px;
+                                margin-bottom:10px;">
+                        <div style="color:white;font-size:12px;font-weight:700;
+                                    font-family:'Playfair Display',serif;">
+                            {_icon} {title}
+                        </div>
+                        {_status}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        if _missing > 0:
+            _required_missing = [
+                title for k, title in CORE_LINES
+                if not st.session_state["is_core_mapping"].get(k) and k not in ("cos",)
+            ]
+            if _required_missing:
+                st.error(
+                    f"❌ **{len(_required_missing)} required line(s) not mapped:** "
+                    + ", ".join(_required_missing)
+                    + " — use the wizard below to fix these."
+                )
+        else:
+            st.success("✅ All lines mapped! Review the wizard below to confirm accuracy.")
     # progress
     mapped = sum(1 for k, _ in CORE_LINES if st.session_state["is_core_mapping"].get(k))
     st.progress(mapped / len(CORE_LINES))
