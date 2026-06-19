@@ -2828,8 +2828,9 @@ def map_core_is_totals_wizard(is_df, year_cols_is):
 
     if "is_map_step" not in st.session_state:
         st.session_state["is_map_step"] = 0
+
         # Always show mapping review (not just on first auto-map)
-        _show_review = True
+    _show_review = True
     if _show_review:
         _filled = sum(1 for k, _ in CORE_LINES if st.session_state["is_core_mapping"].get(k))
         _missing = len(CORE_LINES) - _filled
