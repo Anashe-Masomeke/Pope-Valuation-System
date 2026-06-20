@@ -1430,8 +1430,8 @@ def auto_map_is_core(is_df):
 BS_KEYWORDS = {
     "debt":   ["borrowings", "interest-bearing loans", "bank loans", "loans payable", "finance lease liabilities"],
     "cash":   ["cash and cash equivalents", "cash  cash equivalents", "bank balances and cash"],
-    "ca":     ["Inventories","Trade and other receivables"],
-    "cl":     ["Trade and other payables","Prepayments","Prepayment"],
+    "ca":     ["Inventories","Trade and other receivables","Receivables"],
+    "cl":     ["Trade and other payables","Prepayments","Prepayment","Payables & provisions","payables"],
     "equity": ["total equity", "total shareholders equity", "Shareholders' equity","Shareholders equity","Total capital and reserves"],
 }
 
