@@ -1432,7 +1432,7 @@ BS_KEYWORDS = {
     "cash":   ["cash and cash equivalents", "cash  cash equivalents", "bank balances and cash"],
     "ca":     ["Inventories","Trade and other receivables","Receivables"],
     "cl":     ["Trade and other payables","Prepayments","Prepayment","Payables & provisions","payables"],
-    "equity": ["total equity", "total shareholders equity", "Shareholders' equity","Shareholders equity","Total capital and reserves"],
+    "equity": ["total equity", "total shareholders equity","Total sharehoIders‘equity","Shareholders' equity","Shareholders equity","Total capital and reserves"],
 }
 
 def auto_map_bs(bs_df):
