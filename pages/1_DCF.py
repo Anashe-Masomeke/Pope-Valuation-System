@@ -1230,8 +1230,6 @@ def reset_dcf_state():
     keys_to_clear = [
         # file & parsed data
         "dcf_uploaded_file", "dcf_is_df", "dcf_bs_df", "dcf_cf_df",
-
-        # ✅ ADD THESE (so reset truly clears the file)
         "dcf_file_bytes", "dcf_file_name",
 
         # FX
@@ -1242,6 +1240,10 @@ def reset_dcf_state():
         "dcf_fx_bytes", "dcf_fx_name",
         "dcf_factor_enabled", "dcf_zig_factor", "dcf_factor_year_ranges",
         "dcf_bs_fx_dirty",
+        # ⬇️ NEW — FX widget keys (selectbox/checkbox "key=" traps)
+        "dcf_currency_select", "dcf_fx_column_select", "dcf_fx_bs_checkbox",
+        "dcf_zig_factor_ui2", "dcf_factor_enabled_ui",
+        "dcf_factor_years_selected_vals",
 
         # mappings
         "dcf_mapping", "is_core_mapping",
@@ -1251,6 +1253,12 @@ def reset_dcf_state():
         # forecasts
         "dcf_rev_forecast", "dcf_ebitda_all", "dcf_ebitda_forecast",
         "dcf_profit_all",
+
+        # ⬇️ NEW — Revenue growth assumptions (your original bug + its widget key)
+        "dcf_rev_growth_override",
+        "dcf_rev_growth_mode", "dcf_rev_growth_mode_radio",
+        "dcf_yearly_growth_pct",
+
         # parameters + widgets
         "dcf_rf_pct", "dcf_mrp_pct", "dcf_tax_pct", "dcf_unlevered_beta", "dcf_terminal_g_pct",
         "dcf_rf_pct_input", "dcf_mrp_pct_input", "dcf_tax_pct_input",
@@ -1261,6 +1269,36 @@ def reset_dcf_state():
         "dcf_beta_manual_value",
         "dcf_beta_auto_last",
         "dcf_beta_mode_radio",
+        "dcf_auto_signature",
+
+        # ⬇️ NEW — Industry beta blend (multi-select + weights) — was leaking entirely
+        "dcf_industries_selected", "dcf_industries_multiselect",
+        "dcf_beta_blend_method", "dcf_beta_blend_method_radio",
+        "dcf_industry_weights",
+
+        # ⬇️ NEW — Cost of Debt (Rd) override — was leaking entirely
+        "dcf_rd_manual_mode", "dcf_rd_pct", "dcf_rd_auto_signature",
+        "dcf_rd_pct_input", "dcf_rd_manual_value", "dcf_rd_mode_radio",
+        "dcf_rd_manual_input",
+
+        # ⬇️ NEW — Valuation timing (dates tied to old file's year-end) — was leaking entirely
+        "dcf_valuation_date", "dcf_first_fs_date", "dcf_use_midyear",
+        "dcf_valuation_date_input", "dcf_first_fs_date_input", "dcf_use_midyear_input",
+
+        # ⬇️ NEW — Working capital % method — was leaking entirely
+        "dcf_wc_pct_method", "dcf_wc_pct_method_last_val", "dcf_wc_pct_method_radio",
+        "dcf_wc_include_years",
+
+        # ⬇️ NEW — Capex exclusion years — was leaking entirely
+        "dcf_capex_excluded_years_store", "dcf_capex_excluded_years_widget",
+        "show_capex_expander",
+
+        # ⬇️ NEW — Sensitivity scenario pick / override — was leaking entirely
+        "dcf_sens_selected_wacc", "dcf_sens_selected_g", "dcf_use_sens_equity",
+        "dcf_sens_wacc_picker", "dcf_sens_g_picker", "dcf_use_sens_equity_ui",
+
+        # ⬇️ NEW — Forecast horizon (optional but recommended for a true "clean slate")
+        "dcf_forecast_years",
 
         # working capital
         "dcf_fcff_array", "dcf_pv_fcff_array", "dcf_discount_periods_n",
@@ -1269,18 +1307,6 @@ def reset_dcf_state():
 
         # valuation outputs
         "enterprise_value_dcf", "equity_value_dcf", "equity_value",
-        # forecast assumptions — MUST clear or old file's growth/WC/capex carries into new file
-        "dcf_rev_growth_override",
-        "dcf_yearly_growth_pct",
-        "dcf_rev_growth_mode",
-        "dcf_wc_pct_method",
-        "dcf_wc_pct_method_last_val",
-        "dcf_wc_include_years",
-        "dcf_capex_excluded_years_store",
-        "dcf_capex_excluded_years_widget",
-        "dcf_sens_selected_wacc",
-        "dcf_sens_selected_g",
-        "dcf_use_sens_equity",
 
         # parameters
         "dcf_init", "dcf_timing_init",
