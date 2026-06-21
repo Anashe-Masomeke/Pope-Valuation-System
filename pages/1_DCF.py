@@ -1269,6 +1269,18 @@ def reset_dcf_state():
 
         # valuation outputs
         "enterprise_value_dcf", "equity_value_dcf", "equity_value",
+        # forecast assumptions — MUST clear or old file's growth/WC/capex carries into new file
+        "dcf_rev_growth_override",
+        "dcf_yearly_growth_pct",
+        "dcf_rev_growth_mode",
+        "dcf_wc_pct_method",
+        "dcf_wc_pct_method_last_val",
+        "dcf_wc_include_years",
+        "dcf_capex_excluded_years_store",
+        "dcf_capex_excluded_years_widget",
+        "dcf_sens_selected_wacc",
+        "dcf_sens_selected_g",
+        "dcf_use_sens_equity",
 
         # parameters
         "dcf_init", "dcf_timing_init",
