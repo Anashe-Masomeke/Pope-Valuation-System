@@ -378,7 +378,7 @@ st.markdown("""
 
 # ── Quick-access buttons ──────────────────────────────────────────
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
-colA, colB, colC, colD, colE, colF = st.columns(6)
+colA, colB, colC, colD, colE, colF, colG = st.columns(7)
 
 if colA.button("📊 DCF Model",               use_container_width=True): st.switch_page("pages/1_DCF.py")
 if colB.button("💰 Dividend Discount Model",  use_container_width=True): st.switch_page("pages/3_DDM.py")
@@ -386,6 +386,7 @@ if colC.button("📈 Comparables",             use_container_width=True): st.swi
 if colD.button("🏦 Banking (RIM)",            use_container_width=True): st.switch_page("pages/4_BANKING.py")
 if colE.button("🧾 Summary",                  use_container_width=True): st.switch_page("pages/5_SUMMARY.py")
 if colF.button("🧭 User Guide",               use_container_width=True): st.switch_page("pages/6_USER GUIDE.py")
+if colG.button("📄 PDF → Excel",             use_container_width=True): st.switch_page("pages/7_PDF_TO_EXCEL.py")
 
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
@@ -417,7 +418,12 @@ with col2:
         <b>Banking Valuation (Residual Income)</b><br>
         BVPS, residual income, terminal value and implied equity value.
     </div>""", unsafe_allow_html=True)
-
+    st.markdown("""
+    <div class="feature-box">
+        <span class="feature-icon">📄</span>
+        <b>PDF → Excel Converter</b><br>
+        OCR scanned financial statements into structured Excel files ready for the DCF model.
+    </div>""", unsafe_allow_html=True)
 # ── Footer ────────────────────────────────────────────────────────
 st.markdown("""
 <div class="fbc-footer">
