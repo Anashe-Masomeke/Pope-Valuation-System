@@ -140,7 +140,9 @@ if not OPENPYXL_OK:
 #   • 4-column value tables (Company 2025 / 2024, Group 2025 / 2024)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-NUM_TOKEN_RE = re.compile(r"^\(?-?\d[\d,\.]*\)?$")
+# ─────────────────────────────────────────────────────────────────────────────
+# Row / band helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _group_words_by_row(words, tol=3):
     if not words:
@@ -159,11 +161,7 @@ def _group_words_by_row(words, tol=3):
 
 
 def _find_column_splits(page, min_gap=80):
-    """
-    Detect x-positions where a large horizontal gap divides the page into
-    side-by-side columns.  Returns sorted list of midpoint x-values; [] for
-    a single-column page.
-    """
+    """X-positions where a wide horizontal gap divides side-by-side statements."""
     words = page.extract_words(x_tolerance=2, y_tolerance=3)
     if not words:
         return []
@@ -177,9 +175,8 @@ def _find_column_splits(page, min_gap=80):
 
 def _detect_value_columns(page):
     """
-    Locate Note column and up to 4 value columns by finding the first row
-    with 2+ 4-digit years (e.g. "2025  2024  2025  2024").
-    Returns (note_x, [val_x …]) or (None, []).
+    Find the Note column x and the value-column x positions by locating the
+    header row containing 2+ four-digit years (e.g. "2025 2024 2025 2024").
     """
     words = page.extract_words(x_tolerance=2, y_tolerance=3)
     if not words:
@@ -195,8 +192,9 @@ def _detect_value_columns(page):
     return None, []
 
 
-def _parse_val(tokens):
-    raw = "".join(tokens)
+def _parse_val(token_text):
+    """Parse a single already-merged numeric token like '(5,741,062)' or '5,611,571'."""
+    raw = token_text.strip()
     if not raw or raw in ("-", "\u2013", "\u2014"):
         return None
     neg = raw.startswith("(") and raw.endswith(")")
@@ -208,90 +206,88 @@ def _parse_val(tokens):
         return None
 
 
-def _predetect_section_from_band(band_page, patterns):
-    """
-    Read the first ~300 chars of a band's text and return the matching
-    section name if a statement title is found; None otherwise.
-    """
-    try:
-        text = (band_page.extract_text() or "")[:300].replace("\n", " ")
-    except Exception:
-        return None
-    for name, pat in patterns:
-        if pat.search(text):
-            return name
-    return None
+NOTE_RE = re.compile(r"^\d{1,2}(\.\d{1,2})?[A-Za-z]?$")   # e.g. "7", "14B", "7.1"
+NUM_RE  = re.compile(r"^\(?-?\d[\d,\.]*\)?$")              # e.g. "(5,741,062)", "1,986", "-"
+DASH_RE = re.compile(r"^[-\u2013\u2014]$")
 
 
-def _extract_rows_from_pdf_page(page, num_gap=60, label_gap=16, sub_gap=10):
+def _extract_rows_4col(page, note_x, val_xs):
     """
-    Extract financial rows from one page/band.
-    Uses 4-column bucket model when year-column headers are present;
-    falls back to the original 2-column right-side approach otherwise.
+    Extract rows once we know the Note column x and the (1, 2 or 4) value
+    column x-positions for this band/page.
+
+    Key fix vs. the old version: note tokens are identified FIRST by
+    position (between label and the first value column) and EXCLUDED from
+    numeric bucketing, so note numbers like "12", "16", "18" never get
+    concatenated onto an adjacent value (e.g. "12450" -> note "12" + val "450").
     """
-    try:
-        words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
-    except Exception:
-        return []
+    words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
     if not words:
         return []
 
-    note_x, val_xs = _detect_value_columns(page)
+    n_cols = len(val_xs)
+    rows = _group_words_by_row(words, tol=3)
+    out = []
 
-    # ── 4-column path ─────────────────────────────────────────────────────────
-    if val_xs:
-        n_cols      = len(val_xs)
-        rows        = _group_words_by_row(words)
-        out         = []
-        label_max_x = note_x - 5
-        val_start_x = val_xs[0] - 30   # generous left margin so "(125,974)" isn't lost
+    # boundary between label text and the "note + values" zone on the right
+    label_max_x = note_x - 5
+    # boundary between the note token and the first value column
+    note_max_x = val_xs[0] - 18
 
-        for row in rows:
-            row_sorted  = sorted(row, key=lambda w: w["x0"])
-            label_words = [w for w in row_sorted if w["x0"] < label_max_x]
-            rhs_words   = [w for w in row_sorted if w["x0"] >= label_max_x]
+    for row in rows:
+        row_sorted = sorted(row, key=lambda w: w["x0"])
+        label_words = [w for w in row_sorted if w["x0"] < label_max_x]
+        rhs_words = [w for w in row_sorted if w["x0"] >= label_max_x]
 
-            note_toks   = []
-            val_buckets = {i: [] for i in range(n_cols)}
+        note_tok = ""
+        value_words = []
+        for w in rhs_words:
+            txt = w["text"]
+            x = w["x0"]
+            # Position decides note vs. value, not content: anything sitting
+            # strictly left of the first value column (and right of the
+            # label) is the note reference, never a value. A bare value can
+            # never appear there because the value columns start at val_xs[0].
+            if x < note_max_x and NOTE_RE.match(txt) and not note_tok:
+                note_tok = txt
+            else:
+                value_words.append(w)
 
-            for w in rhs_words:
-                txt = w["text"]
-                x   = w["x0"]
-                if x >= val_start_x:
-                    dists   = [abs(x - vx) for vx in val_xs]
-                    nearest = dists.index(min(dists))
-                    val_buckets[nearest].append(txt)
-                elif bool(re.match(r"^\(?\-?\d[\d,\.]*\)?$", txt)):
-                    # Numeric but slightly left of val_start_x → force col 0
-                    val_buckets[0].append(txt)
-                else:
-                    note_toks.append(txt)
+        # bucket remaining value words by nearest value-column x
+        val_buckets = {i: [] for i in range(n_cols)}
+        for w in value_words:
+            dists = [abs(w["x0"] - vx) for vx in val_xs]
+            nearest = dists.index(min(dists))
+            val_buckets[nearest].append(w["text"])
 
-            label     = " ".join(w["text"] for w in label_words)
-            note      = " ".join(t for t in note_toks
-                                 if re.match(r"^\d+\.?\d*[A-Z]?$", t))
-            vals      = [_parse_val(val_buckets[i]) for i in range(n_cols)]
-            has_value = any(v is not None for v in vals)
+        label = " ".join(w["text"] for w in label_words)
+        vals = [_parse_val("".join(val_buckets[i])) for i in range(n_cols)]
+        has_value = any(v is not None for v in vals)
 
-            out.append({
-                "label":     label,
-                "note":      note,
-                "val1":      vals[0] if len(vals) > 0 else "",
-                "val2":      vals[1] if len(vals) > 1 else "",
-                "val3":      vals[2] if len(vals) > 2 else "",
-                "val4":      vals[3] if len(vals) > 3 else "",
-                "has_value": has_value,
-            })
-        return out
+        out.append({
+            "label": label,
+            "note": note_tok,
+            "val1": vals[0] if len(vals) > 0 else "",
+            "val2": vals[1] if len(vals) > 1 else "",
+            "val3": vals[2] if len(vals) > 2 else "",
+            "val4": vals[3] if len(vals) > 3 else "",
+            "has_value": has_value,
+        })
+    return out
 
-    # ── Fallback: original 2-column right-side approach ───────────────────────
-    rows = _group_words_by_row(words)
-    out  = []
+
+def _extract_rows_fallback(page, num_gap=60, label_gap=16, sub_gap=10):
+    """2-column fallback for pages with no detectable year header row."""
+    words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
+    if not words:
+        return []
+    rows = _group_words_by_row(words, tol=3)
+    out = []
     for r in rows:
         r2 = sorted(r, key=lambda w: w["x0"])
-        n  = len(r2)
-        i  = n - 1
-        while i >= 0 and bool(NUM_TOKEN_RE.match(r2[i]["text"])):
+        n = len(r2)
+        i = n - 1
+        while i >= 0 and bool(NUM_RE.match(r2[i]["text"])):
             if i < n - 1 and r2[i + 1]["x0"] - r2[i]["x1"] > num_gap:
                 break
             i -= 1
@@ -303,35 +299,30 @@ def _extract_rows_from_pdf_page(page, num_gap=60, label_gap=16, sub_gap=10):
         j = num_start_idx - 1
         while j > 0 and r2[j]["x0"] - r2[j - 1]["x1"] <= label_gap:
             j -= 1
-        label   = " ".join(w["text"] for w in r2[j:num_start_idx])
+        label = " ".join(w["text"] for w in r2[j:num_start_idx])
         numtoks = r2[num_start_idx:]
-        groups  = [[numtoks[0]]]
+        groups = [[numtoks[0]]]
         for t in numtoks[1:]:
             prev = groups[-1][-1]
             if t["x0"] - prev["x1"] <= sub_gap:
                 groups[-1].append(t)
             else:
                 groups.append([t])
-        note, val1, val2, val3, val4 = "", "", "", "", ""
+        note, val1, val2 = "", "", ""
         if len(groups) >= 3:
             note = "".join(w["text"] for w in groups[0])
-            val1 = _parse_val([w["text"] for w in groups[1]])
-            val2 = _parse_val([w["text"] for w in groups[2]])
-            if len(groups) >= 4:
-                val3 = _parse_val([w["text"] for w in groups[3]])
-            if len(groups) >= 5:
-                val4 = _parse_val([w["text"] for w in groups[4]])
+            val1 = _parse_val("".join(w["text"] for w in groups[1]))
+            val2 = _parse_val("".join(w["text"] for w in groups[2]))
         elif len(groups) == 2:
-            val1 = _parse_val([w["text"] for w in groups[0]])
-            val2 = _parse_val([w["text"] for w in groups[1]])
+            val1 = _parse_val("".join(w["text"] for w in groups[0]))
+            val2 = _parse_val("".join(w["text"] for w in groups[1]))
         elif len(groups) == 1:
-            val1 = _parse_val([w["text"] for w in groups[0]])
+            val1 = _parse_val("".join(w["text"] for w in groups[0]))
         out.append({
             "label": label, "note": note,
-            "val1":  val1 if val1 is not None else "",
-            "val2":  val2 if val2 is not None else "",
-            "val3":  val3 if val3 is not None else "",
-            "val4":  val4 if val4 is not None else "",
+            "val1": val1 if val1 is not None else "",
+            "val2": val2 if val2 is not None else "",
+            "val3": "", "val4": "",
             "has_value": True,
         })
     return out
@@ -357,28 +348,36 @@ def _is_short_heading(label, max_words=8):
     return 0 < len(words) <= max_words
 
 
+def _predetect_section_from_band(band_page):
+    try:
+        text = (band_page.extract_text() or "")[:300].replace("\n", " ")
+    except Exception:
+        return None
+    for name, pat in SECTION_PATTERNS:
+        if pat.search(text):
+            return name
+    return None
+
+
 def extract_digital_pdf(pdf_bytes):
     """
     Reads every page of a digital PDF and extracts financial rows into
-    section-named sheets.
+    section-named sheets. Handles side-by-side statements (e.g. Income
+    Statement and Balance Sheet sharing one landscape page) and 2 or 4
+    value columns (Company/Group x current/prior year).
 
-    Improvements over the original:
-    1. Multi-column detection — crops each side-by-side column band
-       independently so Income Statement and Balance Sheet on the same
-       page are never mixed.
-    2. Band pre-classification — reads the band's heading text to set the
-       section before processing rows, fixing the "everything lands in Other"
-       issue that arose when statement titles span multiple word-rows.
-    3. 4-column support — extracts Company 2025 / Company 2024 / Group 2025 /
-       Group 2024 as separate columns rather than collapsing to two.
+    Each page (or band, for side-by-side layouts) is processed independently
+    and wrapped in its own try/except so a problem on one page/band cannot
+    silently push the whole document into the OCR fallback.
 
-    Returns (sheets, raw_lines) or (None, None) for scanned PDFs.
+    Returns (sheets, raw_lines) or (None, None) if the PDF has no extractable
+    text at all (i.e. it's a scanned image and needs OCR).
     """
-    sections        = {}
-    order           = []
-    raw_lines       = []
+    sections = {}
+    order = []
+    raw_lines = []
     current_section = "Other"
-    found_any_text  = False
+    found_any_text = False
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
@@ -388,51 +387,59 @@ def extract_digital_pdf(pdf_bytes):
             except Exception:
                 pass
 
-            splits     = _find_column_splits(page, min_gap=80)
+            try:
+                splits = _find_column_splits(page, min_gap=80)
+            except Exception:
+                splits = []
             boundaries = [0] + splits + [page.width]
-            bands      = [(boundaries[i], boundaries[i + 1])
-                          for i in range(len(boundaries) - 1)]
+            bands = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
 
             for band_x0, band_x1 in bands:
-                band_page = page.crop((band_x0, 0, band_x1, page.height))
-
-                # ── Pre-classify from band heading text ───────────────────────
-                band_section = _predetect_section_from_band(band_page, SECTION_PATTERNS)
-                if band_section:
-                    current_section = band_section
-
-                # Collect raw text
                 try:
-                    band_text = band_page.extract_text() or ""
-                except Exception:
-                    band_text = ""
-                if band_text:
-                    raw_lines.extend(band_text.split("\n"))
+                    band_page = page.crop((band_x0, 0, band_x1, page.height))
 
-                rows = _extract_rows_from_pdf_page(band_page)
-                for row in rows:
-                    # Row-level classification (catches section headers within bands)
-                    current_section = _classify_section(row["label"], current_section)
-                    has_data = row.get("has_value") or _is_short_heading(row["label"])
-                    if has_data:
+                    band_section = _predetect_section_from_band(band_page)
+                    if band_section:
+                        current_section = band_section
+
+                    try:
+                        band_text = band_page.extract_text() or ""
+                    except Exception:
+                        band_text = ""
+                    if band_text:
+                        raw_lines.extend(band_text.split("\n"))
+
+                    note_x, val_xs = _detect_value_columns(band_page)
+                    if val_xs:
+                        rows = _extract_rows_4col(band_page, note_x, val_xs)
+                    else:
+                        rows = _extract_rows_fallback(band_page)
+
+                    for row in rows:
+                        current_section = _classify_section(row["label"], current_section)
+                        has_data = row.get("has_value") or _is_short_heading(row["label"])
+                        if not has_data:
+                            continue
                         if current_section not in sections:
                             sections[current_section] = []
                             order.append(current_section)
                         sections[current_section].append({
                             "label": row["label"],
-                            "note":  row["note"],
-                            "val1":  row["val1"],
-                            "val2":  row["val2"],
-                            "val3":  row.get("val3", ""),
-                            "val4":  row.get("val4", ""),
+                            "note": row["note"],
+                            "val1": row["val1"],
+                            "val2": row["val2"],
+                            "val3": row.get("val3", ""),
+                            "val4": row.get("val4", ""),
                         })
+                except Exception:
+                    # Skip just this band/page on error; don't kill the whole document.
+                    continue
 
     if not found_any_text:
         return None, None
 
     sheets = [(name, sections[name]) for name in order if sections[name]]
     return sheets, raw_lines
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STRATEGY 2: OCR PIPELINE — for scanned PDFs and images
