@@ -217,45 +217,60 @@ def _detect_anchors(rows, img_width):
     """
 
     # ── Strategy 1: month row followed closely by US$ row ────────────────────
-    # Scan all pairs of rows that are within 40px of each other vertically.
-    for ri, r in enumerate(rows[:-1]):
-        r_next = rows[ri + 1]
-        # Check if this row has >= 2 month words
+    # Handles FBC/ZSE two-row headers:
+    #   Row A: Notes  |  March 2026  |  March 2025
+    #   Row B:        |    US$       |    US$
+    # Gap can be large in high-DPI PDFs, so we scan up to 4 rows ahead.
+    # US$ is frequently misread by Tesseract as USS, US5, US8, USs, U5$, etc.
+    USD_PAT = re.compile(r"(?i)^(us[\$5s8sS]|u[\$5]s|usd|u\.s\.\$?)$")
+
+    for ri, r in enumerate(rows):
         month_ws = [w for w in r if w["text"].lower() in MONTHS]
-        if len(month_ws) >= 2:
-            month_ws = sorted(month_ws, key=lambda w: w["left"])
-            month_top = r[0]["top"]
-            next_top  = r_next[0]["top"]
-            # The US$/USS row should be within 60px below
-            if abs(next_top - month_top) <= 60:
-                usd_ws = sorted(
-                    [w for w in r_next
-                     if re.match(r"(?i)^(us\$|uss|usd|us)$", w["text"])],
-                    key=lambda w: w["left"]
-                )
-                if len(usd_ws) >= 2:
-                    # val anchors = LEFT edge of each US$ word
-                    note_col   = int(month_ws[0]["left"] * 0.35)
-                    val1_col   = usd_ws[0]["left"]
-                    val2_col   = usd_ws[1]["left"]
-                    header_top = next_top   # data starts after the US$ row
-                    return note_col, val1_col, val2_col, header_top
-                elif len(usd_ws) == 1:
-                    note_col   = int(usd_ws[0]["left"] * 0.35)
-                    val1_col   = usd_ws[0]["left"]
-                    val2_col   = None
-                    header_top = next_top
-                    return note_col, val1_col, val2_col, header_top
-            # Also handle: month row is the same row as US$ (e.g. "March 2026 US$")
-            usd_ws_same = sorted(
-                [w for w in r if re.match(r"(?i)^(us\$|uss|usd)$", w["text"])],
+        if len(month_ws) < 2:
+            continue
+        month_ws = sorted(month_ws, key=lambda w: w["left"])
+        month_top = r[0]["top"]
+
+        # Also check if US$ is on the SAME row as months (e.g. "March 2026 US$")
+        usd_same = sorted(
+            [w for w in r if USD_PAT.match(w["text"])],
+            key=lambda w: w["left"]
+        )
+        if len(usd_same) >= 2:
+            note_col   = int(month_ws[0]["left"] * 0.35)
+            val1_col   = usd_same[0]["left"]
+            val2_col   = usd_same[1]["left"]
+            header_top = r[0]["top"]
+            return note_col, val1_col, val2_col, header_top
+
+        # Scan up to 5 rows below for the US$ currency row
+        for look_r in rows[ri + 1 : ri + 6]:
+            next_top = look_r[0]["top"]
+            usd_ws = sorted(
+                [w for w in look_r if USD_PAT.match(w["text"])],
                 key=lambda w: w["left"]
             )
-            if len(usd_ws_same) >= 2:
+            if len(usd_ws) >= 2:
                 note_col   = int(month_ws[0]["left"] * 0.35)
-                val1_col   = usd_ws_same[0]["left"]
-                val2_col   = usd_ws_same[1]["left"]
-                header_top = r[0]["top"]
+                val1_col   = usd_ws[0]["left"]
+                val2_col   = usd_ws[1]["left"]
+                header_top = next_top   # data starts AFTER the US$ row
+                return note_col, val1_col, val2_col, header_top
+            elif len(usd_ws) == 1:
+                note_col   = int(usd_ws[0]["left"] * 0.35)
+                val1_col   = usd_ws[0]["left"]
+                val2_col   = None
+                header_top = next_top
+                return note_col, val1_col, val2_col, header_top
+            # If this row has words to the right of the note area, it might
+            # BE the column header row (year numbers or labels) — use it
+            right_ws = [w for w in look_r if w["left"] > month_ws[0]["left"]]
+            cls_look = _x_clusters(right_ws, gap=60)
+            if len(cls_look) >= 2:
+                note_col   = int(month_ws[0]["left"] * 0.35)
+                val1_col   = cls_look[0][0]["left"]
+                val2_col   = cls_look[-1][0]["left"]
+                header_top = next_top
                 return note_col, val1_col, val2_col, header_top
 
     # ── Strategy 2: look for "note"/"notes" keyword ───────────────────────────
@@ -305,7 +320,7 @@ def _detect_anchors(rows, img_width):
     # ── Strategy 4: two US$/USS/USD on same row ───────────────────────────────
     for r in rows:
         usd_ws = sorted(
-            [w for w in r if re.match(r"(?i)^(us\$|uss|usd|us)$", w["text"])],
+            [w for w in r if USD_PAT.match(w["text"])],
             key=lambda w: w["left"]
         )
         if len(usd_ws) >= 2:
