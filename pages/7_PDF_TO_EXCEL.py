@@ -1,4 +1,3 @@
-
 import io, os, re
 import streamlit as st
 
@@ -171,20 +170,95 @@ def _group_rows(words, tol=6):
         r.sort(key=lambda w: w["left"])
     return rows
 
+
 # ── ROBUST ANCHOR DETECTION ───────────────────────────────────────────────────
+MONTHS = {"january","february","march","april","may","june","july",
+           "august","september","october","november","december"}
+
+def _x_clusters(words, gap=60):
+    """
+    Group words into horizontal clusters by x-gap.
+    Returns list of clusters, each cluster = list of word dicts.
+    """
+    if not words:
+        return []
+    ws = sorted(words, key=lambda w: w["left"])
+    clusters = [[ws[0]]]
+    for w in ws[1:]:
+        if w["left"] - clusters[-1][-1]["right"] < gap:
+            clusters[-1].append(w)
+        else:
+            clusters.append([w])
+    return clusters
+
+
 def _detect_anchors(rows, img_width):
     """
-    Detect note_col, val1_col, val2_col from the header area using multiple
-    strategies, so it works for all these real-world formats:
+    Detect note_col, val1_col, val2_col from the header area.
 
-    Format A:  Note    2024      2023          (plain year headers)
-    Format B:  Note    US$       US$           (currency headers)
-    Format C:  Notes   March 2026 US$  March 2025 US$  (FBC/ZSE style)
-    Format D:  Note    USS       USS           (OCR misread of US$)
-    Fallback:  Geometric split — right 55% of image split into two halves
+    KEY FIX: For FBC/ZSE format where headers span TWO rows:
+      Row A:  Notes   [gap]  March 2026   [gap]  March 2025
+      Row B:           [gap]   US$                 US$
+
+    We now scan PAIRS of adjacent rows near the top and also look
+    for the "US$" row that sits directly under a month-word row,
+    then use the US$ x-positions as the definitive column anchors
+    (since US$ marks the right edge of each value column header block).
+
+    Strategies tried in order:
+      1. Two-row month+currency combo  (FBC/ZSE style)
+      2. "Notes" keyword + right-side clusters on same row
+      3. "Notes" keyword + scan rows below for clusters
+      4. Two 4-digit years on same row
+      5. Two US$/USS/USD on same row
+      6. Month words on same row
+      7. First data row with two large numbers
+      8. Pure geometry fallback
     """
 
-    # ── Strategy 1: look for "note" / "notes" keyword in any row ─────────────
+    # ── Strategy 1: month row followed closely by US$ row ────────────────────
+    # Scan all pairs of rows that are within 40px of each other vertically.
+    for ri, r in enumerate(rows[:-1]):
+        r_next = rows[ri + 1]
+        # Check if this row has >= 2 month words
+        month_ws = [w for w in r if w["text"].lower() in MONTHS]
+        if len(month_ws) >= 2:
+            month_ws = sorted(month_ws, key=lambda w: w["left"])
+            month_top = r[0]["top"]
+            next_top  = r_next[0]["top"]
+            # The US$/USS row should be within 60px below
+            if abs(next_top - month_top) <= 60:
+                usd_ws = sorted(
+                    [w for w in r_next
+                     if re.match(r"(?i)^(us\$|uss|usd|us)$", w["text"])],
+                    key=lambda w: w["left"]
+                )
+                if len(usd_ws) >= 2:
+                    # val anchors = LEFT edge of each US$ word
+                    note_col   = int(month_ws[0]["left"] * 0.35)
+                    val1_col   = usd_ws[0]["left"]
+                    val2_col   = usd_ws[1]["left"]
+                    header_top = next_top   # data starts after the US$ row
+                    return note_col, val1_col, val2_col, header_top
+                elif len(usd_ws) == 1:
+                    note_col   = int(usd_ws[0]["left"] * 0.35)
+                    val1_col   = usd_ws[0]["left"]
+                    val2_col   = None
+                    header_top = next_top
+                    return note_col, val1_col, val2_col, header_top
+            # Also handle: month row is the same row as US$ (e.g. "March 2026 US$")
+            usd_ws_same = sorted(
+                [w for w in r if re.match(r"(?i)^(us\$|uss|usd)$", w["text"])],
+                key=lambda w: w["left"]
+            )
+            if len(usd_ws_same) >= 2:
+                note_col   = int(month_ws[0]["left"] * 0.35)
+                val1_col   = usd_ws_same[0]["left"]
+                val2_col   = usd_ws_same[1]["left"]
+                header_top = r[0]["top"]
+                return note_col, val1_col, val2_col, header_top
+
+    # ── Strategy 2: look for "note"/"notes" keyword ───────────────────────────
     for r in rows:
         texts_lower = [w["text"].lower() for w in r]
         has_note = any(t in ("note","notes") for t in texts_lower)
@@ -195,27 +269,11 @@ def _detect_anchors(rows, img_width):
         note_col   = note_w["left"]
         header_top = r[0]["top"]
 
-        # All words to the RIGHT of the note column are potential value headers
         right_words = sorted(
             [w for w in r if w["left"] > note_col + 30],
             key=lambda w: w["left"]
         )
-
-        # ── Sub-strategy 1a: two or more distinct x-clusters on the right ────
-        # Cluster right-side words by x proximity (handles multi-word col headers
-        # like "March 2026" and "US$" that appear on the same row)
-        clusters = []
-        if right_words:
-            cur = [right_words[0]]
-            for w in right_words[1:]:
-                if w["left"] - cur[-1]["right"] < 80:   # same cluster
-                    cur.append(w)
-                else:
-                    clusters.append(cur)
-                    cur = [w]
-            clusters.append(cur)
-
-        # Take the leftmost x of each cluster as the anchor
+        clusters = _x_clusters(right_words, gap=80)
         cluster_lefts = [c[0]["left"] for c in clusters]
 
         if len(cluster_lefts) >= 2:
@@ -223,18 +281,18 @@ def _detect_anchors(rows, img_width):
         elif len(cluster_lefts) == 1:
             return note_col, cluster_lefts[0], None, header_top
 
-        # ── Sub-strategy 1b: note row found but no right words ────────────────
-        # Look ONE row below for the actual column header words
+        # ── Sub-strategy: look in rows below for actual col header words ──────
         note_row_idx = rows.index(r)
-        for look in rows[note_row_idx+1 : note_row_idx+4]:
+        for look in rows[note_row_idx+1 : note_row_idx+5]:
             rw = sorted([w for w in look if w["left"] > note_col + 30],
                         key=lambda w: w["left"])
-            if len(rw) >= 2:
-                return note_col, rw[0]["left"], rw[-1]["left"], header_top
-            elif len(rw) == 1:
-                return note_col, rw[0]["left"], None, header_top
+            cls = _x_clusters(rw, gap=80)
+            if len(cls) >= 2:
+                return note_col, cls[0][0]["left"], cls[-1][0]["left"], header_top
+            elif len(cls) == 1:
+                return note_col, cls[0][0]["left"], None, header_top
 
-    # ── Strategy 2: two 4-digit years on the same row ────────────────────────
+    # ── Strategy 3: two 4-digit years on same row ─────────────────────────────
     for r in rows:
         year_ws = sorted(
             [w for w in r if re.match(r"^20\d\d$", w["text"])],
@@ -244,23 +302,20 @@ def _detect_anchors(rows, img_width):
             note_col = int(year_ws[0]["left"] * 0.5)
             return note_col, year_ws[0]["left"], year_ws[1]["left"], r[0]["top"]
 
-    # ── Strategy 3: look for "US$" / "USS" / "USD" column headers ────────────
+    # ── Strategy 4: two US$/USS/USD on same row ───────────────────────────────
     for r in rows:
         usd_ws = sorted(
             [w for w in r if re.match(r"(?i)^(us\$|uss|usd|us)$", w["text"])],
             key=lambda w: w["left"]
         )
         if len(usd_ws) >= 2:
-            # Estimate note col as ~40% of left edge of first USD word
             note_col = int(usd_ws[0]["left"] * 0.4)
             return note_col, usd_ws[0]["left"], usd_ws[1]["left"], r[0]["top"]
         elif len(usd_ws) == 1:
             note_col = int(usd_ws[0]["left"] * 0.4)
             return note_col, usd_ws[0]["left"], None, r[0]["top"]
 
-    # ── Strategy 4: look for "March" / month words as column starters ────────
-    MONTHS = {"january","february","march","april","may","june","july",
-               "august","september","october","november","december"}
+    # ── Strategy 5: month words on same row ───────────────────────────────────
     for r in rows:
         month_ws = sorted(
             [w for w in r if w["text"].lower() in MONTHS],
@@ -270,8 +325,7 @@ def _detect_anchors(rows, img_width):
             note_col = int(month_ws[0]["left"] * 0.4)
             return note_col, month_ws[0]["left"], month_ws[1]["left"], r[0]["top"]
 
-    # ── Strategy 5: look for rows where two large numbers appear ─────────────
-    # Find the first data row that has exactly two numbers and use their x-positions
+    # ── Strategy 6: first data row with two large numbers ─────────────────────
     NUM_RE = re.compile(r"^\(?\d[\d\s,.']*\)?$")
     for r in rows:
         num_ws = sorted(
@@ -285,8 +339,7 @@ def _detect_anchors(rows, img_width):
             header_top = r[0]["top"]
             return note_col, val1_col, val2_col, header_top
 
-    # ── Strategy 6: pure geometry fallback ───────────────────────────────────
-    # Left 45% = label, right 55% split into two equal value columns
+    # ── Strategy 7: pure geometry fallback ───────────────────────────────────
     note_col  = int(img_width * 0.38)
     val1_col  = int(img_width * 0.55)
     val2_col  = int(img_width * 0.75)
@@ -294,15 +347,33 @@ def _detect_anchors(rows, img_width):
     return note_col, val1_col, val2_col, header_top
 
 
-def _col_of(left, note_col, val1_col, val2_col, midpoint):
-    """Map a word's x position to a column bucket."""
-    if val2_col is not None and left >= midpoint:
+def _col_of(word, note_col, val1_col, val2_col, midpoint):
+    """
+    Map a word's x position to a column bucket.
+
+    KEY FIX: A word that looks like a number should NEVER land in
+    the 'note' bucket — notes are always short integers like "3", "4".
+    If val1_col is well-established and the word is clearly to its right,
+    force it into val1 or val2.
+    """
+    left = word["left"]
+    text = word["text"]
+
+    # If the word is a multi-digit number or parenthesised number,
+    # it cannot be a note — force it into a value column.
+    is_number_token = bool(re.match(r"^\(?\d[\d\s,.']*\)?$", text) and len(text) >= 2)
+
+    if val2_col is not None and midpoint is not None and left >= midpoint:
         return "val2"
-    if val1_col is not None and left >= val1_col - 20:
+    if val1_col is not None and left >= val1_col - 15:
         return "val1"
-    if note_col is not None and left >= note_col - 10:
+    if note_col is not None and left >= note_col - 10 and not is_number_token:
         return "note"
+    if is_number_token and val1_col is not None and left >= note_col:
+        # Number sitting between note_col and val1_col — assign to val1
+        return "val1"
     return "label"
+
 
 def _is_noise(t):
     return bool(NOISE_PAT.match(t)) or t in NOISE_WORDS
@@ -311,7 +382,7 @@ def _clean_note(tokens):
     return " ".join(t for t in tokens if re.match(r"^\d+\.?\d*$", t))
 
 def _merge_tokens(tokens):
-    """Join tokens with spaces so space-separated thousands survive into _parse_number."""
+    """Join tokens so space-separated thousands survive into _parse_number."""
     joined = " ".join(tokens)
     joined = re.sub(r"\$(?=\d)", "8", joined)
     joined = re.sub(r"(?<=\d)[Oo](?=\d)", "0", joined)
@@ -336,7 +407,6 @@ def _parse_number(raw: str):
     if negative:
         s = s[1:-1].strip()
 
-    # Collapse spaces FIRST — this is the critical step for ZW format
     s_nospace = s.replace(" ", "")
 
     has_comma = "," in s_nospace
@@ -349,11 +419,11 @@ def _parse_number(raw: str):
     elif has_dot and not has_comma:
         parts = s_nospace.split(".")
         if len(parts) > 2 or (len(parts) == 2 and len(parts[-1]) == 3):
-            cleaned = s_nospace.replace(".", "")   # dot = thousands separator
+            cleaned = s_nospace.replace(".", "")
         else:
-            cleaned = s_nospace                    # dot = decimal point
+            cleaned = s_nospace
     else:
-        cleaned = s_nospace.replace(",", "")       # US style: comma=thou, dot=dec
+        cleaned = s_nospace.replace(",", "")
 
     if not re.match(r"^\d+(\.\d+)?$", cleaned):
         return raw
@@ -370,6 +440,7 @@ def _flag_risky(v):
         return str(int(abs(v))).startswith("4")
     return False
 
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 def process_image_to_rows(pil_image, upscale=3):
     img_width  = pil_image.width
@@ -379,11 +450,11 @@ def process_image_to_rows(pil_image, upscale=3):
 
     note_col, val1_col, val2_col, header_top = _detect_anchors(rows, img_width)
 
-    # Midpoint between val1 and val2 (biased slightly left)
+    # Midpoint between val1 and val2
     if val1_col is not None and val2_col is not None:
         midpoint = (val1_col + val2_col) / 2 - 5
     else:
-        midpoint = val2_col  # None if only one value col
+        midpoint = None
 
     debug = {
         "note_col": note_col, "val1_col": val1_col,
@@ -404,7 +475,7 @@ def process_image_to_rows(pil_image, upscale=3):
         for w in r:
             if _is_noise(w["text"]):
                 continue
-            col = _col_of(w["left"], note_col, val1_col, val2_col, midpoint)
+            col = _col_of(w, note_col, val1_col, val2_col, midpoint)
             buckets[col].append(w["text"])
 
         label = " ".join(buckets["label"])
@@ -423,10 +494,6 @@ def process_image_to_rows(pil_image, upscale=3):
 
 # ── Excel writer ──────────────────────────────────────────────────────────────
 def rows_to_excel_bytes(sheets, col_headers=None):
-    """
-    col_headers: optional list of 4 strings for row 1 header.
-    Default: ["Item", "Note", "Period 1", "Period 2"]
-    """
     if col_headers is None:
         col_headers = ["Item", "Note", "Period 1", "Period 2"]
 
@@ -474,8 +541,6 @@ def rows_to_excel_bytes(sheets, col_headers=None):
                     if risky:
                         cell.font = RED_FONT
                 elif val not in ("", None):
-                    # Try one more time to parse — catches cases where
-                    # _parse_number returned the raw string
                     reparsed = _parse_number(str(val))
                     if isinstance(reparsed, (int, float)):
                         cell.value         = reparsed
@@ -526,10 +591,10 @@ st.markdown("""
 <div class="fbc-info-card">
   <div class="fbc-info-card-title">🔬 How This Works</div>
   <div class="fbc-info-card-body">
-    Uses a <b>6-strategy column detector</b> that handles all these real-world header formats:<br>
+    Uses a <b>7-strategy column detector</b> that handles all these real-world header formats:<br>
     • <code>Note | 2024 | 2023</code> &nbsp;·&nbsp;
       <code>Note | US$ | US$</code> &nbsp;·&nbsp;
-      <code>Notes | March 2026 US$ | March 2025 US$</code><br>
+      <code>Notes | March 2026 US$ | March 2025 US$</code> (two-row headers)<br>
     • Month-based headers &nbsp;·&nbsp; Geometry fallback (when no header is found)<br>
     Space-separated thousands (<code>93 226 105</code>) are correctly parsed as integers.
     Known Tesseract misreads (<code>$→8</code>, <code>O→0</code>) are auto-corrected.
@@ -559,9 +624,9 @@ with col_o2:
     dpi_choice = st.selectbox("Render DPI (PDF only)", [200, 300, 400], index=1,
         disabled=is_image_mode)
 with col_o3:
-    col1_header = st.text_input("Col 3 header (period 1)", value="2024",
+    col1_header = st.text_input("Col 3 header (period 1)", value="March 2026",
         help="Label for the first value column in the Excel output.")
-    col2_header = st.text_input("Col 4 header (period 2)", value="2023",
+    col2_header = st.text_input("Col 4 header (period 2)", value="March 2025",
         help="Label for the second value column in the Excel output.")
 with col_o4:
     show_debug = st.checkbox("Show column anchor debug info",
