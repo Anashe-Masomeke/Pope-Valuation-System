@@ -445,6 +445,7 @@ def extract_digital_pdf(pdf_bytes):
 # STRATEGY 2: OCR PIPELINE — for scanned PDFs and images
 # (unchanged from original)
 # ═══════════════════════════════════════════════════════════════════════════════
+import re
 import pytesseract
 from PIL import Image, ImageFilter, ImageEnhance
 
@@ -452,13 +453,14 @@ MAX_OCR_PIXELS = 16_000_000
 NOISE_PAT = re.compile(r"^[^a-zA-Z0-9()\-.]+$")
 NOISE_WORDS = {"it", "ot", "be", "a=", "bet", "Ml", "oe", "i", "—", "~~", "MIl", "Mi", "Ml"}
 NOTE_RE = re.compile(r"^\d{1,2}(\.\d{1,2})?[A-Za-z]?$")
+NUM_RE = re.compile(r"^\(?-?\d[\d,\.\s]*\)?$")
 
 
 def _is_noise(t):
     return bool(NOISE_PAT.match(t)) or t in NOISE_WORDS
 
 
-def _preprocess(pil_image, upscale=3):
+def _preprocess(pil_image, upscale=3, sharpen=True):
     img = pil_image.convert("RGB")
     w, h = img.width, img.height
     eff_upscale = upscale
@@ -468,7 +470,8 @@ def _preprocess(pil_image, upscale=3):
     new_h = max(1, int(h * eff_upscale))
     img = img.resize((new_w, new_h), Image.LANCZOS)
     img = ImageEnhance.Contrast(img).enhance(1.4)
-    img = img.filter(ImageFilter.SHARPEN)
+    if sharpen:
+        img = img.filter(ImageFilter.SHARPEN)
     return img, eff_upscale
 
 
@@ -543,7 +546,7 @@ def _merge_tokens(tokens):
     joined = re.sub(r"[~:=`']+", "", joined)
     joined = joined.strip()
     # Strip stray OCR noise around a parenthesised negative, e.g.
-    # "_(8,455,071)" -> "(8,455,071)"
+    # "_(8,455,071)" -> "(8,455,071)", "(125,974) " -> "(125,974)"
     m = re.match(r"^[^\d(]*(\(?-?[\d,\.\s]+\)?)[^\d)]*$", joined)
     if m:
         joined = m.group(1).strip()
@@ -748,6 +751,21 @@ def _extract_rows_2col_fallback(rows, img_width):
     return out
 
 
+SECTION_PATTERNS = [
+    ("Income Statement", re.compile(r"(?i)(profit\s+or\s+loss|income\s+statement|statement\s+of\s+comprehensive\s+income)")),
+    ("Balance Sheet", re.compile(r"(?i)(financial\s+position|balance\s+sheet)")),
+    ("Cash Flow", re.compile(r"(?i)(cash\s*flows?)")),
+    ("Changes in Equity", re.compile(r"(?i)(changes\s+in\s+equity)")),
+]
+
+
+def _classify_section(label, current):
+    for name, pat in SECTION_PATTERNS:
+        if pat.search(label):
+            return name
+    return current
+
+
 def _band_heading_text(rows, max_rows=6):
     lines = []
     for row in rows[:max_rows]:
@@ -757,8 +775,8 @@ def _band_heading_text(rows, max_rows=6):
 
 def process_image_to_sections(pil_image, upscale=3):
     """
-    Column-aware OCR pipeline. Detects side-by-side statements via a wide
-    x-gap (like the digital-PDF band splitter) and, within each band,
+    New column-aware OCR pipeline. Detects side-by-side statements via a
+    wide x-gap (like the digital-PDF band splitter) and, within each band,
     detects a 4-column (or 2-column) year header to bucket values by
     position instead of naive left/right halves.
 
