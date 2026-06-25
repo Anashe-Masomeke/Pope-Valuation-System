@@ -199,14 +199,12 @@ def _detect_anchors(rows):
             if len(val_words) >= 2:
                 return note_col, val_words[0]["left"], val_words[-1]["left"], header_top
             elif len(val_words) == 1:
-                # single value column document
                 return note_col, val_words[0]["left"], None, header_top
 
     # Fallback: look for two 4-digit year numbers on the same row
     for r in rows:
         year_ws = [w for w in r if re.match(r"^20\d\d$", w["text"])]
         if len(year_ws) >= 2:
-            # Estimate note col as ~60% of the way to first year
             note_col = int(year_ws[0]["left"] * 0.5)
             return note_col, year_ws[0]["left"], year_ws[1]["left"], r[0]["top"]
 
@@ -236,42 +234,96 @@ def _clean_note(tokens):
 def _merge_tokens(tokens):
     """
     Join a list of tokens that belong to one number cell.
-    Fixes:
-      - "$" misread as "8" when followed by digits  e.g. "$31" → "831"
+    Fixes known OCR misreads:
+      - "$" misread → "8"
       - "O" misread as "0" inside digit runs
+      - strips noise chars
+    IMPORTANT: tokens are joined with a SPACE so that space-separated
+    thousands groups (e.g. ["2", "737", "517"]) are preserved as
+    "2 737 517" for _parse_number to handle correctly.
     """
-    joined = "".join(tokens)
-    joined = re.sub(r"\$(?=\d)", "8", joined)       # $ → 8
+    # Join with space first — _parse_number will collapse them
+    joined = " ".join(tokens)
+    joined = re.sub(r"\$(?=\d)", "8", joined)            # $ → 8
     joined = re.sub(r"(?<=\d)[Oo](?=\d)", "0", joined)  # O → 0 between digits
-    joined = re.sub(r"[~\-—:=`']+", "", joined)     # strip noise chars
-    return joined
+    joined = re.sub(r"[~:=`']+", "", joined)             # strip noise (keep - and .)
+    return joined.strip()
 
 
 def _parse_number(raw: str):
     """
     Convert a raw merged token string to int/float.
-    Returns the parsed number, None for blank/dash, or original string if unparseable.
+
+    Handles ALL of these formats produced by financial-statement OCR:
+      "2 737 517"    → 2737517   (space-as-thousands — ZW/SA style)  ← THE BUG FIX
+      "2,737,517"    → 2737517   (comma-as-thousands — US style)
+      "2.737.517"    → 2737517   (dot-as-thousands — European style)
+      "(1 116 290)"  → -1116290  (parenthesised negative)
+      "892 137"      → 892137
+      "1 800"        → 1800
+      "-"            → None      (dash = blank cell)
+      ""             → None
     """
     s = raw.strip()
     if not s or s in ("-", "—", "–", ""):
         return None
+
+    # Detect parenthesised negative
     negative = s.startswith("(") and s.endswith(")")
     if negative:
-        s = s[1:-1]
-    # Remove thousands separators (commas, spaces, dots used as separators)
-    s = s.replace(",", "").replace(" ", "")
-    # If a dot remains and it separates a 3-digit suffix treat as thousands separator
-    if "." in s and len(s.split(".")[-1]) == 3:
-        s = s.replace(".", "")
+        s = s[1:-1].strip()
+
+    # ── KEY FIX: collapse internal spaces FIRST ──────────────────────────────
+    # "2 737 517" → "2737517"
+    # We do this BEFORE any dot/comma logic so a space-separated number
+    # like "2 737 517" is never misread as the decimal 2.737517
+    s_nospace = s.replace(" ", "")
+
+    # ── Now decide separator style ────────────────────────────────────────────
+    # After removing spaces we may still have commas or dots as separators.
+    # Rules:
+    #   1. If the string has NO dots and NO commas → pure integer after nospace
+    #   2. If it has commas only → commas are thousands separators → remove them
+    #   3. If it has dots only:
+    #        - all dot-separated groups are 3 digits → thousands separator (e.g. 2.737.517)
+    #        - last group is NOT 3 digits → decimal point (e.g. 892.13)
+    #   4. If it has BOTH → comma=thousands, dot=decimal (US style: 1,234.56)
+
+    has_comma = "," in s_nospace
+    has_dot   = "." in s_nospace
+
+    if not has_comma and not has_dot:
+        # Pure integer string
+        cleaned = s_nospace
+    elif has_comma and not has_dot:
+        # "1,234,567" → thousands commas only
+        cleaned = s_nospace.replace(",", "")
+    elif has_dot and not has_comma:
+        parts = s_nospace.split(".")
+        if len(parts) > 2 or (len(parts) == 2 and len(parts[-1]) == 3):
+            # All-3-digit groups → dot is thousands separator: "2.737.517" or "2.737"
+            cleaned = s_nospace.replace(".", "")
+        else:
+            # Single dot, last part ≠ 3 digits → decimal: "892.13"
+            cleaned = s_nospace
+    else:
+        # Both comma and dot: US style "1,234.56" → comma=thousands, dot=decimal
+        cleaned = s_nospace.replace(",", "")
+
+    # Guard: must be a digit string (possibly with one decimal point)
+    if not re.match(r"^\d+(\.\d+)?$", cleaned):
+        # Not parseable as a number — return original raw text
+        return raw
+
     try:
-        v = int(s)
-        return -v if negative else v
+        fval = float(cleaned)
+        if fval == int(fval):
+            result = int(fval)
+        else:
+            result = fval
+        return -result if negative else result
     except ValueError:
-        try:
-            v = float(s)
-            return -v if negative else v
-        except ValueError:
-            return raw
+        return raw
 
 
 def _flag_risky(v):
@@ -292,11 +344,9 @@ def process_image_to_rows(pil_image, upscale=3):
 
     note_col, val1_col, val2_col, header_top = _detect_anchors(rows)
 
-    # Compute midpoint for val1/val2 split, biased slightly left to handle edge tokens
     if val1_col is not None and val2_col is not None:
         midpoint = (val1_col + val2_col) / 2 - 5
     elif val2_col is None and val1_col is not None:
-        # single value column
         midpoint = None
     else:
         midpoint = None
@@ -306,7 +356,6 @@ def process_image_to_rows(pil_image, upscale=3):
         is_pre_header = (header_top is not None and r[0]["top"] < header_top)
 
         if is_pre_header:
-            # Title / sub-title rows — join all non-noise text as one label
             line = " ".join(w["text"] for w in r if not _is_noise(w["text"]))
             output.append({"label": line, "note":"", "val1":"", "val2":"", "risky": False})
             continue
@@ -337,26 +386,19 @@ def process_image_to_rows(pil_image, upscale=3):
 # ── Excel writer ──────────────────────────────────────────────────────────────
 
 def rows_to_excel_bytes(sheets):
-    """
-    sheets: list of (sheet_title, row_dicts)
-    Each row_dict: {label, note, val1, val2, risky}
-    """
     wb = Workbook()
     wb.remove(wb.active)
 
     BLUE_FILL  = PatternFill("solid", fgColor="071426")
-    GOLD_FILL  = PatternFill("solid", fgColor="F5B400")
     LIGHT_FILL = PatternFill("solid", fgColor="F0F5FF")
     RED_FONT   = Font(color="9C0006", bold=True)
     WHITE_FONT = Font(bold=True, color="FFFFFF")
-    BOLD       = Font(bold=True)
     RIGHT_ALIGN = Alignment(horizontal="right", vertical="center")
     MONEY_FMT   = "#,##0;(#,##0)"
 
     for title, row_dicts in sheets:
         ws = wb.create_sheet(title=title[:31])
 
-        # Header
         headers = ["Item", "Note", "2024", "2023"]
         for ci, h in enumerate(headers, 1):
             c = ws.cell(1, ci, h)
@@ -372,7 +414,6 @@ def rows_to_excel_bytes(sheets):
             v2    = row.get("val2","")
             risky = row.get("risky", False)
 
-            # Skip rows that are entirely blank
             if not any([str(label).strip(), str(note).strip(),
                         str(v1).strip(), str(v2).strip()]):
                 continue
@@ -383,34 +424,29 @@ def rows_to_excel_bytes(sheets):
             for ci, val in [(3, v1), (4, v2)]:
                 cell = ws.cell(ri, ci)
                 if isinstance(val, (int, float)):
-                    cell.value          = val
-                    cell.number_format  = MONEY_FMT
-                    cell.alignment      = RIGHT_ALIGN
+                    cell.value         = val
+                    cell.number_format = MONEY_FMT
+                    cell.alignment     = RIGHT_ALIGN
                     if risky:
                         cell.font = RED_FONT
                 elif val not in ("", None):
                     cell.value = str(val)
                     cell.alignment = RIGHT_ALIGN
 
-            # Zebra stripe
             if ri % 2 == 0:
                 for ci in range(1, 5):
                     ws.cell(ri, ci).fill = LIGHT_FILL
 
-            # Bold total-looking rows (all caps label or blank label with values)
             if label.isupper() or (not label and (v1 or v2)):
                 for ci in range(1, 5):
                     existing = ws.cell(ri, ci).font
                     ws.cell(ri, ci).font = Font(bold=True,
-                                                color=existing.color if existing.color else "000000")
+                        color=existing.color if existing.color else "000000")
 
-        # Column widths
         ws.column_dimensions["A"].width = 48
         ws.column_dimensions["B"].width = 8
         ws.column_dimensions["C"].width = 16
         ws.column_dimensions["D"].width = 16
-
-        # Freeze header
         ws.freeze_panes = "A2"
 
     buf = io.BytesIO()
@@ -439,12 +475,12 @@ st.markdown("""
   <div class="fbc-info-card-title">🔬 How This Works</div>
   <div class="fbc-info-card-body">
     This converter uses a <b>financial-statement-aware</b> OCR pipeline — not a generic one.<br>
-    It first finds the <b>Note / USS / USS header row</b> in your document and uses those
-    pixel positions to anchor the label, note, and two value columns precisely. Numbers split
-    across multiple OCR tokens are automatically merged. Known Tesseract digit misreads
-    (e.g. <code>$</code>→<code>8</code>, <code>O</code>→<code>0</code>) are corrected.<br>
-    Cells flagged in <span style="color:#fca5a5;font-weight:700;">red</span> in the Excel
-    output should still be spot-checked against the source.
+    It finds the <b>Note / US$ header row</b> and uses those pixel positions to anchor label,
+    note, and value columns precisely. Space-separated thousands groups
+    (e.g. <code>2 737 517</code>) are correctly parsed as integers — not decimals.
+    Known Tesseract misreads (<code>$→8</code>, <code>O→0</code>) are auto-corrected.<br>
+    Cells flagged in <span style="color:#fca5a5;font-weight:700;">red</span> should still
+    be spot-checked against the source.
   </div>
 </div>
 <div class="fbc-warn-card">
@@ -453,25 +489,23 @@ st.markdown("""
     OCR accuracy on scanned documents is typically 98–99% but not 100%.
     One confirmed pattern: Tesseract sometimes misreads a leading "1" as "4" inside
     parenthesised negatives — these are flagged in red automatically.
-    Sum each column and compare to the printed totals before uploading to DCF.
+    Sum each column and compare to printed totals before uploading to the DCF model.
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
-# ── OCR options ───────────────────────────────────────────────────────────────
 section("⚙️ OCR Options")
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
 col_o1, col_o2, col_o3 = st.columns(3)
 with col_o1:
     upscale_choice = st.selectbox("Upscale factor", [2, 3], index=1,
-        help="3× is recommended for financial statements. 2× is faster.")
+        help="3× recommended for financial statements. 2× is faster.")
 with col_o2:
     dpi_choice = st.selectbox("Render DPI (PDF only)", [200, 300, 400], index=1,
-        disabled=is_image_mode,
-        help="300 DPI is the tested sweet-spot.")
+        disabled=is_image_mode)
 with col_o3:
     show_debug = st.checkbox("Show column anchor debug info",
         help="Shows detected Note/Val1/Val2 pixel positions for troubleshooting.")
@@ -487,7 +521,7 @@ if is_image_mode:
 
     st.markdown(
         "<div style='color:#475569;font-size:13px;font-style:italic;margin-bottom:12px;'>"
-        "Tip: Upload IS, BS and CF screenshots together — they'll become separate named "
+        "Tip: Upload IS, BS and CF screenshots together — they become separate named "
         "sheets in one Excel file, ready to drop straight into the DCF model."
         "</div>", unsafe_allow_html=True)
 
@@ -499,12 +533,10 @@ if is_image_mode:
         st.info("⬆️ Upload one or more screenshots to begin.")
         st.stop()
 
-    # Sheet naming + preview
     section("🏷️ Name Each Sheet")
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     st.markdown(
         "<div style='color:#374151;font-size:14px;margin-bottom:10px;'>"
-        "Name each sheet to match its statement type. "
         "The DCF model expects <b>Income Statement</b>, <b>Balance Sheet</b>, "
         "<b>Cash Flow</b> as sheet names."
         "</div>", unsafe_allow_html=True)
@@ -558,7 +590,7 @@ if is_image_mode:
                         f"Note col={debug['note_col']}px · "
                         f"Val1 col={debug['val1_col']}px · "
                         f"Val2 col={debug['val2_col']}px · "
-                        f"Midpoint={debug['midpoint']:.0f}px · "
+                        f"Midpoint={debug.get('midpoint','?')}px · "
                         f"Header top={debug['header_top']}px")
 
             non_blank = [r for r in row_dicts if any([
@@ -710,8 +742,9 @@ else:
       <div class="next-steps-title">💡 Next Step — Upload into the DCF Model</div>
       <div class="next-steps-body">
         <b>1.</b> Download and open the Excel.<br>
-        <b>2.</b> Check <span style="color:#991b1b;font-weight:700;">red-flagged cells</span> against the PDF and verify column totals.<br>
-        <b>3.</b> The DCF page expects <b>Sheet 1 = Income Statement</b>,
+        <b>2.</b> Check <span style="color:#991b1b;font-weight:700;">red-flagged cells</span>
+          against the PDF and verify column totals.<br>
+        <b>3.</b> DCF expects <b>Sheet 1 = Income Statement</b>,
           <b>Sheet 2 = Balance Sheet</b>, <b>Sheet 3 = Cash Flow Statement</b>,
           each with an <i>Item</i> column and one column per year.<br>
         <b>4.</b> Head to <b>📊 DCF Model</b> and upload the cleaned Excel.
