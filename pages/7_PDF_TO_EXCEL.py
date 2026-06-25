@@ -970,15 +970,20 @@ else:
             sheets_data = None; raw_lines = None; method_used = ""
 
             if PDFPLUMBER_OK:
-                page_status.markdown("<span style='color:#003399;font-weight:700;'>🔍 Reading digital text…</span>", unsafe_allow_html=True)
+                page_status.markdown("<span style='color:#003399;font-weight:700;'>🔍 Reading digital text…</span>",
+                                     unsafe_allow_html=True)
                 try:
                     sheets_data, raw_lines = extract_digital_pdf(pdf_bytes)
+                    if show_debug:
+                        n_sheets = len(sheets_data) if sheets_data else 0
+                        n_raw = len(raw_lines) if raw_lines else 0
+                        st.info(f"Digital extraction returned: sheets_data is not None = {sheets_data is not None} "
+                                f"({n_sheets} sheets), raw_lines={n_raw} lines")
                     if sheets_data:
                         method_used = "digital text (column-aware, 4-col)"
                 except Exception as e:
-                    if show_debug:
-                        st.warning(f"Digital text extraction error: {e}")
-                        st.code(traceback.format_exc())
+                    st.warning(f"Digital text extraction error: {e}")
+                    st.code(traceback.format_exc())
                     sheets_data, raw_lines = None, None
 
             if not sheets_data:
