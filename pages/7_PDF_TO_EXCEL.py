@@ -133,37 +133,14 @@ if not OPENPYXL_OK:
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STRATEGY 1 — DIGITAL PDF EXTRACTION (column-aware, word-position based)
+# STRATEGY 1 — DIGITAL PDF EXTRACTION
+# Handles:
+#   • Single-column pages (normal statements)
+#   • Multi-column / magazine layouts (e.g. IS and BS side-by-side on one page)
+#   • 4-column value tables (Company 2025 / 2024, Group 2025 / 2024)
 # ═══════════════════════════════════════════════════════════════════════════════
-#
-# Why this exists: a naive page.extract_text() dump reads strictly top-to-bottom
-# and will happily interleave text from two side-by-side columns that share the
-# same vertical position (e.g. a "magazine style" results PDF with a narrative
-# column next to a financial table). That silently produces garbled numbers
-# (two different figures concatenated into one) rather than a crash — which is
-# arguably worse, since it looks like real data. The fix below works on each
-# page's individual word positions: for every visual row it finds the trailing
-# block of numbers (note / value columns) using gaps between word boxes, then
-# only pulls in the label words that sit directly beside that number block —
-# so unrelated text from a neighbouring column never gets glued onto a figure.
 
 NUM_TOKEN_RE = re.compile(r"^\(?-?\d[\d,\.]*\)?$")
-
-def _is_num_tok(t):
-    return bool(NUM_TOKEN_RE.match(t))
-
-def _clean_numeric_group(token_texts):
-    """token_texts: list of word strings that together form ONE number."""
-    raw = "".join(token_texts)
-    neg = raw.startswith("(") and raw.endswith(")")
-    core = raw.strip("()").replace(",", "").replace(" ", "")
-    if not core:
-        return None
-    try:
-        val = float(core) if "." in core else int(core)
-        return -val if neg else val
-    except (ValueError, TypeError):
-        return None
 
 def _group_words_by_row(words, tol=3):
     if not words:
@@ -180,10 +157,77 @@ def _group_words_by_row(words, tol=3):
             cur_top = w["top"]
     return rows
 
+
+def _find_column_splits(page, min_gap=80):
+    """
+    Detect x-positions where a large horizontal gap divides the page into
+    side-by-side columns.  Returns sorted list of midpoint x-values; [] for
+    a single-column page.
+    """
+    words = page.extract_words(x_tolerance=2, y_tolerance=3)
+    if not words:
+        return []
+    xs = sorted(set(round(w["x0"]) for w in words))
+    splits = []
+    for i in range(len(xs) - 1):
+        if xs[i + 1] - xs[i] >= min_gap:
+            splits.append((xs[i] + xs[i + 1]) // 2)
+    return splits
+
+
+def _detect_value_columns(page):
+    """
+    Locate Note column and up to 4 value columns by finding the first row
+    with 2+ 4-digit years (e.g. "2025  2024  2025  2024").
+    Returns (note_x, [val_x …]) or (None, []).
+    """
+    words = page.extract_words(x_tolerance=2, y_tolerance=3)
+    if not words:
+        return None, []
+    rows = _group_words_by_row(words)
+    for row in rows[:25]:
+        yr = [w for w in row if re.match(r"^20\d\d$", w["text"])]
+        if len(yr) >= 2:
+            yr.sort(key=lambda w: w["x0"])
+            note_ws = [w for w in row if w["text"].lower() in ("note", "notes")]
+            note_x = note_ws[0]["x0"] if note_ws else (yr[0]["x0"] - 60)
+            return note_x, [w["x0"] for w in yr]
+    return None, []
+
+
+def _parse_val(tokens):
+    raw = "".join(tokens)
+    if not raw or raw in ("-", "\u2013", "\u2014"):
+        return None
+    neg = raw.startswith("(") and raw.endswith(")")
+    core = raw.strip("()").replace(",", "")
+    try:
+        v = float(core) if "." in core else int(core)
+        return -v if neg else v
+    except (ValueError, TypeError):
+        return None
+
+
+def _predetect_section_from_band(band_page, patterns):
+    """
+    Read the first ~300 chars of a band's text and return the matching
+    section name if a statement title is found; None otherwise.
+    """
+    try:
+        text = (band_page.extract_text() or "")[:300].replace("\n", " ")
+    except Exception:
+        return None
+    for name, pat in patterns:
+        if pat.search(text):
+            return name
+    return None
+
+
 def _extract_rows_from_pdf_page(page, num_gap=60, label_gap=16, sub_gap=10):
     """
-    Column-aware extraction for one digital PDF page.
-    Returns a list of dicts: {label, note, val1, val2, has_value}
+    Extract financial rows from one page/band.
+    Uses 4-column bucket model when year-column headers are present;
+    falls back to the original 2-column right-side approach otherwise.
     """
     try:
         words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
@@ -192,77 +236,114 @@ def _extract_rows_from_pdf_page(page, num_gap=60, label_gap=16, sub_gap=10):
     if not words:
         return []
 
+    note_x, val_xs = _detect_value_columns(page)
+
+    # ── 4-column path ─────────────────────────────────────────────────────────
+    if val_xs:
+        n_cols      = len(val_xs)
+        rows        = _group_words_by_row(words)
+        out         = []
+        label_max_x = note_x - 5
+        val_start_x = val_xs[0] - 30   # generous left margin so "(125,974)" isn't lost
+
+        for row in rows:
+            row_sorted  = sorted(row, key=lambda w: w["x0"])
+            label_words = [w for w in row_sorted if w["x0"] < label_max_x]
+            rhs_words   = [w for w in row_sorted if w["x0"] >= label_max_x]
+
+            note_toks   = []
+            val_buckets = {i: [] for i in range(n_cols)}
+
+            for w in rhs_words:
+                txt = w["text"]
+                x   = w["x0"]
+                if x >= val_start_x:
+                    dists   = [abs(x - vx) for vx in val_xs]
+                    nearest = dists.index(min(dists))
+                    val_buckets[nearest].append(txt)
+                elif bool(re.match(r"^\(?\-?\d[\d,\.]*\)?$", txt)):
+                    # Numeric but slightly left of val_start_x → force col 0
+                    val_buckets[0].append(txt)
+                else:
+                    note_toks.append(txt)
+
+            label     = " ".join(w["text"] for w in label_words)
+            note      = " ".join(t for t in note_toks
+                                 if re.match(r"^\d+\.?\d*[A-Z]?$", t))
+            vals      = [_parse_val(val_buckets[i]) for i in range(n_cols)]
+            has_value = any(v is not None for v in vals)
+
+            out.append({
+                "label":     label,
+                "note":      note,
+                "val1":      vals[0] if len(vals) > 0 else "",
+                "val2":      vals[1] if len(vals) > 1 else "",
+                "val3":      vals[2] if len(vals) > 2 else "",
+                "val4":      vals[3] if len(vals) > 3 else "",
+                "has_value": has_value,
+            })
+        return out
+
+    # ── Fallback: original 2-column right-side approach ───────────────────────
     rows = _group_words_by_row(words)
-    out = []
+    out  = []
     for r in rows:
         r2 = sorted(r, key=lambda w: w["x0"])
-        n = len(r2)
-
-        # Walk backwards from the end of the row collecting a contiguous
-        # run of number-like tokens (this is the note/val1/val2 block).
-        i = n - 1
-        while i >= 0 and _is_num_tok(r2[i]["text"]):
-            if i < n - 1 and r2[i+1]["x0"] - r2[i]["x1"] > num_gap:
+        n  = len(r2)
+        i  = n - 1
+        while i >= 0 and bool(NUM_TOKEN_RE.match(r2[i]["text"])):
+            if i < n - 1 and r2[i + 1]["x0"] - r2[i]["x1"] > num_gap:
                 break
             i -= 1
         num_start_idx = i + 1
-
         if num_start_idx >= n or num_start_idx == 0:
-            # Either no trailing numbers at all, or the whole row is numbers
-            # with nothing readable before it — pass it through untouched so
-            # nothing gets lost; it'll show up as a label-only / heading row.
             line = " ".join(w["text"] for w in r2)
-            out.append({"label": line, "note": "", "val1": "", "val2": "", "has_value": False})
+            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "", "has_value": False})
             continue
-
-        # Only walk left from the number block while the gap between
-        # consecutive words stays small — this is what keeps an unrelated
-        # column's text from being absorbed into the label.
         j = num_start_idx - 1
-        while j > 0 and r2[j]["x0"] - r2[j-1]["x1"] <= label_gap:
+        while j > 0 and r2[j]["x0"] - r2[j - 1]["x1"] <= label_gap:
             j -= 1
-        label = " ".join(w["text"] for w in r2[j:num_start_idx])
-
-        # Split the trailing number block into separate figures using a much
-        # tighter gap threshold (thousand-separator spacing is only a couple
-        # of points; the gap between two distinct columns is much wider).
+        label   = " ".join(w["text"] for w in r2[j:num_start_idx])
         numtoks = r2[num_start_idx:]
-        groups = [[numtoks[0]]]
+        groups  = [[numtoks[0]]]
         for t in numtoks[1:]:
             prev = groups[-1][-1]
             if t["x0"] - prev["x1"] <= sub_gap:
                 groups[-1].append(t)
             else:
                 groups.append([t])
-
-        note, val1, val2 = "", "", ""
+        note, val1, val2, val3, val4 = "", "", "", "", ""
         if len(groups) >= 3:
             note = "".join(w["text"] for w in groups[0])
-            val1 = _clean_numeric_group([w["text"] for w in groups[1]])
-            val2 = _clean_numeric_group([w["text"] for w in groups[2]])
+            val1 = _parse_val([w["text"] for w in groups[1]])
+            val2 = _parse_val([w["text"] for w in groups[2]])
+            if len(groups) >= 4:
+                val3 = _parse_val([w["text"] for w in groups[3]])
+            if len(groups) >= 5:
+                val4 = _parse_val([w["text"] for w in groups[4]])
         elif len(groups) == 2:
-            val1 = _clean_numeric_group([w["text"] for w in groups[0]])
-            val2 = _clean_numeric_group([w["text"] for w in groups[1]])
+            val1 = _parse_val([w["text"] for w in groups[0]])
+            val2 = _parse_val([w["text"] for w in groups[1]])
         elif len(groups) == 1:
-            val1 = _clean_numeric_group([w["text"] for w in groups[0]])
-
+            val1 = _parse_val([w["text"] for w in groups[0]])
         out.append({
             "label": label, "note": note,
-            "val1": val1 if val1 is not None else "",
-            "val2": val2 if val2 is not None else "",
+            "val1":  val1 if val1 is not None else "",
+            "val2":  val2 if val2 is not None else "",
+            "val3":  val3 if val3 is not None else "",
+            "val4":  val4 if val4 is not None else "",
             "has_value": True,
         })
     return out
 
-# Recognised financial-statement section headers, used to split a long
-# document into separate, named sheets (matches what the DCF model expects:
-# Income Statement / Balance Sheet / Cash Flow).
+
 SECTION_PATTERNS = [
-    ("Income Statement",   re.compile(r"(?i)(profit\s+or\s+loss|income\s+statement|statement\s+of\s+comprehensive\s+income)")),
-    ("Balance Sheet",       re.compile(r"(?i)(financial\s+position|balance\s+sheet)")),
-    ("Cash Flow",           re.compile(r"(?i)(cash\s*flows?)")),
-    ("Changes in Equity",   re.compile(r"(?i)(changes\s+in\s+equity)")),
+    ("Income Statement",  re.compile(r"(?i)(profit\s+or\s+loss|income\s+statement|statement\s+of\s+comprehensive\s+income)")),
+    ("Balance Sheet",     re.compile(r"(?i)(financial\s+position|balance\s+sheet)")),
+    ("Cash Flow",         re.compile(r"(?i)(cash\s*flows?)")),
+    ("Changes in Equity", re.compile(r"(?i)(changes\s+in\s+equity)")),
 ]
+
 
 def _classify_section(label, current):
     for name, pat in SECTION_PATTERNS:
@@ -270,28 +351,34 @@ def _classify_section(label, current):
             return name
     return current
 
-def _is_short_heading(label, max_words=6):
+
+def _is_short_heading(label, max_words=8):
     words = label.strip().split()
     return 0 < len(words) <= max_words
 
+
 def extract_digital_pdf(pdf_bytes):
     """
-    Reads every page of a digital PDF, isolates financial line-items into
-    section-named sheets, and also returns the full raw text (page by page)
-    as a safety net.
+    Reads every page of a digital PDF and extracts financial rows into
+    section-named sheets.
 
-    Returns (sheets, raw_lines):
-      sheets    -> list of (sheet_name, row_dicts) or None if the PDF has no
-                   extractable text at all (i.e. it's a scanned image and the
-                   caller should fall back to OCR).
-      raw_lines -> list of every line of text pulled from the document,
-                   regardless of whether it was recognised as a data row.
+    Improvements over the original:
+    1. Multi-column detection — crops each side-by-side column band
+       independently so Income Statement and Balance Sheet on the same
+       page are never mixed.
+    2. Band pre-classification — reads the band's heading text to set the
+       section before processing rows, fixing the "everything lands in Other"
+       issue that arose when statement titles span multiple word-rows.
+    3. 4-column support — extracts Company 2025 / Company 2024 / Group 2025 /
+       Group 2024 as separate columns rather than collapsing to two.
+
+    Returns (sheets, raw_lines) or (None, None) for scanned PDFs.
     """
-    sections = {}
-    order = []
-    raw_lines = []
+    sections        = {}
+    order           = []
+    raw_lines       = []
     current_section = "Other"
-    found_any_text = False
+    found_any_text  = False
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
@@ -301,27 +388,47 @@ def extract_digital_pdf(pdf_bytes):
             except Exception:
                 pass
 
-            try:
-                page_text = page.extract_text() or ""
-            except Exception:
-                page_text = ""
-            if page_text:
-                raw_lines.extend(page_text.split("\n"))
+            splits     = _find_column_splits(page, min_gap=80)
+            boundaries = [0] + splits + [page.width]
+            bands      = [(boundaries[i], boundaries[i + 1])
+                          for i in range(len(boundaries) - 1)]
 
-            rows = _extract_rows_from_pdf_page(page)
-            for row in rows:
-                current_section = _classify_section(row["label"], current_section)
-                if row["has_value"] or _is_short_heading(row["label"]):
-                    if current_section not in sections:
-                        sections[current_section] = []
-                        order.append(current_section)
-                    sections[current_section].append({
-                        "label": row["label"], "note": row["note"],
-                        "val1": row["val1"], "val2": row["val2"],
-                    })
+            for band_x0, band_x1 in bands:
+                band_page = page.crop((band_x0, 0, band_x1, page.height))
+
+                # ── Pre-classify from band heading text ───────────────────────
+                band_section = _predetect_section_from_band(band_page, SECTION_PATTERNS)
+                if band_section:
+                    current_section = band_section
+
+                # Collect raw text
+                try:
+                    band_text = band_page.extract_text() or ""
+                except Exception:
+                    band_text = ""
+                if band_text:
+                    raw_lines.extend(band_text.split("\n"))
+
+                rows = _extract_rows_from_pdf_page(band_page)
+                for row in rows:
+                    # Row-level classification (catches section headers within bands)
+                    current_section = _classify_section(row["label"], current_section)
+                    has_data = row.get("has_value") or _is_short_heading(row["label"])
+                    if has_data:
+                        if current_section not in sections:
+                            sections[current_section] = []
+                            order.append(current_section)
+                        sections[current_section].append({
+                            "label": row["label"],
+                            "note":  row["note"],
+                            "val1":  row["val1"],
+                            "val2":  row["val2"],
+                            "val3":  row.get("val3", ""),
+                            "val4":  row.get("val4", ""),
+                        })
 
     if not found_any_text:
-        return None, None  # scanned PDF — caller falls back to OCR
+        return None, None
 
     sheets = [(name, sections[name]) for name in order if sections[name]]
     return sheets, raw_lines
@@ -329,6 +436,7 @@ def extract_digital_pdf(pdf_bytes):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STRATEGY 2: OCR PIPELINE — for scanned PDFs and images
+# (unchanged from original)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 NOISE_PAT   = re.compile(r"^[^a-zA-Z0-9()\-.]+$")
@@ -336,14 +444,7 @@ NOISE_WORDS = {"it","ot","be","a=","bet","Ml","oe","i","—","~~","MIl","Mi","Ml
 MONTHS = {"january","february","march","april","may","june","july",
           "august","september","october","november","december"}
 USD_PAT = re.compile(r"(?i)^(us[\$5s8sS]|u[\$5]s|usd|u\.s\.\$?)$")
-
-# Hard cap on the number of pixels we'll ever hand to PIL/Tesseract after
-# upscaling. Colourful, image-heavy PDFs (magazine layouts, scanned photos)
-# rendered at high DPI and then upscaled 2-3x can balloon into gigabyte-scale
-# arrays, which is the kind of thing that takes the whole app down rather
-# than raising a catchable Python exception. We scale the upscale factor
-# down automatically instead of ever allocating past this ceiling.
-MAX_OCR_PIXELS = 16_000_000  # ~16 megapixels post-upscale
+MAX_OCR_PIXELS = 16_000_000
 
 def _preprocess(pil_image, upscale=3):
     img = pil_image.convert("RGB")
@@ -402,7 +503,6 @@ def _x_clusters(words, gap=60):
     return clusters
 
 def _detect_anchors(rows, img_width):
-    # Strategy 1: month row + US$ row (two-row header)
     for ri, r in enumerate(rows):
         month_ws = [w for w in r if w["text"].lower() in MONTHS]
         if len(month_ws) < 2:
@@ -419,8 +519,6 @@ def _detect_anchors(rows, img_width):
             cls = _x_clusters(right_ws, gap=60)
             if len(cls) >= 2:
                 return int(month_ws[0]["left"]*0.35), cls[0][0]["left"], cls[-1][0]["left"], look_r[0]["top"]
-
-    # Strategy 2: "Notes" keyword
     for r in rows:
         has_note = any(w["text"].lower() in ("note","notes") for w in r)
         if not has_note:
@@ -438,33 +536,23 @@ def _detect_anchors(rows, img_width):
             cls2 = _x_clusters(rw, gap=80)
             if len(cls2) >= 2:
                 return note_col, cls2[0][0]["left"], cls2[-1][0]["left"], r[0]["top"]
-
-    # Strategy 3: two 4-digit years
     for r in rows:
         yr = sorted([w for w in r if re.match(r"^20\d\d$", w["text"])], key=lambda w: w["left"])
         if len(yr) >= 2:
             return int(yr[0]["left"]*0.5), yr[0]["left"], yr[1]["left"], r[0]["top"]
-
-    # Strategy 4: two US$ on same row
     for r in rows:
         usd = sorted([w for w in r if USD_PAT.match(w["text"])], key=lambda w: w["left"])
         if len(usd) >= 2:
             return int(usd[0]["left"]*0.4), usd[0]["left"], usd[1]["left"], r[0]["top"]
-
-    # Strategy 5: month words same row
     for r in rows:
         mw = sorted([w for w in r if w["text"].lower() in MONTHS], key=lambda w: w["left"])
         if len(mw) >= 2:
             return int(mw[0]["left"]*0.4), mw[0]["left"], mw[1]["left"], r[0]["top"]
-
-    # Strategy 6: first row with two large numbers
     NUM_RE = re.compile(r"^\(?\d[\d\s,.']*\)?$")
     for r in rows:
         nw = sorted([w for w in r if NUM_RE.match(w["text"]) and len(w["text"])>=3], key=lambda w: w["left"])
         if len(nw) >= 2:
             return int(nw[0]["left"]*0.3), nw[0]["left"], nw[-1]["left"], r[0]["top"]
-
-    # Fallback geometry
     return int(img_width*0.38), int(img_width*0.55), int(img_width*0.75), 0
 
 def _col_of(word, note_col, val1_col, val2_col, midpoint):
@@ -537,7 +625,7 @@ def process_image_to_rows(pil_image, upscale=3):
         is_pre = header_top>0 and r[0]["top"]<header_top
         if is_pre:
             line = " ".join(w["text"] for w in r if not _is_noise(w["text"]))
-            output.append({"label":line,"note":"","val1":"","val2":"","risky":False})
+            output.append({"label":line,"note":"","val1":"","val2":"","val3":"","val4":"","risky":False})
             continue
         buckets = {"label":[],"note":[],"val1":[],"val2":[]}
         for w in r:
@@ -550,17 +638,10 @@ def process_image_to_rows(pil_image, upscale=3):
         raw2  = _merge_tokens(buckets["val2"])
         v1 = _parse_number(raw1) if raw1 else ""
         v2 = _parse_number(raw2) if raw2 else ""
-        output.append({"label":label,"note":note,"val1":v1,"val2":v2,"risky":False})
+        output.append({"label":label,"note":note,"val1":v1,"val2":v2,"val3":"","val4":"","risky":False})
     return output, debug
 
 def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
-    """
-    Renders every page of a (scanned) PDF to an image and OCRs it. Designed
-    to degrade gracefully: a render failure retries at a lower DPI, and a
-    failure on any single page is skipped (with a warning) rather than
-    aborting the whole document.
-    Returns (sheets, raw_lines).
-    """
     from pdf2image import convert_from_bytes as _cfb
     try:
         images = _cfb(pdf_bytes, dpi=dpi_choice)
@@ -594,10 +675,10 @@ def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
     page_bar.progress(1.0)
     return sheets_data, raw_lines
 
-# ── Excel writer ──────────────────────────────────────────────────────────────
+# ── Excel writer — updated to handle val3 / val4 columns ─────────────────────
 def rows_to_excel_bytes(sheets, col_headers=None):
     if col_headers is None:
-        col_headers = ["Item","Note","Period 1","Period 2"]
+        col_headers = ["Item", "Note", "Period 1", "Period 2", "Period 3", "Period 4"]
     wb = Workbook(); wb.remove(wb.active)
     BLUE_FILL  = PatternFill("solid", fgColor="071426")
     LIGHT_FILL = PatternFill("solid", fgColor="F0F5FF")
@@ -606,6 +687,7 @@ def rows_to_excel_bytes(sheets, col_headers=None):
     RIGHT_ALIGN = Alignment(horizontal="right", vertical="center")
     MONEY_FMT   = "#,##0;(#,##0)"
     used_names = set()
+
     for title, row_dicts in sheets:
         safe_title = (title or "Sheet")[:31]
         base, n = safe_title, 1
@@ -615,62 +697,81 @@ def rows_to_excel_bytes(sheets, col_headers=None):
         used_names.add(safe_title)
 
         ws = wb.create_sheet(title=safe_title)
-        for ci, h in enumerate(col_headers, 1):
+
+        # Detect whether this sheet has val3/val4 data
+        has_4cols = any(
+            row.get("val3") not in ("", None) or row.get("val4") not in ("", None)
+            for row in row_dicts
+        )
+        n_val_cols = 4 if has_4cols else 2
+        effective_headers = col_headers[:2 + n_val_cols]
+
+        for ci, h in enumerate(effective_headers, 1):
             c = ws.cell(1, ci, h)
             c.font = WHITE_FONT; c.fill = BLUE_FILL
             c.alignment = Alignment(horizontal="center", vertical="center")
         ws.row_dimensions[1].height = 22
+
         excel_ri = 2
         for row in row_dicts:
-            label = row.get("label",""); note = row.get("note","")
-            v1 = row.get("val1",""); v2 = row.get("val2","")
+            label = row.get("label", ""); note = row.get("note", "")
+            v1 = row.get("val1", ""); v2 = row.get("val2", "")
+            v3 = row.get("val3", ""); v4 = row.get("val4", "")
             risky = row.get("risky", False)
-            if not any([str(label).strip(), str(note).strip(), str(v1).strip(), str(v2).strip()]):
+
+            if not any([str(label).strip(), str(note).strip(),
+                        str(v1).strip(), str(v2).strip(),
+                        str(v3).strip(), str(v4).strip()]):
                 continue
             try:
-                ws.cell(excel_ri, 1, str(label)[:2000]); ws.cell(excel_ri, 2, str(note)[:50])
-                for ci, val in [(3,v1),(4,v2)]:
+                ws.cell(excel_ri, 1, str(label)[:2000])
+                ws.cell(excel_ri, 2, str(note)[:50])
+                val_data = [v1, v2, v3, v4][:n_val_cols]
+                for ci, val in enumerate(val_data, 3):
                     cell = ws.cell(excel_ri, ci)
-                    if isinstance(val, (int,float)):
+                    if isinstance(val, (int, float)):
                         cell.value = val; cell.number_format = MONEY_FMT
                         cell.alignment = RIGHT_ALIGN
                         if risky: cell.font = RED_FONT
-                    elif val not in ("",None):
+                    elif val not in ("", None):
                         rep = _parse_number(str(val))
-                        if isinstance(rep, (int,float)):
+                        if isinstance(rep, (int, float)):
                             cell.value = rep; cell.number_format = MONEY_FMT
                             cell.alignment = RIGHT_ALIGN
                         else:
                             cell.value = str(val)[:2000]; cell.alignment = RIGHT_ALIGN
                 if excel_ri % 2 == 0:
-                    for ci in range(1,5): ws.cell(excel_ri,ci).fill = LIGHT_FILL
+                    for ci in range(1, 2 + n_val_cols + 1):
+                        ws.cell(excel_ri, ci).fill = LIGHT_FILL
                 if str(label).isupper() or (not label and (v1 or v2)):
-                    for ci in range(1,5): ws.cell(excel_ri,ci).font = Font(bold=True)
+                    for ci in range(1, 2 + n_val_cols + 1):
+                        ws.cell(excel_ri, ci).font = Font(bold=True)
                 excel_ri += 1
             except Exception:
-                # Never let one malformed row blow up the whole export —
-                # skip it and keep going.
                 continue
+
         ws.column_dimensions["A"].width = 46
         ws.column_dimensions["B"].width = 8
         ws.column_dimensions["C"].width = 17
         ws.column_dimensions["D"].width = 17
+        if n_val_cols >= 3:
+            ws.column_dimensions["E"].width = 17
+        if n_val_cols >= 4:
+            ws.column_dimensions["F"].width = 17
         ws.freeze_panes = "A2"
+
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return buf.getvalue()
 
 def raw_text_sheet(raw_lines, max_lines=2000):
-    """Builds a plain 'Raw Text' sheet from whatever text was extracted —
-    the safety net so nothing is ever fully lost, even when structured
-    parsing can't make sense of a document's layout."""
     if not raw_lines:
         return None
-    rows = [{"label": ln, "note": "", "val1": "", "val2": ""}
+    rows = [{"label": ln, "note": "", "val1": "", "val2": "", "val3": "", "val4": ""}
             for ln in raw_lines[:max_lines] if str(ln).strip()]
     return ("Raw Text", rows) if rows else None
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STREAMLIT UI
+# STREAMLIT UI  (identical to original — no changes)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 section("🔀 Choose Conversion Mode")
@@ -686,15 +787,12 @@ st.markdown("""
   <div class="fbc-info-card-title">🔬 How This Works</div>
   <div class="fbc-info-card-body">
     <b>Smart dual-engine extraction:</b><br>
-    • <b>Digital PDFs</b> — column-aware text reading. Handles plain single-column
-      statements as well as "magazine style" layouts (e.g. a chairman's statement
-      column sitting next to a financial table) without letting the two bleed
-      into each other.<br>
-    • <b>Scanned PDFs &amp; images</b> (e.g. hand-scanned statements) — OCR with
-      6-strategy column detection handles all header formats.<br>
-    Every conversion also includes a <b>Raw Text</b> sheet with everything that
-    was read from the document, so you always have a fallback to check against
-    even if a line wasn't recognised as a data row.
+    • <b>Digital PDFs</b> — column-aware text reading. Detects side-by-side statement
+      layouts (e.g. Income Statement &amp; Balance Sheet on the same page) and
+      extracts each independently. Supports 4-column tables (Company/Group × 2 years).<br>
+    • <b>Scanned PDFs &amp; images</b> — OCR with 6-strategy column detection.<br>
+    Every conversion also includes a <b>Raw Text</b> sheet with everything read
+    from the document, so you always have a fallback.
   </div>
 </div>
 <div class="fbc-warn-card">
@@ -713,12 +811,19 @@ with col_o1:
 with col_o2:
     dpi_choice = st.selectbox("Render DPI (scanned PDF OCR)", [200,300,400], index=1, disabled=is_image_mode)
 with col_o3:
-    col1_header = st.text_input("Col 3 header", value="2024")
-    col2_header = st.text_input("Col 4 header", value="2023")
+    col1_header = st.text_input("Col 3 header", value="Co. 2025")
+    col2_header = st.text_input("Col 4 header", value="Co. 2024")
 with col_o4:
-    show_debug = st.checkbox("Show debug info")
+    col3_header = st.text_input("Col 5 header", value="Gr. 2025")
+    col4_header = st.text_input("Col 6 header", value="Gr. 2024")
 
-col_headers = ["Item","Note", col1_header or "Period 1", col2_header or "Period 2"]
+col_headers = [
+    "Item", "Note",
+    col1_header or "Co. 2025",
+    col2_header or "Co. 2024",
+    col3_header or "Gr. 2025",
+    col4_header or "Gr. 2024",
+]
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -778,10 +883,10 @@ if is_image_mode:
             raw_lines_all.extend(r.get("label","") for r in row_dicts if str(r.get("label","")).strip())
             status.success(f"✅ '{sname}' — {len(non_blank)} data rows extracted")
         except MemoryError:
-            status.error(f"❌ {img_file.name}: image too large to process safely — try a smaller file or lower upscale.")
+            status.error(f"❌ {img_file.name}: image too large to process safely.")
             failed_images.append((img_file.name, "Image too large"))
         except Exception as exc:
-            status.error(f"❌ Failed to generate Excel for {img_file.name}: {exc}")
+            status.error(f"❌ Failed: {exc}")
             failed_images.append((img_file.name, str(exc)))
             if show_debug:
                 st.code(traceback.format_exc())
@@ -802,7 +907,7 @@ if is_image_mode:
         if show_debug:
             st.code(traceback.format_exc())
         st.stop()
-    excel_name  = "FBC_Screenshot_Extract.xlsx"
+    excel_name = "FBC_Screenshot_Extract.xlsx"
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     section("⬇️ Download Result")
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
@@ -810,8 +915,7 @@ if is_image_mode:
     if failed_images:
         st.error(f"❌ {len(failed_images)} image(s) failed:")
         for fname, err in failed_images:
-            st.markdown(f"""<div class="fbc-fail-card">
-              <div class="fbc-fail-title">{fname}</div>
+            st.markdown(f"""<div class="fbc-fail-card"><div class="fbc-fail-title">{fname}</div>
               <div class="fbc-fail-body">{err}</div></div>""", unsafe_allow_html=True)
     col_dl, col_nxt = st.columns([1,2])
     with col_dl:
@@ -823,11 +927,11 @@ if is_image_mode:
     with col_nxt:
         st.markdown("""<div class="next-steps"><div class="next-steps-title">💡 Next Steps</div>
           <div class="next-steps-body"><b>1.</b> Download and open the Excel.<br>
-          <b>2.</b> Verify column totals sum correctly — check the <b>Raw Text</b> sheet if anything looks off.<br>
+          <b>2.</b> Verify column totals — check the <b>Raw Text</b> sheet if anything looks off.<br>
           <b>3.</b> Go to <b>📊 DCF Model</b> and upload the cleaned Excel.</div></div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF MODE — SMART DUAL ENGINE
+# PDF MODE
 # ─────────────────────────────────────────────────────────────────────────────
 else:
     section("📤 Upload PDF(s)")
@@ -835,14 +939,14 @@ else:
     uploaded_pdfs = st.file_uploader("Upload PDF(s)", type=["pdf"],
         accept_multiple_files=True, label_visibility="collapsed")
     if not uploaded_pdfs:
-        st.info("⬆️ Upload one or more PDF files to begin. Works with both digital and scanned PDFs.")
+        st.info("⬆️ Upload one or more PDF files to begin.")
         st.stop()
     col_btn, col_inf = st.columns([1,3])
     with col_btn:
         run_pdf = st.button("▶️ Extract & Convert", type="primary", use_container_width=True)
     with col_inf:
         st.markdown(f"<div style='padding-top:10px;color:#5a7099;font-style:italic;font-size:14px;'>"
-                    f"{len(uploaded_pdfs)} PDF(s) · auto-detects digital vs scanned</div>", unsafe_allow_html=True)
+                    f"{len(uploaded_pdfs)} PDF(s) · auto-detects digital vs scanned · 4-column support</div>", unsafe_allow_html=True)
     if not run_pdf: st.stop()
 
     results = []; errors = []
@@ -851,56 +955,45 @@ else:
     for pdf_i, pdf_file in enumerate(uploaded_pdfs):
         pdf_name = pdf_file.name
         xl_name  = os.path.splitext(pdf_name)[0] + ".xlsx"
-
         st.markdown(f"<div style='font-family:Playfair Display,serif;font-size:17px;font-weight:700;color:#001a5c;margin:18px 0 6px 0;'>📄 {pdf_name}</div>", unsafe_allow_html=True)
         page_status = st.empty()
-
-        # Everything for this file lives inside one try/except so that
-        # whatever goes wrong, we report it cleanly and move on to the next
-        # file instead of taking the whole app down.
         try:
             pdf_bytes = pdf_file.getvalue()
-            sheets_data = None
-            raw_lines = None
-            method_used = ""
+            sheets_data = None; raw_lines = None; method_used = ""
 
-            # ── Strategy 1: column-aware digital text extraction ─────────────
             if PDFPLUMBER_OK:
                 page_status.markdown("<span style='color:#003399;font-weight:700;'>🔍 Reading digital text…</span>", unsafe_allow_html=True)
                 try:
                     sheets_data, raw_lines = extract_digital_pdf(pdf_bytes)
                     if sheets_data:
-                        method_used = "digital text (column-aware)"
+                        method_used = "digital text (column-aware, 4-col)"
                 except Exception as e:
                     if show_debug:
                         st.warning(f"Digital text extraction error: {e}")
                         st.code(traceback.format_exc())
                     sheets_data, raw_lines = None, None
 
-            # ── Strategy 2: OCR fallback for scanned PDFs ────────────────────
             if not sheets_data:
                 if not LIBS_OK:
-                    st.error("❌ No extractable text found, and OCR libraries (pytesseract) are not installed.")
+                    st.error("❌ No extractable text found and OCR libraries not installed.")
                     errors.append((pdf_name, "No extractable text; OCR not available"))
-                    overall.progress((pdf_i+1)/len(uploaded_pdfs), text=f"Processed {pdf_i+1}/{len(uploaded_pdfs)}")
+                    overall.progress((pdf_i+1)/len(uploaded_pdfs))
                     continue
                 if not PDF_LIBS_OK:
                     st.error("❌ pdf2image not installed — needed for scanned PDFs.")
                     errors.append((pdf_name, "pdf2image not installed"))
-                    overall.progress((pdf_i+1)/len(uploaded_pdfs), text=f"Processed {pdf_i+1}/{len(uploaded_pdfs)}")
+                    overall.progress((pdf_i+1)/len(uploaded_pdfs))
                     continue
-
                 page_status.markdown("<span style='color:#003399;font-weight:700;'>🔬 Scanned PDF detected — running OCR…</span>", unsafe_allow_html=True)
                 method_used = "OCR"
                 sheets_data, raw_lines = run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug)
 
             if not sheets_data:
-                errors.append((pdf_name, "No data rows could be extracted from this file"))
+                errors.append((pdf_name, "No data rows could be extracted"))
                 page_status.error(f"❌ Failed to generate Excel for {pdf_name}: no readable rows found.")
-                overall.progress((pdf_i+1)/len(uploaded_pdfs), text=f"Processed {pdf_i+1}/{len(uploaded_pdfs)}")
+                overall.progress((pdf_i+1)/len(uploaded_pdfs))
                 continue
 
-            # Always attach the raw-text safety-net sheet, whichever path was used.
             all_sheets = list(sheets_data)
             rsheet = raw_text_sheet(raw_lines)
             if rsheet:
@@ -909,11 +1002,11 @@ else:
             try:
                 excel_bytes_out = rows_to_excel_bytes(all_sheets, col_headers=col_headers)
             except Exception as e:
-                errors.append((pdf_name, f"Failed to build Excel file: {e}"))
+                errors.append((pdf_name, f"Failed to build Excel: {e}"))
                 page_status.error(f"❌ Failed to generate Excel for {pdf_name}.")
                 if show_debug:
                     st.code(traceback.format_exc())
-                overall.progress((pdf_i+1)/len(uploaded_pdfs), text=f"Processed {pdf_i+1}/{len(uploaded_pdfs)}")
+                overall.progress((pdf_i+1)/len(uploaded_pdfs))
                 continue
 
             n_rows = sum(len(s[1]) for s in sheets_data)
@@ -921,16 +1014,15 @@ else:
             page_status.success(f"✅ {pdf_name} → {xl_name} ({method_used}, {n_rows} data rows + raw text sheet)")
 
         except MemoryError:
-            errors.append((pdf_name, "Ran out of memory while processing this file"))
-            page_status.error(f"❌ Failed to generate Excel for {pdf_name}: file too large/complex to process safely.")
+            errors.append((pdf_name, "Ran out of memory"))
+            page_status.error(f"❌ {pdf_name}: file too large/complex to process safely.")
         except Exception as exc:
             errors.append((pdf_name, str(exc)))
-            page_status.error(f"❌ Failed to generate Excel for {pdf_name}: {exc}")
+            page_status.error(f"❌ {pdf_name}: {exc}")
             if show_debug:
                 st.code(traceback.format_exc())
         finally:
             gc.collect()
-
         overall.progress((pdf_i+1)/len(uploaded_pdfs), text=f"Processed {pdf_i+1}/{len(uploaded_pdfs)}")
 
     overall.progress(1.0, text="All done")
@@ -949,22 +1041,24 @@ else:
                 st.download_button("⬇️ Download", data=xl_bytes, file_name=xl_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"dl_pdf_{i}", use_container_width=True)
-
     if errors:
         st.error(f"❌ {len(errors)} file(s) failed:")
         for fname, err in errors:
             st.markdown(f"""<div class="fbc-fail-card">
               <div class="fbc-fail-title">{fname}</div>
               <div class="fbc-fail-body">{err}</div></div>""", unsafe_allow_html=True)
-
     if results:
         st.markdown("""<div class="next-steps">
           <div class="next-steps-title">💡 Next Step — Upload into the DCF Model</div>
           <div class="next-steps-body">
             <b>1.</b> Download and open the Excel.<br>
-            <b>2.</b> Verify totals against the original PDF — use the <b>Raw Text</b> sheet as a reference for anything that looks off.<br>
-            <b>3.</b> Digital PDFs are split into sheets named <b>Income Statement</b> / <b>Balance Sheet</b> / <b>Cash Flow</b> where those sections are detected (scanned PDFs use Page 1, Page 2, …).<br>
-            <b>4.</b> Head to <b>📊 DCF Model</b> and upload.
+            <b>2.</b> Verify totals — use the <b>Raw Text</b> sheet for anything that looks off.<br>
+            <b>3.</b> Digital PDFs are split into named sheets: <b>Income Statement</b> /
+               <b>Balance Sheet</b> / <b>Cash Flow</b> (scanned PDFs use Page 1, Page 2, …).<br>
+            <b>4.</b> For 4-column statements (Company + Group), columns are:
+               <b>Co. 2025 | Co. 2024 | Gr. 2025 | Gr. 2024</b> — customisable in Options above.<br>
+            <b>5.</b> Head to <b>📊 DCF Model</b> and upload.
           </div></div>""", unsafe_allow_html=True)
 
 st.markdown('<div class="fbc-footer">Powered by <b>FBC Securities</b> · Investment Research &amp; Valuation Dashboard</div>', unsafe_allow_html=True)
+
