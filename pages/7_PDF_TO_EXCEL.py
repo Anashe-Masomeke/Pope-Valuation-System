@@ -445,13 +445,18 @@ def extract_digital_pdf(pdf_bytes):
 # STRATEGY 2: OCR PIPELINE — for scanned PDFs and images
 # (unchanged from original)
 # ═══════════════════════════════════════════════════════════════════════════════
+import pytesseract
+from PIL import Image, ImageFilter, ImageEnhance
 
-NOISE_PAT   = re.compile(r"^[^a-zA-Z0-9()\-.]+$")
-NOISE_WORDS = {"it","ot","be","a=","bet","Ml","oe","i","—","~~","MIl","Mi","Ml"}
-MONTHS = {"january","february","march","april","may","june","july",
-          "august","september","october","november","december"}
-USD_PAT = re.compile(r"(?i)^(us[\$5s8sS]|u[\$5]s|usd|u\.s\.\$?)$")
 MAX_OCR_PIXELS = 16_000_000
+NOISE_PAT = re.compile(r"^[^a-zA-Z0-9()\-.]+$")
+NOISE_WORDS = {"it", "ot", "be", "a=", "bet", "Ml", "oe", "i", "—", "~~", "MIl", "Mi", "Ml"}
+NOTE_RE = re.compile(r"^\d{1,2}(\.\d{1,2})?[A-Za-z]?$")
+
+
+def _is_noise(t):
+    return bool(NOISE_PAT.match(t)) or t in NOISE_WORDS
+
 
 def _preprocess(pil_image, upscale=3):
     img = pil_image.convert("RGB")
@@ -466,36 +471,175 @@ def _preprocess(pil_image, upscale=3):
     img = img.filter(ImageFilter.SHARPEN)
     return img, eff_upscale
 
+
 def _ocr_words(preprocessed_img, upscale):
     data = pytesseract.image_to_data(preprocessed_img, output_type=pytesseract.Output.DICT)
     words = []
     for i in range(len(data["text"])):
         txt = data["text"][i].strip()
-        if not txt:
+        if not txt or _is_noise(txt):
             continue
         words.append({
-            "text":  txt,
-            "left":  data["left"][i]  // upscale,
-            "top":   data["top"][i]   // upscale,
+            "text": txt,
+            "left": data["left"][i] // upscale,
+            "top": data["top"][i] // upscale,
             "width": data["width"][i] // upscale,
             "right": (data["left"][i] + data["width"][i]) // upscale,
         })
     return words
 
+
 def _group_rows(words, tol=6):
     if not words:
         return []
     ws = sorted(words, key=lambda w: w["top"])
-    rows = [[ws[0]]]; cur_top = ws[0]["top"]
+    rows = [[ws[0]]]
+    cur_top = ws[0]["top"]
     for w in ws[1:]:
         if abs(w["top"] - cur_top) <= tol:
             rows[-1].append(w)
             cur_top = sum(x["top"] for x in rows[-1]) / len(rows[-1])
         else:
-            rows.append([w]); cur_top = w["top"]
+            rows.append([w])
+            cur_top = w["top"]
     for r in rows:
         r.sort(key=lambda w: w["left"])
     return rows
+
+
+def _find_column_splits(words, min_gap=100):
+    """Detect wide horizontal gaps that divide the image into side-by-side
+    statements (mirrors the digital-PDF band-splitting logic)."""
+    if not words:
+        return []
+    xs = sorted(set(w["left"] for w in words))
+    splits = []
+    for i in range(len(xs) - 1):
+        if xs[i + 1] - xs[i] >= min_gap:
+            splits.append((xs[i] + xs[i + 1]) // 2)
+    return splits
+
+
+def _detect_value_columns(rows):
+    """
+    Find the value-column x positions by locating a row with 2+ four-digit
+    years (e.g. "2025 2024 2025 2024"). Returns (note_x, [val_x...]) or
+    (None, []) if no such header row is found within the first ~25 rows.
+    """
+    for row in rows[:25]:
+        yr = [w for w in row if re.match(r"^20\d\d$", w["text"])]
+        if len(yr) >= 2:
+            yr.sort(key=lambda w: w["left"])
+            note_ws = [w for w in row if w["text"].lower() in ("note", "notes")]
+            note_x = note_ws[0]["left"] if note_ws else (yr[0]["left"] - 80)
+            return note_x, [w["left"] for w in yr]
+    return None, []
+
+
+def _merge_tokens(tokens):
+    joined = " ".join(tokens)
+    joined = re.sub(r"\$(?=\d)", "8", joined)
+    joined = re.sub(r"(?<=\d)[Oo](?=\d)", "0", joined)
+    joined = re.sub(r"[~:=`']+", "", joined)
+    joined = joined.strip()
+    # Strip stray OCR noise around a parenthesised negative, e.g.
+    # "_(8,455,071)" -> "(8,455,071)"
+    m = re.match(r"^[^\d(]*(\(?-?[\d,\.\s]+\)?)[^\d)]*$", joined)
+    if m:
+        joined = m.group(1).strip()
+    return joined
+
+
+def _parse_number(raw):
+    s = raw.strip()
+    if not s or s in ("-", "\u2013", "\u2014", ""):
+        return None
+    negative = s.startswith("(") and s.endswith(")")
+    if negative:
+        s = s[1:-1].strip()
+    s_nospace = s.replace(" ", "")
+    has_comma = "," in s_nospace
+    has_dot = "." in s_nospace
+    if not has_comma and not has_dot:
+        cleaned = s_nospace
+    elif has_comma and not has_dot:
+        cleaned = s_nospace.replace(",", "")
+    elif has_dot and not has_comma:
+        parts = s_nospace.split(".")
+        cleaned = s_nospace.replace(".", "") if (len(parts) > 2 or (len(parts) == 2 and len(parts[-1]) == 3)) else s_nospace
+    else:
+        cleaned = s_nospace.replace(",", "")
+    if not re.match(r"^\d+(\.\d+)?$", cleaned):
+        return raw
+    try:
+        fval = float(cleaned)
+        result = int(fval) if fval == int(fval) else fval
+        return -result if negative else result
+    except Exception:
+        return raw
+
+
+def _extract_rows_4col(rows, note_x, val_xs, header_top):
+    """
+    OCR equivalent of the digital-PDF _extract_rows_4col: bucket each row's
+    words into label / note / up to 4 value columns using x-position only,
+    so note numbers (12, 16, 18...) never get glued onto an adjacent value.
+    """
+    n_cols = len(val_xs)
+    label_max_x = note_x - 10
+    note_max_x = val_xs[0] - 25
+    out = []
+
+    for row in rows:
+        is_pre_header = header_top > 0 and row[0]["top"] < header_top - 3
+        if is_pre_header:
+            line = " ".join(w["text"] for w in row)
+            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "", "has_value": False})
+            continue
+
+        row_sorted = sorted(row, key=lambda w: w["left"])
+        label_words = [w for w in row_sorted if w["left"] < label_max_x]
+        rhs_words = [w for w in row_sorted if w["left"] >= label_max_x]
+
+        note_tok = ""
+        value_words = []
+        for w in rhs_words:
+            txt = w["text"]
+            x = w["left"]
+            if x < note_max_x and NOTE_RE.match(txt) and not note_tok:
+                note_tok = txt
+            else:
+                value_words.append(w)
+
+        val_buckets = {i: [] for i in range(n_cols)}
+        for w in value_words:
+            dists = [abs(w["left"] - vx) for vx in val_xs]
+            nearest = dists.index(min(dists))
+            val_buckets[nearest].append(w["text"])
+
+        label = " ".join(w["text"] for w in label_words)
+        raw_vals = [_merge_tokens(val_buckets[i]) for i in range(n_cols)]
+        vals = [_parse_number(r) if r else "" for r in raw_vals]
+        has_value = any(isinstance(v, (int, float)) for v in vals)
+
+        out.append({
+            "label": label,
+            "note": note_tok,
+            "val1": vals[0] if len(vals) > 0 else "",
+            "val2": vals[1] if len(vals) > 1 else "",
+            "val3": vals[2] if len(vals) > 2 else "",
+            "val4": vals[3] if len(vals) > 3 else "",
+            "has_value": has_value,
+        })
+    return out
+
+
+# ── 2-column fallback (legacy anchor-based detection, used when no year
+#    header row is found in a band) ───────────────────────────────────────
+MONTHS = {"january", "february", "march", "april", "may", "june", "july",
+          "august", "september", "october", "november", "december"}
+USD_PAT = re.compile(r"(?i)^(us[\$5s8sS]|u[\$5]s|usd|u\.s\.\$?)$")
+
 
 def _x_clusters(words, gap=60):
     if not words:
@@ -509,7 +653,8 @@ def _x_clusters(words, gap=60):
             clusters.append([w])
     return clusters
 
-def _detect_anchors(rows, img_width):
+
+def _detect_anchors_2col(rows, img_width):
     for ri, r in enumerate(rows):
         month_ws = [w for w in r if w["text"].lower() in MONTHS]
         if len(month_ws) < 2:
@@ -517,55 +662,52 @@ def _detect_anchors(rows, img_width):
         month_ws = sorted(month_ws, key=lambda w: w["left"])
         usd_same = sorted([w for w in r if USD_PAT.match(w["text"])], key=lambda w: w["left"])
         if len(usd_same) >= 2:
-            return int(month_ws[0]["left"]*0.35), usd_same[0]["left"], usd_same[1]["left"], r[0]["top"]
-        for look_r in rows[ri+1:ri+6]:
+            return int(month_ws[0]["left"] * 0.35), usd_same[0]["left"], usd_same[1]["left"], r[0]["top"]
+        for look_r in rows[ri + 1:ri + 6]:
             usd_ws = sorted([w for w in look_r if USD_PAT.match(w["text"])], key=lambda w: w["left"])
             if len(usd_ws) >= 2:
-                return int(month_ws[0]["left"]*0.35), usd_ws[0]["left"], usd_ws[1]["left"], look_r[0]["top"]
+                return int(month_ws[0]["left"] * 0.35), usd_ws[0]["left"], usd_ws[1]["left"], look_r[0]["top"]
             right_ws = [w for w in look_r if w["left"] > month_ws[0]["left"]]
             cls = _x_clusters(right_ws, gap=60)
             if len(cls) >= 2:
-                return int(month_ws[0]["left"]*0.35), cls[0][0]["left"], cls[-1][0]["left"], look_r[0]["top"]
+                return int(month_ws[0]["left"] * 0.35), cls[0][0]["left"], cls[-1][0]["left"], look_r[0]["top"]
     for r in rows:
-        has_note = any(w["text"].lower() in ("note","notes") for w in r)
+        has_note = any(w["text"].lower() in ("note", "notes") for w in r)
         if not has_note:
             continue
-        note_w = next(w for w in r if w["text"].lower() in ("note","notes"))
+        note_w = next(w for w in r if w["text"].lower() in ("note", "notes"))
         note_col = note_w["left"]
-        right_words = sorted([w for w in r if w["left"] > note_col+30], key=lambda w: w["left"])
+        right_words = sorted([w for w in r if w["left"] > note_col + 30], key=lambda w: w["left"])
         clusters = _x_clusters(right_words, gap=80)
         cl = [c[0]["left"] for c in clusters]
         if len(cl) >= 2:
             return note_col, cl[0], cl[-1], r[0]["top"]
         note_row_idx = rows.index(r)
-        for look in rows[note_row_idx+1:note_row_idx+5]:
-            rw = sorted([w for w in look if w["left"] > note_col+30], key=lambda w: w["left"])
+        for look in rows[note_row_idx + 1:note_row_idx + 5]:
+            rw = sorted([w for w in look if w["left"] > note_col + 30], key=lambda w: w["left"])
             cls2 = _x_clusters(rw, gap=80)
             if len(cls2) >= 2:
                 return note_col, cls2[0][0]["left"], cls2[-1][0]["left"], r[0]["top"]
     for r in rows:
-        yr = sorted([w for w in r if re.match(r"^20\d\d$", w["text"])], key=lambda w: w["left"])
-        if len(yr) >= 2:
-            return int(yr[0]["left"]*0.5), yr[0]["left"], yr[1]["left"], r[0]["top"]
-    for r in rows:
         usd = sorted([w for w in r if USD_PAT.match(w["text"])], key=lambda w: w["left"])
         if len(usd) >= 2:
-            return int(usd[0]["left"]*0.4), usd[0]["left"], usd[1]["left"], r[0]["top"]
+            return int(usd[0]["left"] * 0.4), usd[0]["left"], usd[1]["left"], r[0]["top"]
     for r in rows:
         mw = sorted([w for w in r if w["text"].lower() in MONTHS], key=lambda w: w["left"])
         if len(mw) >= 2:
-            return int(mw[0]["left"]*0.4), mw[0]["left"], mw[1]["left"], r[0]["top"]
-    NUM_RE = re.compile(r"^\(?\d[\d\s,.']*\)?$")
+            return int(mw[0]["left"] * 0.4), mw[0]["left"], mw[1]["left"], r[0]["top"]
+    num_re = re.compile(r"^\(?\d[\d\s,.']*\)?$")
     for r in rows:
-        nw = sorted([w for w in r if NUM_RE.match(w["text"]) and len(w["text"])>=3], key=lambda w: w["left"])
+        nw = sorted([w for w in r if num_re.match(w["text"]) and len(w["text"]) >= 3], key=lambda w: w["left"])
         if len(nw) >= 2:
-            return int(nw[0]["left"]*0.3), nw[0]["left"], nw[-1]["left"], r[0]["top"]
-    return int(img_width*0.38), int(img_width*0.55), int(img_width*0.75), 0
+            return int(nw[0]["left"] * 0.3), nw[0]["left"], nw[-1]["left"], r[0]["top"]
+    return int(img_width * 0.38), int(img_width * 0.55), int(img_width * 0.75), 0
 
-def _col_of(word, note_col, val1_col, val2_col, midpoint):
+
+def _col_of_2col(word, note_col, val1_col, val2_col, midpoint):
     left = word["left"]
     text = word["text"]
-    is_number = bool(re.match(r"^\(?\d[\d\s,.']*\)?$", text) and len(text)>=2)
+    is_number = bool(re.match(r"^\(?\d[\d\s,.']*\)?$", text) and len(text) >= 2)
     if val2_col is not None and midpoint is not None and left >= midpoint:
         return "val2"
     if val1_col is not None and left >= val1_col - 15:
@@ -576,77 +718,116 @@ def _col_of(word, note_col, val1_col, val2_col, midpoint):
         return "val1"
     return "label"
 
-def _is_noise(t):
-    return bool(NOISE_PAT.match(t)) or t in NOISE_WORDS
 
 def _clean_note(tokens):
     return " ".join(t for t in tokens if re.match(r"^\d+\.?\d*$", t))
 
-def _merge_tokens(tokens):
-    joined = " ".join(tokens)
-    joined = re.sub(r"\$(?=\d)", "8", joined)
-    joined = re.sub(r"(?<=\d)[Oo](?=\d)", "0", joined)
-    joined = re.sub(r"[~:=`']+", "", joined)
-    return joined.strip()
 
-def _parse_number(raw):
-    s = raw.strip()
-    if not s or s in ("-","—","–",""):
-        return None
-    negative = s.startswith("(") and s.endswith(")")
-    if negative:
-        s = s[1:-1].strip()
-    s_nospace = s.replace(" ","")
-    has_comma = "," in s_nospace
-    has_dot   = "." in s_nospace
-    if not has_comma and not has_dot:
-        cleaned = s_nospace
-    elif has_comma and not has_dot:
-        cleaned = s_nospace.replace(",","")
-    elif has_dot and not has_comma:
-        parts = s_nospace.split(".")
-        cleaned = s_nospace.replace(".","") if (len(parts)>2 or (len(parts)==2 and len(parts[-1])==3)) else s_nospace
-    else:
-        cleaned = s_nospace.replace(",","")
-    if not re.match(r"^\d+(\.\d+)?$", cleaned):
-        return raw
-    try:
-        fval = float(cleaned)
-        result = int(fval) if fval == int(fval) else fval
-        return -result if negative else result
-    except:
-        return raw
-
-def process_image_to_rows(pil_image, upscale=3):
-    img_width = pil_image.width
-    proc, up  = _preprocess(pil_image, upscale)
-    words     = _ocr_words(proc, up)
-    rows      = _group_rows(words, tol=6)
-    note_col, val1_col, val2_col, header_top = _detect_anchors(rows, img_width)
-    midpoint = (val1_col + val2_col)/2 - 5 if (val1_col is not None and val2_col is not None) else None
-    debug = {"note_col":note_col,"val1_col":val1_col,"val2_col":val2_col,
-             "header_top":header_top,"midpoint":midpoint,"img_width":img_width,
-             "upscale_used":up}
-    output = []
+def _extract_rows_2col_fallback(rows, img_width):
+    note_col, val1_col, val2_col, header_top = _detect_anchors_2col(rows, img_width)
+    midpoint = (val1_col + val2_col) / 2 - 5 if (val1_col is not None and val2_col is not None) else None
+    out = []
     for r in rows:
-        is_pre = header_top>0 and r[0]["top"]<header_top
+        is_pre = header_top > 0 and r[0]["top"] < header_top
         if is_pre:
-            line = " ".join(w["text"] for w in r if not _is_noise(w["text"]))
-            output.append({"label":line,"note":"","val1":"","val2":"","val3":"","val4":"","risky":False})
+            line = " ".join(w["text"] for w in r)
+            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "", "has_value": False})
             continue
-        buckets = {"label":[],"note":[],"val1":[],"val2":[]}
+        buckets = {"label": [], "note": [], "val1": [], "val2": []}
         for w in r:
-            if _is_noise(w["text"]): continue
-            col = _col_of(w, note_col, val1_col, val2_col, midpoint)
+            col = _col_of_2col(w, note_col, val1_col, val2_col, midpoint)
             buckets[col].append(w["text"])
         label = " ".join(buckets["label"])
-        note  = _clean_note(buckets["note"])
-        raw1  = _merge_tokens(buckets["val1"])
-        raw2  = _merge_tokens(buckets["val2"])
+        note = _clean_note(buckets["note"])
+        raw1 = _merge_tokens(buckets["val1"])
+        raw2 = _merge_tokens(buckets["val2"])
         v1 = _parse_number(raw1) if raw1 else ""
         v2 = _parse_number(raw2) if raw2 else ""
-        output.append({"label":label,"note":note,"val1":v1,"val2":v2,"val3":"","val4":"","risky":False})
-    return output, debug
+        has_value = isinstance(v1, (int, float)) or isinstance(v2, (int, float))
+        out.append({"label": label, "note": note, "val1": v1, "val2": v2, "val3": "", "val4": "", "has_value": has_value})
+    return out
+
+
+def _band_heading_text(rows, max_rows=6):
+    lines = []
+    for row in rows[:max_rows]:
+        lines.append(" ".join(w["text"] for w in sorted(row, key=lambda w: w["left"])))
+    return " ".join(lines)
+
+
+def process_image_to_sections(pil_image, upscale=3):
+    """
+    Column-aware OCR pipeline. Detects side-by-side statements via a wide
+    x-gap (like the digital-PDF band splitter) and, within each band,
+    detects a 4-column (or 2-column) year header to bucket values by
+    position instead of naive left/right halves.
+
+    Returns (sections, raw_lines, debug) where sections is a list of
+    (section_name, row_dicts) tuples — already split/labelled, ready to
+    pass straight into rows_to_excel_bytes.
+    """
+    proc, up = _preprocess(pil_image, upscale)
+    words = _ocr_words(proc, up)
+    debug = {"upscale_used": up, "bands": []}
+
+    if not words:
+        return [], [], debug
+
+    splits = _find_column_splits(words, min_gap=100)
+    img_width = pil_image.width
+    boundaries = [0] + splits + [img_width]
+    bands = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
+
+    sections = {}
+    order = []
+    raw_lines = []
+    current_section = "Sheet1"
+
+    for band_x0, band_x1 in bands:
+        band_words = [w for w in words if band_x0 <= w["left"] < band_x1]
+        if not band_words:
+            continue
+        rows = _group_rows(band_words, tol=6)
+
+        heading = _band_heading_text(rows)
+        band_section = _classify_section(heading, None)
+        if band_section:
+            current_section = band_section
+
+        raw_lines.extend(" ".join(w["text"] for w in sorted(r, key=lambda w: w["left"])) for r in rows)
+
+        note_x, val_xs = _detect_value_columns(rows)
+        if val_xs:
+            header_top = next((row[0]["top"] for row in rows
+                                if any(re.match(r"^20\d\d$", w["text"]) for w in row)), 0)
+            row_dicts = _extract_rows_4col(rows, note_x, val_xs, header_top)
+            debug["bands"].append({"x0": band_x0, "x1": band_x1, "mode": "4col",
+                                    "note_x": note_x, "val_xs": val_xs})
+        else:
+            row_dicts = _extract_rows_2col_fallback(rows, band_x1 - band_x0)
+            debug["bands"].append({"x0": band_x0, "x1": band_x1, "mode": "2col-fallback"})
+
+        for row in row_dicts:
+            current_section = _classify_section(row["label"], current_section)
+            label_words_count = len(row["label"].strip().split())
+            has_data = row.get("has_value") or (0 < label_words_count <= 8)
+            if not has_data:
+                continue
+            if current_section not in sections:
+                sections[current_section] = []
+                order.append(current_section)
+            sections[current_section].append({
+                "label": row["label"],
+                "note": row["note"],
+                "val1": row["val1"],
+                "val2": row["val2"],
+                "val3": row.get("val3", ""),
+                "val4": row.get("val4", ""),
+            })
+
+    out_sections = [(name, sections[name]) for name in order if sections[name]]
+    return out_sections, raw_lines, debug
+
 
 def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
     from pdf2image import convert_from_bytes as _cfb
@@ -662,14 +843,19 @@ def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
     sheets_data = []
     raw_lines = []
     for pg_i, image in enumerate(images, 1):
-        page_bar.progress(pg_i/n_pages, text=f"OCR page {pg_i}/{n_pages}")
+        page_bar.progress(pg_i / n_pages, text=f"OCR page {pg_i}/{n_pages}")
         try:
-            row_dicts, debug = process_image_to_rows(image, upscale=upscale_choice)
+            sections, page_raw_lines, debug = process_image_to_sections(image, upscale=upscale_choice)
             if show_debug:
-                st.info(f"Page {pg_i}: note={debug['note_col']}px · val1={debug['val1_col']}px · "
-                        f"val2={debug['val2_col']}px · upscale used={debug['upscale_used']:.2f}x")
-            sheets_data.append((f"Page {pg_i}", row_dicts))
-            raw_lines.extend(r.get("label","") for r in row_dicts if str(r.get("label","")).strip())
+                st.info(f"Page {pg_i}: {len(debug['bands'])} band(s) · "
+                        f"upscale used={debug['upscale_used']:.2f}x · "
+                        + " · ".join(f"[{b['mode']}]" for b in debug["bands"]))
+            if sections:
+                for sec_name, rows in sections:
+                    sheets_data.append((f"Pg{pg_i} {sec_name}"[:31], rows))
+            else:
+                sheets_data.append((f"Page {pg_i}", []))
+            raw_lines.extend(page_raw_lines)
         except MemoryError:
             st.warning(f"⚠️ Page {pg_i} skipped — image was too large to process safely.")
         except Exception as e:
@@ -881,15 +1067,20 @@ if is_image_mode:
         status.markdown(f"<span style='color:#003399;font-weight:700;'>OCR — {img_file.name} → '{sname}'…</span>", unsafe_allow_html=True)
         try:
             pil = Image.open(img_file)
-            row_dicts, debug = process_image_to_rows(pil, upscale=upscale_choice)
+            sections, page_raw_lines, debug = process_image_to_sections(pil, upscale=upscale_choice)
             if show_debug:
-                st.info(f"Anchors '{sname}': note={debug['note_col']}px · val1={debug['val1_col']}px · "
-                        f"val2={debug['val2_col']}px · mid={debug.get('midpoint','?')}px · "
-                        f"upscale used={debug['upscale_used']:.2f}x")
-            non_blank = [r for r in row_dicts if any([str(r.get("label","")).strip(),str(r.get("val1","")).strip(),str(r.get("val2","")).strip()])]
-            sheets_data.append((sname, row_dicts))
-            raw_lines_all.extend(r.get("label","") for r in row_dicts if str(r.get("label","")).strip())
-            status.success(f"✅ '{sname}' — {len(non_blank)} data rows extracted")
+                st.info(f"'{sname}': {len(debug['bands'])} band(s) · upscale used={debug['upscale_used']:.2f}x · "
+                        + " · ".join(f"[{b['mode']}]" for b in debug["bands"]))
+            if sections:
+                total_rows = 0
+                for idx, (sec_name, rows) in enumerate(sections):
+                    sheet_label = sname if len(sections) == 1 else f"{sname} - {sec_name}"
+                    sheets_data.append((sheet_label[:31], rows))
+                    total_rows += len(rows)
+                status.success(f"✅ '{sname}' — {len(sections)} sheet(s), {total_rows} data rows extracted")
+            else:
+                status.warning(f"⚠️ '{sname}' — no data rows could be extracted")
+            raw_lines_all.extend(page_raw_lines)
         except MemoryError:
             status.error(f"❌ {img_file.name}: image too large to process safely.")
             failed_images.append((img_file.name, "Image too large"))
