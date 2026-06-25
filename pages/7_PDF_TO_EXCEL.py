@@ -824,6 +824,7 @@ col_headers = [
     col3_header or "Gr. 2025",
     col4_header or "Gr. 2024",
 ]
+show_debug = st.checkbox("🐛 Show debug info", value=False)
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
