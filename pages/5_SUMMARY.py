@@ -1550,7 +1550,7 @@ _ns_val = float(st.session_state.get("summary_num_shares", 0.0))
 num_shares = st.number_input(
     "Number of Shares in Issue",
     min_value=0.0,
-    value=_ns_val, 
+    value=_ns_val,
     step=1000.0,
     format="%.0f",
     key="summary_num_shares",
@@ -1596,7 +1596,7 @@ _cp_val = float(st.session_state.get("summary_current_price", 0.0))
 current_price = st.number_input(
     "Current Share Price (USD)",
     min_value=0.0,
-    value=_cp_val, 
+    value=_cp_val,
     step=0.01,
     format="%.2f",
     key="summary_current_price",
