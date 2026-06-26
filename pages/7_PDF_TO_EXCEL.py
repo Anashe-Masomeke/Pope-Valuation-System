@@ -611,12 +611,10 @@ def _rows_to_grid(rows):
         grid.append(grid_row)
     return grid, len(bands)
 
-
 def _clean_numeric_cell(text):
     """
     Convert financial number strings to actual numbers.
     Handles: spaces in thousands, letter-O-as-zero, parentheses for negatives.
-    Matches the reference code's clean_numeric_cell logic exactly.
     """
     raw = text.strip()
     if raw in ("", "-", "\u2013", "\u2014"):
@@ -627,17 +625,17 @@ def _clean_numeric_cell(text):
     if letters_only and all(ch in "Oo" for ch in letters_only):
         raw = re.sub(r"[Oo]", "0", raw)
 
-        # Remove spaces — handles spaced thousands like "34 440 697" or "1 512 559"
-        candidate = raw.replace(" ", "")
-        is_negative = candidate.startswith("(") and candidate.endswith(")")
-        if is_negative:
-            candidate = candidate[1:-1]
-        # Also handle spaced negatives like "( 34 440 697 )"
-        if not is_negative and candidate.startswith("(") and ")" in candidate:
-            inner = candidate[1:candidate.index(")")].strip()
-            if re.match(r"^\d[\d,\.]*$", inner):
-                candidate = inner
-                is_negative = True
+    # Remove spaces — handles spaced thousands like "34 440 697" or "1 512 559"
+    candidate = raw.replace(" ", "")
+    is_negative = candidate.startswith("(") and candidate.endswith(")")
+    if is_negative:
+        candidate = candidate[1:-1]
+    # Also handle spaced negatives like "( 34 440 697 )"
+    if not is_negative and candidate.startswith("(") and ")" in candidate:
+        inner = candidate[1:candidate.index(")")].strip()
+        if re.match(r"^\d[\d,\.]*$", inner):
+            candidate = inner
+            is_negative = True
 
     if NUMERIC_RE.match(raw.replace(" ", "")) or re.match(r"^[\d,]+(\.\d+)?$", candidate):
         cleaned = candidate.replace(",", "")
@@ -649,8 +647,6 @@ def _clean_numeric_cell(text):
         except ValueError:
             return raw
     return raw
-
-
 def _clean_grid(grid):
     return [[_clean_numeric_cell(cell) for cell in row] for row in grid]
 
