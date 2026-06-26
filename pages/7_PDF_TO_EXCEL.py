@@ -400,14 +400,17 @@ def extract_digital_pdf(pdf_bytes):
 
             try:
                 splits = _find_column_splits(page, min_gap=80)
-            except Exception:
+            except Exception as _split_e:
+                print(f"DIAG split EXCEPTION: {_split_e}", flush=True)
                 splits = []
+            print(f"DIAG page width={page.width!r}, splits={splits!r}", flush=True)
             boundaries = [0] + splits + [page.width]
             # Clamp to avoid float rounding pushing a boundary past the
             # actual page width, which raises on page.crop() in some
             # pdfplumber/pdfminer versions.
             boundaries = [max(0, min(b, page.width)) for b in boundaries]
             bands = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
+            print(f"DIAG bands={bands!r}", flush=True)
 
             for band_x0, band_x1 in bands:
                 try:
