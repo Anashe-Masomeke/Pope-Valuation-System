@@ -415,11 +415,13 @@ def extract_digital_pdf(pdf_bytes):
                     else:
                         rows = _extract_rows_fallback(band_page)
 
+                    kept_count = 0
                     for row in rows:
                         current_section = _classify_section(row["label"], current_section)
                         has_data = row.get("has_value") or _is_short_heading(row["label"])
                         if not has_data:
                             continue
+                        kept_count += 1
                         if current_section not in sections:
                             sections[current_section] = []
                             order.append(current_section)
@@ -431,8 +433,10 @@ def extract_digital_pdf(pdf_bytes):
                             "val3": row.get("val3", ""),
                             "val4": row.get("val4", ""),
                         })
-                except Exception:
-                    # Skip just this band/page on error; don't kill the whole document.
+                    print(f"DIAG band ({band_x0:.0f},{band_x1:.0f}): val_xs={val_xs}, "
+                              f"{len(rows)} rows extracted, {kept_count} kept", flush=True)
+                except Exception as _diag_e:
+                    print(f"DIAG band ({band_x0:.0f},{band_x1:.0f}) EXCEPTION: {_diag_e}", flush=True)
                     continue
 
     if not found_any_text:
