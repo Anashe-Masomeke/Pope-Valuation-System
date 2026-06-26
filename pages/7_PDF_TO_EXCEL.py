@@ -517,7 +517,7 @@ def _group_rows(words, tol=12):
     return rows
 
 
-def _merge_label_words(row_words, gap_threshold=40):
+def _merge_label_words(row_words, gap_threshold=60):
     """
     Merge adjacent words that are close together into single cell strings.
     Matches the reference code's merge_label_words logic exactly.
@@ -546,25 +546,39 @@ def _merge_label_words(row_words, gap_threshold=40):
     return merged
 
 
-def _detect_column_bands(all_rows, gap_threshold=80):
+def _detect_column_bands(all_rows, gap_threshold=120):
     """
     Find natural x-position clusters across all rows — these become columns.
-    Matches the reference code's detect_column_bands logic exactly.
+    Uses a two-pass approach: first finds the largest gaps to identify true
+    column separators, ignoring the smaller gaps inside spaced numbers.
     """
     lefts = sorted(cell["left"] for row in all_rows for cell in row)
     if not lefts:
         return []
+
+    # Compute all gaps between consecutive left-edge positions
+    gaps = [(lefts[i+1] - lefts[i], i) for i in range(len(lefts)-1)]
+
+    # Find the natural gap threshold: use median gap * 4 as a minimum,
+    # or the passed-in threshold — whichever is larger. This adapts to
+    # the actual spacing in the document rather than a fixed pixel value.
+    if gaps:
+        gap_values = sorted(g for g, _ in gaps)
+        median_gap = gap_values[len(gap_values) // 2]
+        adaptive_threshold = max(gap_threshold, median_gap * 4)
+    else:
+        adaptive_threshold = gap_threshold
+
     bands = []
     band_start = lefts[0]
     prev = lefts[0]
     for x in lefts[1:]:
-        if x - prev > gap_threshold:
+        if x - prev > adaptive_threshold:
             bands.append((band_start, prev))
             band_start = x
         prev = x
     bands.append((band_start, prev))
     return bands
-
 
 def _assign_cell_to_band(cell, bands):
     """Return index of the band whose range best contains this cell's left edge."""
@@ -613,10 +627,17 @@ def _clean_numeric_cell(text):
     if letters_only and all(ch in "Oo" for ch in letters_only):
         raw = re.sub(r"[Oo]", "0", raw)
 
-    candidate = raw.replace(" ", "")
-    is_negative = candidate.startswith("(") and candidate.endswith(")")
-    if is_negative:
-        candidate = candidate[1:-1]
+        # Remove spaces — handles spaced thousands like "34 440 697" or "1 512 559"
+        candidate = raw.replace(" ", "")
+        is_negative = candidate.startswith("(") and candidate.endswith(")")
+        if is_negative:
+            candidate = candidate[1:-1]
+        # Also handle spaced negatives like "( 34 440 697 )"
+        if not is_negative and candidate.startswith("(") and ")" in candidate:
+            inner = candidate[1:candidate.index(")")].strip()
+            if re.match(r"^\d[\d,\.]*$", inner):
+                candidate = inner
+                is_negative = True
 
     if NUMERIC_RE.match(raw.replace(" ", "")) or re.match(r"^[\d,]+(\.\d+)?$", candidate):
         cleaned = candidate.replace(",", "")
