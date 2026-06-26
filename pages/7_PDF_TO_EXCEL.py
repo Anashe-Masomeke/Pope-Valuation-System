@@ -159,8 +159,8 @@ def _group_words_by_row(words, tol=3):
             cur_top = w["top"]
     return rows
 
-def _find_column_splits(page, min_gap=40):
-    """X-positions where a wide horizontal gap divides side-by-side statements."""
+def _pdf_find_column_splits(page, min_gap=40):
+    """X-positions where a wide horizontal gap divides side-by-side statements (digital PDF)."""
     words = page.extract_words(x_tolerance=2, y_tolerance=3)
     if not words:
         return []
@@ -170,12 +170,11 @@ def _find_column_splits(page, min_gap=40):
         if xs[i + 1] - xs[i] >= min_gap:
             splits.append((xs[i] + xs[i + 1]) // 2)
     return splits
-
-
-def _detect_value_columns(page):
+def _pdf_detect_value_columns(page):
     """
     Find the Note column x and the value-column x positions by locating the
     header row containing 2+ four-digit years (e.g. "2025 2024 2025 2024").
+    Digital PDF version — takes a pdfplumber page/CroppedPage object.
     """
     words = page.extract_words(x_tolerance=2, y_tolerance=3)
     if not words:
@@ -189,8 +188,6 @@ def _detect_value_columns(page):
             note_x = note_ws[0]["x0"] if note_ws else (yr[0]["x0"] - 60)
             return note_x, [w["x0"] for w in yr]
     return None, []
-
-
 def _parse_val(token_text):
     """Parse a single already-merged numeric token like '(5,741,062)' or '5,611,571'."""
     raw = token_text.strip()
@@ -387,7 +384,7 @@ def extract_digital_pdf(pdf_bytes):
                 pass
 
             try:
-                splits = _find_column_splits(page, min_gap=40)
+                splits = _pdf_find_column_splits(page, min_gap=40)
             except Exception as _split_e:
                 print(f"DIAG split EXCEPTION: {_split_e}", flush=True)
                 splits = []
@@ -414,8 +411,7 @@ def extract_digital_pdf(pdf_bytes):
                         band_text = ""
                     if band_text:
                         raw_lines.extend(band_text.split("\n"))
-
-                    note_x, val_xs = _detect_value_columns(band_page)
+                    note_x, val_xs = _pdf_detect_value_columns(band_page)
                     if val_xs:
                         rows = _extract_rows_4col(band_page, note_x, val_xs)
                     else:
