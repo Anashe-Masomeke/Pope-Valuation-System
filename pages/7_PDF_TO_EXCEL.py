@@ -206,8 +206,7 @@ NOTE_RE = re.compile(r"^\d{1,2}(\.\d{1,2})?[A-Za-z]?$")   # e.g. "7", "14B", "7.
 NUM_RE  = re.compile(r"^\(?-?\d[\d,\.]*\)?$")              # e.g. "(5,741,062)", "1,986", "-"
 DASH_RE = re.compile(r"^[-\u2013\u2014]$")
 
-
-def _extract_rows_4col(page, note_x, val_xs):
+def _pdf_extract_rows_4col(page, note_x, val_xs):
     """
     Extract rows once we know the Note column x and the (1, 2 or 4) value
     column x-positions for this band/page.
@@ -413,10 +412,9 @@ def extract_digital_pdf(pdf_bytes):
                         raw_lines.extend(band_text.split("\n"))
                     note_x, val_xs = _pdf_detect_value_columns(band_page)
                     if val_xs:
-                        rows = _extract_rows_4col(band_page, note_x, val_xs)
+                        rows = _pdf_extract_rows_4col(band_page, note_x, val_xs)
                     else:
                         rows = _extract_rows_fallback(band_page)
-
                     kept_count = 0
                     for row in rows:
                         current_section = _classify_section(row["label"], current_section)
