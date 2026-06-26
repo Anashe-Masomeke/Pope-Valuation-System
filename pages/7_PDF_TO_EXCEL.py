@@ -159,7 +159,6 @@ def _group_words_by_row(words, tol=3):
             cur_top = w["top"]
     return rows
 
-
 def _find_column_splits(page, min_gap=80):
     """X-positions where a wide horizontal gap divides side-by-side statements."""
     words = page.extract_words(x_tolerance=2, y_tolerance=3)
@@ -170,7 +169,19 @@ def _find_column_splits(page, min_gap=80):
     for i in range(len(xs) - 1):
         if xs[i + 1] - xs[i] >= min_gap:
             splits.append((xs[i] + xs[i + 1]) // 2)
-    return splits
+    if splits:
+        return splits
+    # Retry with a smaller gap threshold in case word extraction on this
+    # pdfplumber/pdfminer version reports slightly different x-positions
+    # and the default 80px threshold misses a real column gap.
+    for fallback_gap in (60, 40):
+        splits = []
+        for i in range(len(xs) - 1):
+            if xs[i + 1] - xs[i] >= fallback_gap:
+                splits.append((xs[i] + xs[i + 1]) // 2)
+        if splits:
+            return splits
+    return []
 
 
 def _detect_value_columns(page):
@@ -392,6 +403,10 @@ def extract_digital_pdf(pdf_bytes):
             except Exception:
                 splits = []
             boundaries = [0] + splits + [page.width]
+            # Clamp to avoid float rounding pushing a boundary past the
+            # actual page width, which raises on page.crop() in some
+            # pdfplumber/pdfminer versions.
+            boundaries = [max(0, min(b, page.width)) for b in boundaries]
             bands = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
 
             for band_x0, band_x1 in bands:
