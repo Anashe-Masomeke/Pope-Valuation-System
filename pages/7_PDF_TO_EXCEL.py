@@ -517,7 +517,7 @@ def _group_rows(words, tol=12):
     return rows
 
 
-def _merge_label_words(row_words, gap_threshold=25):
+def _merge_label_words(row_words, gap_threshold=40):
     """
     Merge adjacent words that are close together into single cell strings.
     Matches the reference code's merge_label_words logic exactly.
@@ -546,7 +546,7 @@ def _merge_label_words(row_words, gap_threshold=25):
     return merged
 
 
-def _detect_column_bands(all_rows, gap_threshold=60):
+def _detect_column_bands(all_rows, gap_threshold=80):
     """
     Find natural x-position clusters across all rows — these become columns.
     Matches the reference code's detect_column_bands logic exactly.
