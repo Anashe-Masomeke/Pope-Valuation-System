@@ -685,7 +685,18 @@ def _band_heading_text(rows, max_rows=6):
     for row in rows[:max_rows]:
         lines.append(" ".join(w["text"] for w in sorted(row, key=lambda w: w["left"])))
     return " ".join(lines)
-
+def _detect_years_from_grid(grid):
+    """
+    Scan the first 10 rows of the grid for 4-digit year tokens (20xx).
+    Returns a list of year strings in the order they appear left-to-right,
+    e.g. ['2024', '2023'] or ['2024', '2023', '2024', '2023'].
+    """
+    year_re = re.compile(r"^20\d\d$")
+    for row in grid[:10]:
+        years = [str(cell) for cell in row if year_re.match(str(cell).strip())]
+        if len(years) >= 2:
+            return years
+    return []
 def process_image_to_sections(pil_image, upscale=2):
     """
     OCR pipeline matching the reference code's approach:
@@ -751,8 +762,9 @@ def process_image_to_sections(pil_image, upscale=2):
             "risky4": (r_idx, 4) in risky_set,
         })
 
+    detected_years = _detect_years_from_grid(grid)
     out_sections = [(name, sections[name]) for name in order if sections[name]]
-    return out_sections, raw_lines, debug
+    return out_sections, raw_lines, debug, detected_years
 
 def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
     from pdf2image import convert_from_bytes as _cfb
@@ -770,7 +782,10 @@ def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
     for pg_i, image in enumerate(images, 1):
         page_bar.progress(pg_i / n_pages, text=f"OCR page {pg_i}/{n_pages}")
         try:
-            sections, page_raw_lines, debug = process_image_to_sections(image, upscale=upscale_choice)
+            sections, page_raw_lines, debug, detected_years = process_image_to_sections(image, upscale=upscale_choice)
+            if detected_years and not getattr(run_ocr_pipeline, '_years_set', False):
+                run_ocr_pipeline._detected_years = detected_years
+                run_ocr_pipeline._years_set = True
             if show_debug:
                 n_b = debug["bands"][0]["n_bands"] if debug["bands"] else 0
                 st.info(f"Page {pg_i}: {n_b} column band(s) detected · upscale used={debug['upscale_used']:.2f}x")
@@ -938,28 +953,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
-
 section("⚙️ Options")
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
-col_o1, col_o2, col_o3, col_o4 = st.columns(4)
+col_o1, col_o2 = st.columns(2)
 with col_o1:
     upscale_choice = st.selectbox("Upscale factor (OCR only)", [2, 3], index=0)
 with col_o2:
     dpi_choice = st.selectbox("Render DPI (scanned PDF OCR)", [200,300,400], index=1, disabled=is_image_mode)
-with col_o3:
-    col1_header = st.text_input("Col 3 header", value="Co. 2025")
-    col2_header = st.text_input("Col 4 header", value="Co. 2024")
-with col_o4:
-    col3_header = st.text_input("Col 5 header", value="Gr. 2025")
-    col4_header = st.text_input("Col 6 header", value="Gr. 2024")
 
-col_headers = [
-    "Item", "Note",
-    col1_header or "Co. 2025",
-    col2_header or "Co. 2024",
-    col3_header or "Gr. 2025",
-    col4_header or "Gr. 2024",
-]
+col_headers = ["Item", "Note", "Period 1", "Period 2", "Period 3", "Period 4"]
 show_debug = st.checkbox("🐛 Show debug info", value=False)
 st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
 
@@ -1010,7 +1012,9 @@ if is_image_mode:
         status.markdown(f"<span style='color:#003399;font-weight:700;'>OCR — {img_file.name} → '{sname}'…</span>", unsafe_allow_html=True)
         try:
             pil = Image.open(img_file)
-            sections, page_raw_lines, debug = process_image_to_sections(pil, upscale=upscale_choice)
+            sections, page_raw_lines, debug, detected_years = process_image_to_sections(pil, upscale=upscale_choice)
+            if detected_years and "auto_col_headers" not in st.session_state:
+                st.session_state["auto_col_headers"] = detected_years
             if show_debug:
                 n_b = debug["bands"][0]["n_bands"] if debug["bands"] else 0
                 st.info(f"'{sname}': {n_b} column band(s) detected · upscale used={debug['upscale_used']:.2f}x")
@@ -1042,8 +1046,16 @@ if is_image_mode:
     if not sheets_data:
         st.error("❌ No images converted.")
         st.stop()
+    auto_years = st.session_state.pop("auto_col_headers", [])
+    if auto_years:
+        yr_headers = ["Item", "Note"] + auto_years[:4]
+        while len(yr_headers) < 6:
+            yr_headers.append(f"Period {len(yr_headers) - 1}")
+        effective_headers = yr_headers
+    else:
+        effective_headers = col_headers
     try:
-        excel_bytes, has_risky = rows_to_excel_bytes(sheets_data, col_headers=col_headers)
+        excel_bytes, has_risky = rows_to_excel_bytes(sheets_data, col_headers=effective_headers)
     except Exception as e:
         st.error(f"❌ Failed to generate Excel: {e}")
         if show_debug:
@@ -1149,8 +1161,17 @@ else:
             if rsheet:
                 all_sheets.append(rsheet)
 
+            detected_years = getattr(run_ocr_pipeline, '_detected_years', [])
+            run_ocr_pipeline._years_set = False  # reset for next file
+            if detected_years:
+                yr_headers = ["Item", "Note"] + detected_years[:4]
+                while len(yr_headers) < 6:
+                    yr_headers.append(f"Period {len(yr_headers) - 1}")
+                effective_headers = yr_headers
+            else:
+                effective_headers = col_headers
             try:
-                excel_bytes_out, has_risky = rows_to_excel_bytes(all_sheets, col_headers=col_headers)
+                excel_bytes_out, has_risky = rows_to_excel_bytes(all_sheets, col_headers=effective_headers)
             except Exception as e:
                 errors.append((pdf_name, f"Failed to build Excel: {e}"))
                 page_status.error(f"❌ Failed to generate Excel for {pdf_name}.")
