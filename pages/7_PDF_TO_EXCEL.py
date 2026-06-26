@@ -445,7 +445,9 @@ def extract_digital_pdf(pdf_bytes):
 # STRATEGY 2: OCR PIPELINE — for scanned PDFs and images
 # (unchanged from original)
 # ═══════════════════════════════════════════════════════════════════════════════
-import re
+# ═══════════════════════════════════════════════════════════════════════════════
+# STRATEGY 2: OCR PIPELINE — for scanned PDFs and images
+# ═══════════════════════════════════════════════════════════════════════════════
 import pytesseract
 from PIL import Image, ImageFilter, ImageEnhance
 
@@ -453,7 +455,6 @@ MAX_OCR_PIXELS = 16_000_000
 NOISE_PAT = re.compile(r"^[^a-zA-Z0-9()\-.]+$")
 NOISE_WORDS = {"it", "ot", "be", "a=", "bet", "Ml", "oe", "i", "—", "~~", "MIl", "Mi", "Ml"}
 NOTE_RE = re.compile(r"^\d{1,2}(\.\d{1,2})?[A-Za-z]?$")
-NUM_RE = re.compile(r"^\(?-?\d[\d,\.\s]*\)?$")
 
 
 def _is_noise(t):
@@ -482,12 +483,17 @@ def _ocr_words(preprocessed_img, upscale):
         txt = data["text"][i].strip()
         if not txt or _is_noise(txt):
             continue
+        try:
+            conf = float(data["conf"][i])
+        except (ValueError, TypeError):
+            conf = -1.0
         words.append({
             "text": txt,
             "left": data["left"][i] // upscale,
             "top": data["top"][i] // upscale,
             "width": data["width"][i] // upscale,
             "right": (data["left"][i] + data["width"][i]) // upscale,
+            "conf": conf,
         })
     return words
 
@@ -582,11 +588,17 @@ def _parse_number(raw):
         return raw
 
 
-def _extract_rows_4col(rows, note_x, val_xs, header_top):
+def _extract_rows_4col(rows, note_x, val_xs, header_top, conf_threshold=60):
     """
     OCR equivalent of the digital-PDF _extract_rows_4col: bucket each row's
     words into label / note / up to 4 value columns using x-position only,
     so note numbers (12, 16, 18...) never get glued onto an adjacent value.
+
+    Each value cell also gets a "risky" flag: True if the OCR confidence on
+    any token in that cell was low, or if a non-empty token failed to parse
+    into a clean number. Dashes/blanks are never flagged risky. This doesn't
+    fix misreads but makes them visible so a person can spot-check just the
+    flagged cells.
     """
     n_cols = len(val_xs)
     label_max_x = note_x - 10
@@ -597,7 +609,8 @@ def _extract_rows_4col(rows, note_x, val_xs, header_top):
         is_pre_header = header_top > 0 and row[0]["top"] < header_top - 3
         if is_pre_header:
             line = " ".join(w["text"] for w in row)
-            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "", "has_value": False})
+            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "",
+                        "has_value": False, "risky1": False, "risky2": False, "risky3": False, "risky4": False})
             continue
 
         row_sorted = sorted(row, key=lambda w: w["left"])
@@ -618,12 +631,29 @@ def _extract_rows_4col(rows, note_x, val_xs, header_top):
         for w in value_words:
             dists = [abs(w["left"] - vx) for vx in val_xs]
             nearest = dists.index(min(dists))
-            val_buckets[nearest].append(w["text"])
+            val_buckets[nearest].append(w)
 
         label = " ".join(w["text"] for w in label_words)
-        raw_vals = [_merge_tokens(val_buckets[i]) for i in range(n_cols)]
-        vals = [_parse_number(r) if r else "" for r in raw_vals]
+        raw_vals = [_merge_tokens([w["text"] for w in val_buckets[i]]) for i in range(n_cols)]
+        parsed = [_parse_number(r) if r else None for r in raw_vals]
+        # _parse_number returns None for a literal dash/blank placeholder; in
+        # that case the cell is correctly empty (not a parse failure).
+        vals = [p if p is not None else "" for p in parsed]
         has_value = any(isinstance(v, (int, float)) for v in vals)
+
+        riskies = []
+        for i in range(n_cols):
+            bucket = val_buckets[i]
+            val = vals[i] if i < len(vals) else ""
+            raw = raw_vals[i]
+            is_dash = raw.strip() in ("-", "\u2013", "\u2014", "")
+            if not bucket or is_dash:
+                riskies.append(False)
+                continue
+            min_conf = min((w.get("conf", -1) for w in bucket), default=-1)
+            low_conf = 0 <= min_conf < conf_threshold
+            failed_parse = bool(raw) and not isinstance(val, (int, float))
+            riskies.append(bool(low_conf or failed_parse))
 
         out.append({
             "label": label,
@@ -633,6 +663,10 @@ def _extract_rows_4col(rows, note_x, val_xs, header_top):
             "val3": vals[2] if len(vals) > 2 else "",
             "val4": vals[3] if len(vals) > 3 else "",
             "has_value": has_value,
+            "risky1": riskies[0] if len(riskies) > 0 else False,
+            "risky2": riskies[1] if len(riskies) > 1 else False,
+            "risky3": riskies[2] if len(riskies) > 2 else False,
+            "risky4": riskies[3] if len(riskies) > 3 else False,
         })
     return out
 
@@ -726,7 +760,7 @@ def _clean_note(tokens):
     return " ".join(t for t in tokens if re.match(r"^\d+\.?\d*$", t))
 
 
-def _extract_rows_2col_fallback(rows, img_width):
+def _extract_rows_2col_fallback(rows, img_width, conf_threshold=60):
     note_col, val1_col, val2_col, header_top = _detect_anchors_2col(rows, img_width)
     midpoint = (val1_col + val2_col) / 2 - 5 if (val1_col is not None and val2_col is not None) else None
     out = []
@@ -734,20 +768,35 @@ def _extract_rows_2col_fallback(rows, img_width):
         is_pre = header_top > 0 and r[0]["top"] < header_top
         if is_pre:
             line = " ".join(w["text"] for w in r)
-            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "", "has_value": False})
+            out.append({"label": line, "note": "", "val1": "", "val2": "", "val3": "", "val4": "",
+                        "has_value": False, "risky1": False, "risky2": False, "risky3": False, "risky4": False})
             continue
         buckets = {"label": [], "note": [], "val1": [], "val2": []}
         for w in r:
             col = _col_of_2col(w, note_col, val1_col, val2_col, midpoint)
-            buckets[col].append(w["text"])
-        label = " ".join(buckets["label"])
-        note = _clean_note(buckets["note"])
-        raw1 = _merge_tokens(buckets["val1"])
-        raw2 = _merge_tokens(buckets["val2"])
-        v1 = _parse_number(raw1) if raw1 else ""
-        v2 = _parse_number(raw2) if raw2 else ""
+            buckets[col].append(w)
+        label = " ".join(w["text"] for w in buckets["label"])
+        note = _clean_note([w["text"] for w in buckets["note"]])
+        raw1 = _merge_tokens([w["text"] for w in buckets["val1"]])
+        raw2 = _merge_tokens([w["text"] for w in buckets["val2"]])
+        p1 = _parse_number(raw1) if raw1 else None
+        p2 = _parse_number(raw2) if raw2 else None
+        v1 = p1 if p1 is not None else ""
+        v2 = p2 if p2 is not None else ""
         has_value = isinstance(v1, (int, float)) or isinstance(v2, (int, float))
-        out.append({"label": label, "note": note, "val1": v1, "val2": v2, "val3": "", "val4": "", "has_value": has_value})
+
+        def _cell_risky(bucket, raw, val):
+            if not bucket or raw.strip() in ("-", "\u2013", "\u2014", ""):
+                return False
+            min_conf = min((w.get("conf", -1) for w in bucket), default=-1)
+            low_conf = 0 <= min_conf < conf_threshold
+            failed_parse = bool(raw) and not isinstance(val, (int, float))
+            return bool(low_conf or failed_parse)
+
+        risky1 = _cell_risky(buckets["val1"], raw1, v1)
+        risky2 = _cell_risky(buckets["val2"], raw2, v2)
+        out.append({"label": label, "note": note, "val1": v1, "val2": v2, "val3": "", "val4": "",
+                    "has_value": has_value, "risky1": risky1, "risky2": risky2, "risky3": False, "risky4": False})
     return out
 
 
@@ -775,10 +824,11 @@ def _band_heading_text(rows, max_rows=6):
 
 def process_image_to_sections(pil_image, upscale=3):
     """
-    New column-aware OCR pipeline. Detects side-by-side statements via a
-    wide x-gap (like the digital-PDF band splitter) and, within each band,
+    Column-aware OCR pipeline. Detects side-by-side statements via a wide
+    x-gap (like the digital-PDF band splitter) and, within each band,
     detects a 4-column (or 2-column) year header to bucket values by
-    position instead of naive left/right halves.
+    position instead of naive left/right halves. Each value cell carries a
+    risky flag (risky1-risky4) based on OCR confidence and parse success.
 
     Returns (sections, raw_lines, debug) where sections is a list of
     (section_name, row_dicts) tuples — already split/labelled, ready to
@@ -841,6 +891,10 @@ def process_image_to_sections(pil_image, upscale=3):
                 "val2": row["val2"],
                 "val3": row.get("val3", ""),
                 "val4": row.get("val4", ""),
+                "risky1": row.get("risky1", False),
+                "risky2": row.get("risky2", False),
+                "risky3": row.get("risky3", False),
+                "risky4": row.get("risky4", False),
             })
 
     out_sections = [(name, sections[name]) for name in order if sections[name]]
@@ -885,7 +939,6 @@ def run_ocr_pipeline(pdf_bytes, dpi_choice, upscale_choice, show_debug):
             gc.collect()
     page_bar.progress(1.0)
     return sheets_data, raw_lines
-
 # ── Excel writer — updated to handle val3 / val4 columns ─────────────────────
 def rows_to_excel_bytes(sheets, col_headers=None):
     if col_headers is None:
@@ -893,11 +946,13 @@ def rows_to_excel_bytes(sheets, col_headers=None):
     wb = Workbook(); wb.remove(wb.active)
     BLUE_FILL  = PatternFill("solid", fgColor="071426")
     LIGHT_FILL = PatternFill("solid", fgColor="F0F5FF")
+    RISKY_FILL = PatternFill("solid", fgColor="FFD9A0")   # amber — low-confidence OCR cell
     RED_FONT   = Font(color="9C0006", bold=True)
     WHITE_FONT = Font(bold=True, color="FFFFFF")
     RIGHT_ALIGN = Alignment(horizontal="right", vertical="center")
     MONEY_FMT   = "#,##0;(#,##0)"
     used_names = set()
+    any_risky_cells = False
 
     for title, row_dicts in sheets:
         safe_title = (title or "Sheet")[:31]
@@ -925,10 +980,14 @@ def rows_to_excel_bytes(sheets, col_headers=None):
 
         excel_ri = 2
         for row in row_dicts:
-            label = row.get("label", ""); note = row.get("note", "")
-            v1 = row.get("val1", ""); v2 = row.get("val2", "")
-            v3 = row.get("val3", ""); v4 = row.get("val4", "")
-            risky = row.get("risky", False)
+            label = row.get("label", "");
+            note = row.get("note", "")
+            v1 = row.get("val1", "");
+            v2 = row.get("val2", "")
+            v3 = row.get("val3", "");
+            v4 = row.get("val4", "")
+            riskies = [row.get("risky1", False), row.get("risky2", False),
+                       row.get("risky3", False), row.get("risky4", False)]
 
             if not any([str(label).strip(), str(note).strip(),
                         str(v1).strip(), str(v2).strip(),
@@ -938,22 +997,30 @@ def rows_to_excel_bytes(sheets, col_headers=None):
                 ws.cell(excel_ri, 1, str(label)[:2000])
                 ws.cell(excel_ri, 2, str(note)[:50])
                 val_data = [v1, v2, v3, v4][:n_val_cols]
-                for ci, val in enumerate(val_data, 3):
+                risky_data = riskies[:n_val_cols]
+                for idx, (val, is_risky) in enumerate(zip(val_data, risky_data)):
+                    ci = idx + 3
                     cell = ws.cell(excel_ri, ci)
                     if isinstance(val, (int, float)):
-                        cell.value = val; cell.number_format = MONEY_FMT
+                        cell.value = val;
+                        cell.number_format = MONEY_FMT
                         cell.alignment = RIGHT_ALIGN
-                        if risky: cell.font = RED_FONT
                     elif val not in ("", None):
                         rep = _parse_number(str(val))
                         if isinstance(rep, (int, float)):
-                            cell.value = rep; cell.number_format = MONEY_FMT
+                            cell.value = rep;
+                            cell.number_format = MONEY_FMT
                             cell.alignment = RIGHT_ALIGN
                         else:
-                            cell.value = str(val)[:2000]; cell.alignment = RIGHT_ALIGN
+                            cell.value = str(val)[:2000];
+                            cell.alignment = RIGHT_ALIGN
+                    if is_risky:
+                        cell.fill = RISKY_FILL
+                        any_risky_cells = True
                 if excel_ri % 2 == 0:
                     for ci in range(1, 2 + n_val_cols + 1):
-                        ws.cell(excel_ri, ci).fill = LIGHT_FILL
+                        if not (ci >= 3 and risky_data[ci - 3]):
+                            ws.cell(excel_ri, ci).fill = LIGHT_FILL
                 if str(label).isupper() or (not label and (v1 or v2)):
                     for ci in range(1, 2 + n_val_cols + 1):
                         ws.cell(excel_ri, ci).font = Font(bold=True)
@@ -971,8 +1038,10 @@ def rows_to_excel_bytes(sheets, col_headers=None):
             ws.column_dimensions["F"].width = 17
         ws.freeze_panes = "A2"
 
-    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
-    return buf.getvalue()
+    buf = io.BytesIO();
+    wb.save(buf);
+    buf.seek(0)
+    return buf.getvalue(), any_risky_cells
 
 def raw_text_sheet(raw_lines, max_lines=2000):
     if not raw_lines:
@@ -1118,7 +1187,7 @@ if is_image_mode:
         st.error("❌ No images converted.")
         st.stop()
     try:
-        excel_bytes = rows_to_excel_bytes(sheets_data, col_headers=col_headers)
+        excel_bytes, has_risky = rows_to_excel_bytes(sheets_data, col_headers=col_headers)
     except Exception as e:
         st.error(f"❌ Failed to generate Excel: {e}")
         if show_debug:
@@ -1129,6 +1198,9 @@ if is_image_mode:
     section("⬇️ Download Result")
     st.markdown('<hr class="fbc-divider">', unsafe_allow_html=True)
     st.success(f"✅ {len(sheets_data)} sheet(s) extracted.")
+    if has_risky:
+        st.warning(
+            "⚠️ Some cells are highlighted amber — OCR wasn't fully confident on those. Please double-check them against the source.")
     if failed_images:
         st.error(f"❌ {len(failed_images)} image(s) failed:")
         for fname, err in failed_images:
@@ -1222,7 +1294,7 @@ else:
                 all_sheets.append(rsheet)
 
             try:
-                excel_bytes_out = rows_to_excel_bytes(all_sheets, col_headers=col_headers)
+                excel_bytes_out, has_risky = rows_to_excel_bytes(all_sheets, col_headers=col_headers)
             except Exception as e:
                 errors.append((pdf_name, f"Failed to build Excel: {e}"))
                 page_status.error(f"❌ Failed to generate Excel for {pdf_name}.")
@@ -1234,6 +1306,9 @@ else:
             n_rows = sum(len(s[1]) for s in sheets_data)
             results.append((xl_name, excel_bytes_out, method_used, n_rows))
             page_status.success(f"✅ {pdf_name} → {xl_name} ({method_used}, {n_rows} data rows + raw text sheet)")
+            if has_risky:
+                st.warning(
+                    f"⚠️ {pdf_name}: some cells are highlighted amber — OCR wasn't fully confident on those. Please double-check them against the source.")
 
         except MemoryError:
             errors.append((pdf_name, "Ran out of memory"))
@@ -1283,4 +1358,3 @@ else:
           </div></div>""", unsafe_allow_html=True)
 
 st.markdown('<div class="fbc-footer">Powered by <b>FBC Securities</b> · Investment Research &amp; Valuation Dashboard</div>', unsafe_allow_html=True)
-
