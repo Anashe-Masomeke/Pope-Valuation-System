@@ -363,6 +363,55 @@ st.markdown("""
 </div>
 <hr style="border:none;border-top:2px solid #dde6f5;margin:6px 0 20px 0;">
 """, unsafe_allow_html=True)
+# ── CSS ───────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+
+  color:#fff!important;font-family:"Playfair Display",serif!important;font-weight:700!important;}
+.stButton>button{background:linear-gradient(135deg,#003399,#0055ee)!important;color:#fff!important;
+  border:none!important;border-radius:10px!important;font-weight:700!important;
+  font-family:"EB Garamond",serif!important;font-size:15px!important;padding:10px 24px!important;
+  box-shadow:0 4px 14px rgba(0,51,153,.30)!important;transition:all .2s ease!important;}
+.stButton>button:hover{transform:translateY(-2px)!important;}
+.stButton>button *,.stDownloadButton>button *{color:#fff!important;}
+.stDownloadButton>button{background:linear-gradient(135deg,#003399,#0044cc)!important;
+  color:#fff!important;border-radius:10px!important;font-weight:700!important;border:none!important;}
+[data-testid="stFileUploader"]{background:rgba(0,51,153,.04);
+  border:1px dashed rgba(0,51,153,.25);border-radius:14px;padding:18px 20px;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-thumb{background:#003399;border-radius:999px;}
+.fbc-section{display:block;padding:16px 0;margin:28px 0 18px 0;border-bottom:2px solid rgba(0,51,153,.15);}
+.fbc-section-title{font-family:"Playfair Display",serif!important;font-size:21px;font-weight:800;color:#001a5c!important;}
+.fbc-divider{height:2px;background:linear-gradient(90deg,transparent,#f5b400,#003399,transparent);
+  border:none;margin:20px 0;border-radius:999px;}
+.fbc-footer{text-align:center;padding:22px;margin-top:40px;color:#5a7099!important;font-size:13px;
+  border-top:1px solid rgba(0,51,153,.10);font-style:italic;}
+.fbc-footer b{color:#003399!important;font-style:normal;}
+.fbc-info-card{background:linear-gradient(135deg,#001a5c,#003399);border-radius:16px;
+  padding:20px 26px;margin-bottom:20px;border-bottom:3px solid #f5b400;
+  box-shadow:0 8px 24px rgba(0,26,92,.22);}
+.fbc-info-card-title{font-family:"Playfair Display",serif!important;font-size:19px;
+  font-weight:800;color:#fff!important;margin-bottom:8px;}
+.fbc-info-card-body{color:rgba(255,255,255,.85)!important;font-size:14px;line-height:1.8;}
+.fbc-warn-card{background:linear-gradient(135deg,#7f1d1d,#991b1b);border-radius:14px;
+  padding:16px 22px;margin:14px 0;border-left:5px solid #f5b400;}
+.fbc-warn-title{font-family:"Playfair Display",serif!important;font-weight:700;
+  color:#fff!important;margin-bottom:4px;font-size:15px;}
+.fbc-warn-body{color:rgba(255,255,255,.88)!important;font-size:13px;line-height:1.6;}
+.result-card{background:#fff;border:1px solid rgba(0,51,153,.12);border-left:5px solid #003399;
+  border-radius:14px;padding:16px 18px;margin-bottom:12px;box-shadow:0 4px 12px rgba(0,0,0,.06);}
+.next-steps{background:linear-gradient(135deg,#f0f5ff,#fffdf0);
+  border:1px solid rgba(0,51,153,.12);border-left:5px solid #f5b400;
+  border-radius:14px;padding:18px 22px;margin-top:16px;}
+.next-steps-title{font-family:"Playfair Display",serif!important;font-size:16px;
+  font-weight:800;color:#001a5c;margin-bottom:8px;}
+.next-steps-body{color:#374151;font-size:14px;line-height:1.9;}
+.fbc-fail-card{background:#fff5f5;border:1px solid rgba(153,27,27,.25);border-left:5px solid #991b1b;
+  border-radius:14px;padding:14px 18px;margin-bottom:10px;}
+.fbc-fail-title{font-weight:700;color:#991b1b;font-family:"Playfair Display",serif!important;font-size:14px;}
+.fbc-fail-body{color:#7f1d1d;font-size:13px;margin-top:2px;}
+</style>
+""", unsafe_allow_html=True)
 
 if not OPENPYXL_OK:
     st.error("❌ openpyxl not installed.")
