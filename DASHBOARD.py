@@ -327,7 +327,7 @@ _logo_tag = ""
 if LOGO_PATH.exists():
     with open(str(LOGO_PATH), "rb") as _lf:
         _logo_b64 = _b64.b64encode(_lf.read()).decode()
-    _logo_tag = f'<img src="data:image/png;base64,{_logo_b64}" style="height:70px; width:auto; object-fit:contain; margin-right:14px; flex-shrink:0; mix-blend-mode: luminosity; opacity: 0.9;">'
+    _logo_tag = f'<img src="data:image/png;base64,{_logo_b64}" style="height:70px; width:auto; object-fit:contain; margin-right:14px; flex-shrink:0;">'
 
 st.markdown(f"""
     <div style="
