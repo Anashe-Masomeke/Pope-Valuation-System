@@ -3815,7 +3815,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         f'=IF(ISNA(B{row_upd}),"N/A",'
         f'IF(B{row_upd}>=0.10,"BUY / ACCUMULATE",'
         f'IF(AND(B{row_upd}>=-0.10,B{row_upd}<=0.10),"HOLD / FAIRLY VALUED",'
-        f'"REDUCE / AVOID")))'
+        f'"REDUCE / SELL")))'
     )
     wsSum.cell(row_rec, 2).font = Font(bold=True, name="Arial")
     wsSum.cell(row_rec, 2).border = BDR
