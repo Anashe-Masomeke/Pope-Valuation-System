@@ -2979,9 +2979,12 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
             wsDCF.cell(wsRow, 1).fill  = FL_HDR
             wsDCF.cell(wsRow, 1).border = BDR
             wsDCF.cell(wsRow, 1).alignment = Alignment(horizontal="center", vertical="center")
-            for gl in g_labels:
+            for gi, gg in enumerate(g_range_s):
+                g_shift = gi - (len(g_range_s) // 2)
                 c = wsDCF.cell(wsRow, wsCol)
-                c.value = gl; c.font = F_HDR; c.fill = FL_HDR; c.border = BDR
+                c.value = f"=DCF!B{row_g}+{g_shift * g_step_s}"
+                c.number_format = '0.00%'
+                c.font = F_HDR; c.fill = FL_HDR; c.border = BDR
                 c.alignment = Alignment(horizontal="center", vertical="center")
                 wsCol += 1
             r += 1
@@ -2990,10 +2993,12 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
             base_g_lbl = _pct_lbl(base_g_s)
 
             for wi, ww in enumerate(wacc_range_s):
+                wacc_shift = wi - (len(wacc_range_s) // 2)
                 wsCol = wsCol_start
-                wl = wacc_labels[wi]
                 hdr_cell = wsDCF.cell(r, 1)
-                hdr_cell.value = wl; hdr_cell.font = F_HDR; hdr_cell.fill = FL_HDR
+                hdr_cell.value = f"=DCF!B{row_wacc}+{wacc_shift * wacc_step_s}"
+                hdr_cell.number_format = '0.00%'
+                hdr_cell.font = F_HDR; hdr_cell.fill = FL_HDR
                 hdr_cell.border = BDR
                 hdr_cell.alignment = Alignment(horizontal="center", vertical="center")
                 for gi, gg in enumerate(g_range_s):
