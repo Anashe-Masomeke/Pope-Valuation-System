@@ -1877,6 +1877,7 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
     _for_wc_forecast_end = None     # excel row# of last WC forecast row
     _for_dwc_start = None           # excel row# of first ΔWC row
     _for_dwc_end = None             # excel row# of last ΔWC row
+    _yr_to_dcf_period_row = {}       # year (str) -> DCF sheet row holding period n
 
     if "DCF" in selected_models:
         wsFor = wb.active
@@ -2877,8 +2878,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
             wsDCF.cell(rr, 9).border = BDR
 
         cf_end = r + max(_n_fore_dcf - 1, 0)
+        _yr_to_dcf_period_row = {
+            _fore_yr_keys[i]: cf_start + i
+            for i in range(min(len(_fore_yr_keys), _n_fore_dcf))
+        }
         r = cf_end + 2
-
         # ── DCF Summary ───────────────────────────────────────────────────────
         write_section(wsDCF, r, "DCF Valuation Summary", ncols=4); r += 1
         write_hdr(wsDCF, r, ["Item", "Value (USD)"]); r += 1
@@ -3343,7 +3347,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         wsComp.cell(row_ev_m, 2).font = F_GREEN
         wsComp.cell(row_ev_m, 2).number_format = '0.00'
         wsComp.cell(row_ev_m, 2).border = BDR
-        cell_bd(wsComp, row_ev_m, 3, disc_decimal, F_STD, FMT_PCT)
+        wsComp.cell(row_ev_m, 3).value = f"=$C${row_disc}"
+        wsComp.cell(row_ev_m, 3).font = F_GREEN
+        wsComp.cell(row_ev_m, 3).number_format = FMT_PCT
+        wsComp.cell(row_ev_m, 3).border = BDR
+        wsComp.cell(row_ev_m, 3).alignment = Alignment(horizontal="left", vertical="center")
         wsComp.cell(row_ev_m, 4).value = f"=IF(B{row_ev_m}=\"\",\"\",B{row_ev_m}*(1-C{row_ev_m}))"
         wsComp.cell(row_ev_m, 4).font = F_GREEN
         wsComp.cell(row_ev_m, 4).number_format = '0.00'
@@ -3365,7 +3373,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         wsComp.cell(row_pb_m, 2).font = F_GREEN
         wsComp.cell(row_pb_m, 2).number_format = '0.00'
         wsComp.cell(row_pb_m, 2).border = BDR
-        cell_bd(wsComp, row_pb_m, 3, disc_decimal, F_STD, FMT_PCT)
+        wsComp.cell(row_pb_m, 3).value = f"=$C${row_disc}"
+        wsComp.cell(row_pb_m, 3).font = F_GREEN
+        wsComp.cell(row_pb_m, 3).number_format = FMT_PCT
+        wsComp.cell(row_pb_m, 3).border = BDR
+        wsComp.cell(row_pb_m, 3).alignment = Alignment(horizontal="left", vertical="center")
         wsComp.cell(row_pb_m, 4).value = f"=IF(B{row_pb_m}=\"\",\"\",B{row_pb_m}*(1-C{row_pb_m}))"
         wsComp.cell(row_pb_m, 4).font = F_GREEN
         wsComp.cell(row_pb_m, 4).number_format = '0.00'
@@ -3387,7 +3399,11 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
         wsComp.cell(row_pe_m, 2).font = F_GREEN
         wsComp.cell(row_pe_m, 2).number_format = '0.00'
         wsComp.cell(row_pe_m, 2).border = BDR
-        cell_bd(wsComp, row_pe_m, 3, disc_decimal, F_STD, FMT_PCT)
+        wsComp.cell(row_pe_m, 3).value = f"=$C${row_disc}"
+        wsComp.cell(row_pe_m, 3).font = F_GREEN
+        wsComp.cell(row_pe_m, 3).number_format = FMT_PCT
+        wsComp.cell(row_pe_m, 3).border = BDR
+        wsComp.cell(row_pe_m, 3).alignment = Alignment(horizontal="left", vertical="center")
         wsComp.cell(row_pe_m, 4).value = f"=IF(B{row_pe_m}=\"\",\"\",B{row_pe_m}*(1-C{row_pe_m}))"
         wsComp.cell(row_pe_m, 4).font = F_GREEN
         wsComp.cell(row_pe_m, 4).number_format = '0.00'
@@ -3465,8 +3481,18 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
                 wsComp.cell(r, 2).border = BDR
                 wsComp.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
                 # Timing factor
-                timing_val = (_eb_timing_base + idx_e) if _eb_use_timing else 1.0
-                cell_bd(wsComp, r, 3, timing_val, F_BLUE, "0.0000")
+                # Timing factor — live link to DCF period (n) for this year
+                _dcf_period_row_eb = _yr_to_dcf_period_row.get(str(yr))
+                if _dcf_period_row_eb:
+                    wsComp.cell(r, 3).value = f"=DCF!B{_dcf_period_row_eb}"
+                    wsComp.cell(r, 3).font = F_GREEN
+                else:
+                    timing_val = (_eb_timing_base + idx_e) if _eb_use_timing else 1.0
+                    wsComp.cell(r, 3).value = timing_val
+                    wsComp.cell(r, 3).font = F_BLUE
+                wsComp.cell(r, 3).number_format = "0.0000"
+                wsComp.cell(r, 3).border = BDR
+                wsComp.cell(r, 3).alignment = Alignment(horizontal="left", vertical="center")
                 cell_bd(wsComp, r, 4, wt_pct, F_BLUE, FMT_PCT1)
                 # Adjusted EBITDA = EBITDA × Timing
                 wsComp.cell(r, 5).value = f"=B{r}*C{r}"
@@ -3540,8 +3566,18 @@ def _build_combined_valuation_excel(ss, selected_models, value_map, weights_new,
                 wsComp.cell(r, 2).border = BDR
                 wsComp.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center")
                 # Timing factor
-                timing_val_n = (_np_timing_base + idx_n) if _np_use_timing else 1.0
-                cell_bd(wsComp, r, 3, timing_val_n, F_BLUE, "0.0000")
+                # Timing factor — live link to DCF period (n) for this year
+                _dcf_period_row_np = _yr_to_dcf_period_row.get(str(yr))
+                if _dcf_period_row_np:
+                    wsComp.cell(r, 3).value = f"=DCF!B{_dcf_period_row_np}"
+                    wsComp.cell(r, 3).font = F_GREEN
+                else:
+                    timing_val_n = (_np_timing_base + idx_n) if _np_use_timing else 1.0
+                    wsComp.cell(r, 3).value = timing_val_n
+                    wsComp.cell(r, 3).font = F_BLUE
+                wsComp.cell(r, 3).number_format = "0.0000"
+                wsComp.cell(r, 3).border = BDR
+                wsComp.cell(r, 3).alignment = Alignment(horizontal="left", vertical="center")
                 cell_bd(wsComp, r, 4, wt_pct, F_BLUE, FMT_PCT1)
                 # Adjusted Earnings = Earnings × Timing
                 wsComp.cell(r, 5).value = f"=B{r}*C{r}"
