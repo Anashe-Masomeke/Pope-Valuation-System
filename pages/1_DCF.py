@@ -1780,7 +1780,8 @@ st.markdown(
 uploaded_file = st.file_uploader(
     "Upload Excel file",
     type=["xlsx"],
-    label_visibility="collapsed"  # hides it visually
+    label_visibility="collapsed",
+    key=f"dcf_uploader_{st.session_state.get('dcf_uploader_key', 0)}"
 )
 
 # If a new file is uploaded, replace bytes AND clear all derived state
