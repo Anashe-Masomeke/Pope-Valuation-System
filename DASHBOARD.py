@@ -349,7 +349,7 @@ st.markdown(f"""
                     color: #ffffff;
                     letter-spacing: -0.01em;
                     text-shadow: 0 2px 8px rgba(0,0,0,0.30);">
-                    🏛️ FBC Valuation Dashboard
+                    🏛️  Valuation Dashboard
                 </div>
                 <div style="
                     font-family: 'EB Garamond', serif;
