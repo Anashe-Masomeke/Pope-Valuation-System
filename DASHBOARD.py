@@ -8,7 +8,7 @@ from pathlib import Path
 import base64
 
 st.set_page_config(
-    page_title="FBC Valuation Dashboard",
+    page_title="Valuation Dashboard",
     layout="wide",
 )
 
@@ -368,7 +368,7 @@ st.markdown(f"""
 st.markdown("""
     <div class="fbc-page-header">
         <span class="fbc-page-header-title">
-            FBC Investment Valuation System 👋
+            Investment Valuation System 👋
         </span>
         <p class="fbc-page-header-sub">
             Select a valuation model below to get started.
